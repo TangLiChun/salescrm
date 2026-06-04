@@ -386,6 +386,18 @@ async function runLookup() {
   }
 }
 
+function formatImportResult(result) {
+  const parts = [
+    `新增 ${result.imported} 条`,
+    `重复 ${result.duplicates} 条`,
+    `跳过 ${result.skipped} 条`,
+  ];
+  if (result.filtered) {
+    parts.push(`过滤 ${result.filtered} 条`);
+  }
+  return `导入完成：${parts.join("，")}`;
+}
+
 async function importResults() {
   const rows = getSelectedImportableRows();
   if (rows.length === 0) {
