@@ -27,8 +27,30 @@ const contactsBody = document.getElementById("contacts-body");
 const contactsStatsEl = document.getElementById("contacts-stats");
 const contactStatusFilter = document.getElementById("contact-status-filter");
 const contactFollowUpFilter = document.getElementById("contact-follow-up-filter");
+const contactSearchInput = document.getElementById("contact-search");
+const exportContactsBtn = document.getElementById("export-contacts-btn");
 const dedupeContactsBtn = document.getElementById("dedupe-contacts-btn");
 const refreshContactsBtn = document.getElementById("refresh-contacts-btn");
+const contactsBulkBar = document.getElementById("contacts-bulk-bar");
+const contactsSelectedCountEl = document.getElementById("contacts-selected-count");
+const bulkStatusSelect = document.getElementById("bulk-status-select");
+const bulkApplyStatusBtn = document.getElementById("bulk-apply-status-btn");
+const bulkMarkSentBtn = document.getElementById("bulk-mark-sent-btn");
+const bulkDeleteBtn = document.getElementById("bulk-delete-btn");
+const contactsSelectAll = document.getElementById("contacts-select-all");
+const contactsPagination = document.getElementById("contacts-pagination");
+const contactsPrevBtn = document.getElementById("contacts-prev-btn");
+const contactsNextBtn = document.getElementById("contacts-next-btn");
+const contactsPageInfo = document.getElementById("contacts-page-info");
+const contactsPageSizeSelect = document.getElementById("contacts-page-size");
+const contactEditModal = document.getElementById("contact-edit-modal");
+const contactEditSubtitle = document.getElementById("contact-edit-subtitle");
+const contactEditForm = document.getElementById("contact-edit-form");
+const contactEditOrg = document.getElementById("contact-edit-org");
+const contactEditName = document.getElementById("contact-edit-name");
+const contactEditRoles = document.getElementById("contact-edit-roles");
+const contactEditNotes = document.getElementById("contact-edit-notes");
+const downloadBackupBtn = document.getElementById("download-backup-btn");
 const contactNotesModal = document.getElementById("contact-notes-modal");
 const contactNotesTitle = document.getElementById("contact-notes-title");
 const contactNotesSubtitle = document.getElementById("contact-notes-subtitle");
@@ -74,6 +96,12 @@ const importLeadsBtn = document.getElementById("import-leads-btn");
 let allRows = [];
 let csvContent = "";
 let contacts = [];
+let contactsPage = 1;
+let contactsPages = 1;
+let contactsTotal = 0;
+let contactsPageSize = 50;
+const selectedContactIds = new Set();
+let editingContactId = null;
 let notesContactId = null;
 
 const FOLLOW_UP_STATUS_LABELS = {
@@ -89,6 +117,7 @@ let aiLeads = [];
 let llmConfigured = false;
 let emailTemplates = [];
 let editingTemplateId = null;
+let contactSearchTimer = null;
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -211,13 +240,15 @@ function followUpStatusBadge(status) {
 
 function renderContacts() {
   contactsBody.innerHTML = "";
+  updateContactsBulkBar();
 
   if (contacts.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="10">暂无联系人，查询 ASN 或 AI 发现后可导入</td>`;
+    tr.innerHTML = `<td colspan="11">暂无联系人，查询 ASN 或 AI 发现后可导入</td>`;
     contactsBody.appendChild(tr);
-    contactsStatsEl.textContent = "共 0 位联系人";
+    contactsStatsEl.textContent = contactsTotal ? `共 ${contactsTotal} 位 · 本页 0 条` : "共 0 位联系人";
+    renderContactsPagination();
     return;
   }
 
@@ -232,8 +263,10 @@ function renderContacts() {
       .map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`)
       .join("");
     const statusBadge = followUpStatusBadge(contact.follow_up_status);
+    const checked = selectedContactIds.has(contact.id) ? "checked" : "";
 
     tr.innerHTML = `
+      <td class="col-select"><input type="checkbox" class="contact-select" data-id="${contact.id}" ${checked}></td>
       <td>${statusBadge}</td>
       <td>${escapeHtml(contact.org || "—")}</td>
       <td>${escapeHtml(contact.name || "—")}</td>
@@ -244,6 +277,7 @@ function renderContacts() {
       <td>${escapeHtml(contact.notes || "—")}</td>
       <td>${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
+        <button type="button" class="link-btn action-edit" data-id="${contact.id}">编辑</button>
         <button type="button" class="link-btn action-notes" data-id="${contact.id}">时间线</button>
         <button type="button" class="link-btn action-mail" data-id="${contact.id}">发邮件</button>
         <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">改状态</button>
@@ -254,7 +288,34 @@ function renderContacts() {
     contactsBody.appendChild(tr);
   }
 
-  contactsStatsEl.textContent = `共 ${contacts.length} 位 · 已发 ${sentCount} · 未发 ${contacts.length - sentCount}`;
+  contactsStatsEl.textContent = `共 ${contactsTotal} 位 · 本页 ${contacts.length} 位（已发 ${sentCount}）· 第 ${contactsPage}/${contactsPages} 页`;
+  renderContactsPagination();
+  syncContactsSelectAllCheckbox();
+}
+
+function updateContactsBulkBar() {
+  const count = selectedContactIds.size;
+  contactsBulkBar.classList.toggle("hidden", count === 0);
+  contactsSelectedCountEl.textContent = `已选 ${count} 位`;
+}
+
+function syncContactsSelectAllCheckbox() {
+  if (!contactsSelectAll) return;
+  const pageIds = contacts.map((c) => c.id);
+  const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedContactIds.has(id));
+  contactsSelectAll.checked = allSelected;
+  contactsSelectAll.indeterminate = !allSelected && pageIds.some((id) => selectedContactIds.has(id));
+}
+
+function renderContactsPagination() {
+  if (contactsTotal === 0) {
+    contactsPagination.classList.add("hidden");
+    return;
+  }
+  contactsPagination.classList.remove("hidden");
+  contactsPageInfo.textContent = `第 ${contactsPage} / ${contactsPages} 页（共 ${contactsTotal} 条）`;
+  contactsPrevBtn.disabled = contactsPage <= 1;
+  contactsNextBtn.disabled = contactsPage >= contactsPages;
 }
 
 function escapeHtml(value) {
@@ -421,13 +482,126 @@ async function importResults() {
   }
 }
 
-async function loadContacts() {
+async function loadContacts(resetPage = false) {
+  if (resetPage) contactsPage = 1;
   const status = contactStatusFilter.value || "all";
   const followUp = contactFollowUpFilter.value || "all";
-  const params = new URLSearchParams({ status, follow_up_status: followUp });
+  const params = new URLSearchParams({
+    status,
+    follow_up_status: followUp,
+    page: String(contactsPage),
+    page_size: String(contactsPageSize),
+  });
+  const q = contactSearchInput.value.trim();
+  if (q) params.set("q", q);
   const data = await api(`/api/contacts?${params.toString()}`);
   contacts = data.contacts || [];
+  contactsTotal = data.total || 0;
+  contactsPage = data.page || 1;
+  contactsPages = data.pages || 1;
+  contactsPageSize = data.page_size || contactsPageSize;
   renderContacts();
+}
+
+function getSelectedContactIds() {
+  return [...selectedContactIds];
+}
+
+async function bulkContactsAction(action, extra = {}) {
+  const ids = getSelectedContactIds();
+  if (ids.length === 0) {
+    alert("请先勾选联系人");
+    return;
+  }
+  const payload = { ids, action, ...extra };
+  const result = await api("/api/contacts/bulk", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  selectedContactIds.clear();
+  await loadContacts();
+  return result;
+}
+
+function openContactEdit(contactId) {
+  const contact = contacts.find((item) => String(item.id) === String(contactId));
+  if (!contact) return;
+  editingContactId = contact.id;
+  contactEditSubtitle.textContent = contact.email;
+  contactEditOrg.value = contact.org || "";
+  contactEditName.value = contact.name || "";
+  contactEditRoles.value = contact.roles || "";
+  contactEditNotes.value = contact.notes || "";
+  contactEditModal.classList.remove("hidden");
+}
+
+function closeContactEdit() {
+  editingContactId = null;
+  contactEditModal.classList.add("hidden");
+}
+
+async function saveContactEdit(event) {
+  event.preventDefault();
+  if (!editingContactId) return;
+  await api(`/api/contacts/${editingContactId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      org: contactEditOrg.value,
+      name: contactEditName.value,
+      roles: contactEditRoles.value,
+      notes: contactEditNotes.value,
+    }),
+  });
+  closeContactEdit();
+  await loadContacts();
+}
+
+async function downloadBackup() {
+  const response = await fetch("/api/backup", { credentials: "same-origin" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || "备份下载失败");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  link.download = match?.[1] || `salescrm_backup_${new Date().toISOString().slice(0, 10)}.db`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportContactsCsv() {
+  const params = new URLSearchParams({
+    status: contactStatusFilter.value || "all",
+    follow_up_status: contactFollowUpFilter.value || "all",
+  });
+  const q = contactSearchInput.value.trim();
+  if (q) params.set("q", q);
+  const response = await fetch(`/api/contacts/export?${params.toString()}`, {
+    credentials: "same-origin",
+  });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return;
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || "导出失败");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `contacts_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 async function dedupeContacts() {
@@ -490,6 +664,9 @@ function openMailClient(contactId) {
     if (query) url += `?${query}`;
   }
   window.location.href = url;
+  if (!contact.email_sent && confirm("是否同时标记为已发邮件？")) {
+    markContactSent(contactId, true).catch((error) => alert(error.message));
+  }
 }
 
 function renderMailTemplateSelect() {
@@ -623,6 +800,7 @@ function renderSchedules() {
       <td>${escapeHtml(formatTime(job.next_run_at))}</td>
       <td>${escapeHtml(job.last_run_message || job.last_run_status || "—")}</td>
       <td class="action-cell">
+        <button type="button" class="link-btn schedule-run" data-id="${job.id}">立即运行</button>
         <button type="button" class="link-btn schedule-toggle" data-id="${job.id}" data-enabled="${job.enabled ? "0" : "1"}">${job.enabled ? "停用" : "启用"}</button>
         <button type="button" class="link-btn schedule-delete" data-id="${job.id}">删除</button>
       </td>
@@ -687,6 +865,18 @@ async function deleteSchedule(jobId) {
   await loadSchedules();
 }
 
+async function runScheduleNow(jobId) {
+  if (!confirm("立即运行该定时任务？可能需要几分钟。")) return;
+  const result = await api(`/api/schedules/${jobId}/run`, { method: "POST" });
+  if (result.ok) {
+    alert(result.message || "运行完成");
+  } else {
+    alert(result.message || "运行失败");
+  }
+  await loadSchedules();
+  await loadContacts();
+}
+
 function setInputValue(id, value) {
   const el = document.getElementById(id);
   if (el) el.value = value ?? "";
@@ -748,8 +938,12 @@ async function saveSettings(event) {
 async function deleteContact(contactId) {
   if (!confirm("确定删除该联系人？")) return;
   await api(`/api/contacts/${contactId}`, { method: "DELETE" });
+  selectedContactIds.delete(Number(contactId));
   if (String(notesContactId) === String(contactId)) {
     closeContactNotes();
+  }
+  if (String(editingContactId) === String(contactId)) {
+    closeContactEdit();
   }
   await loadContacts();
 }
@@ -1193,8 +1387,78 @@ importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
 importLeadsBtn.addEventListener("click", importAiLeads);
 roleFilter.addEventListener("change", renderRows);
-contactStatusFilter.addEventListener("change", () => loadContacts().catch((error) => alert(error.message)));
-contactFollowUpFilter.addEventListener("change", () => loadContacts().catch((error) => alert(error.message)));
+contactStatusFilter.addEventListener("change", () => loadContacts(true).catch((error) => alert(error.message)));
+contactFollowUpFilter.addEventListener("change", () => loadContacts(true).catch((error) => alert(error.message)));
+contactSearchInput.addEventListener("input", () => {
+  clearTimeout(contactSearchTimer);
+  contactSearchTimer = setTimeout(() => {
+    loadContacts(true).catch((error) => alert(error.message));
+  }, 300);
+});
+contactsPageSizeSelect.addEventListener("change", () => {
+  contactsPageSize = Number(contactsPageSizeSelect.value) || 50;
+  loadContacts(true).catch((error) => alert(error.message));
+});
+contactsPrevBtn.addEventListener("click", () => {
+  if (contactsPage > 1) {
+    contactsPage -= 1;
+    loadContacts().catch((error) => alert(error.message));
+  }
+});
+contactsNextBtn.addEventListener("click", () => {
+  if (contactsPage < contactsPages) {
+    contactsPage += 1;
+    loadContacts().catch((error) => alert(error.message));
+  }
+});
+contactsSelectAll.addEventListener("change", () => {
+  for (const contact of contacts) {
+    if (contactsSelectAll.checked) {
+      selectedContactIds.add(contact.id);
+    } else {
+      selectedContactIds.delete(contact.id);
+    }
+  }
+  renderContacts();
+});
+contactsBody.addEventListener("change", (event) => {
+  const checkbox = event.target.closest(".contact-select");
+  if (!checkbox) return;
+  const id = Number(checkbox.dataset.id);
+  if (checkbox.checked) {
+    selectedContactIds.add(id);
+  } else {
+    selectedContactIds.delete(id);
+  }
+  updateContactsBulkBar();
+  syncContactsSelectAllCheckbox();
+});
+bulkApplyStatusBtn.addEventListener("click", () => {
+  bulkContactsAction("status", { follow_up_status: bulkStatusSelect.value })
+    .then((result) => alert(`已更新 ${result.updated} 位联系人`))
+    .catch((error) => alert(error.message));
+});
+bulkMarkSentBtn.addEventListener("click", () => {
+  bulkContactsAction("mark_sent")
+    .then((result) => alert(`已标记 ${result.updated} 位联系人`))
+    .catch((error) => alert(error.message));
+});
+bulkDeleteBtn.addEventListener("click", () => {
+  if (!confirm("确定删除选中的联系人？")) return;
+  bulkContactsAction("delete")
+    .then((result) => alert(`已删除 ${result.deleted} 位联系人`))
+    .catch((error) => alert(error.message));
+});
+contactEditForm.addEventListener("submit", (event) => {
+  saveContactEdit(event).catch((error) => alert(error.message));
+});
+contactEditModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-edit]")) {
+    closeContactEdit();
+  }
+});
+downloadBackupBtn.addEventListener("click", () => downloadBackup().catch((error) => alert(error.message)));
+exportContactsBtn.addEventListener("click", () => exportContactsCsv().catch((error) => alert(error.message)));
 dedupeContactsBtn.addEventListener("click", () => dedupeContacts().catch((error) => alert(error.message)));
 refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
@@ -1264,6 +1528,11 @@ contactNotesModal.addEventListener("click", (event) => {
 });
 
 contactsBody.addEventListener("click", (event) => {
+  const editBtn = event.target.closest(".action-edit");
+  if (editBtn) {
+    openContactEdit(editBtn.dataset.id);
+    return;
+  }
   const notesBtn = event.target.closest(".action-notes");
   if (notesBtn) {
     openContactNotes(notesBtn.dataset.id).catch((error) => alert(error.message));
@@ -1293,6 +1562,11 @@ contactsBody.addEventListener("click", (event) => {
 });
 
 schedulesBody.addEventListener("click", (event) => {
+  const runBtn = event.target.closest(".schedule-run");
+  if (runBtn) {
+    runScheduleNow(runBtn.dataset.id).catch((error) => alert(error.message));
+    return;
+  }
   const toggleBtn = event.target.closest(".schedule-toggle");
   if (toggleBtn) {
     toggleSchedule(toggleBtn.dataset.id, toggleBtn.dataset.enabled === "1").catch((error) => alert(error.message));

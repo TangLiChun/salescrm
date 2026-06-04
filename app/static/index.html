@@ -347,6 +347,12 @@
           <p id="template-status" class="stats"></p>
         </fieldset>
 
+        <fieldset>
+          <legend>数据备份</legend>
+          <p class="stats">下载完整 SQLite 数据库文件，用于迁移或灾难恢复。</p>
+          <button id="download-backup-btn" type="button" class="secondary-btn">下载数据库备份</button>
+        </fieldset>
+
         <div class="controls">
           <button type="submit">保存设置</button>
         </div>
@@ -393,6 +399,10 @@
         </div>
         <div class="results-actions">
           <label class="field inline">
+            <span>搜索</span>
+            <input id="contact-search" type="search" placeholder="组织 / 姓名 / 邮箱">
+          </label>
+          <label class="field inline">
             <span>发信模板</span>
             <select id="mail-template-select">
               <option value="">无模板</option>
@@ -417,15 +427,34 @@
               <option value="interested">有意向</option>
             </select>
           </label>
+          <button id="export-contacts-btn" type="button" class="secondary-btn">导出 CSV</button>
           <button id="dedupe-contacts-btn" type="button" class="secondary-btn">去重</button>
           <button id="refresh-contacts-btn" type="button" class="secondary-btn">刷新</button>
         </div>
+      </div>
+
+      <div id="contacts-bulk-bar" class="contacts-bulk-bar hidden">
+        <span id="contacts-selected-count" class="stats">已选 0 位</span>
+        <label class="field inline">
+          <span>批量改状态</span>
+          <select id="bulk-status-select">
+            <option value="new">新客户</option>
+            <option value="contacted">已联系</option>
+            <option value="replied">已回复</option>
+            <option value="invalid">无效</option>
+            <option value="interested">有意向</option>
+          </select>
+        </label>
+        <button id="bulk-apply-status-btn" type="button" class="secondary-btn">应用状态</button>
+        <button id="bulk-mark-sent-btn" type="button" class="secondary-btn">标记已发</button>
+        <button id="bulk-delete-btn" type="button" class="secondary-btn">删除选中</button>
       </div>
 
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th class="col-select"><input id="contacts-select-all" type="checkbox" title="全选本页"></th>
               <th>状态</th>
               <th>组织</th>
               <th>名称</th>
@@ -440,10 +469,54 @@
           </thead>
           <tbody id="contacts-body">
             <tr class="empty-row">
-              <td colspan="10">暂无联系人</td>
+              <td colspan="11">暂无联系人</td>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div id="contacts-pagination" class="pagination hidden">
+        <button id="contacts-prev-btn" type="button" class="secondary-btn">上一页</button>
+        <span id="contacts-page-info" class="stats">第 1 / 1 页</span>
+        <button id="contacts-next-btn" type="button" class="secondary-btn">下一页</button>
+        <label class="field inline">
+          <span>每页</span>
+          <select id="contacts-page-size">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="contact-edit-modal" class="contact-notes-modal hidden" role="dialog">
+        <div class="contact-notes-backdrop" data-close-edit></div>
+        <div class="contact-notes-dialog">
+          <div class="contact-notes-header">
+            <h3>编辑联系人</h3>
+            <button type="button" class="secondary-btn" data-close-edit>关闭</button>
+          </div>
+          <p id="contact-edit-subtitle" class="contact-notes-subtitle"></p>
+          <form id="contact-edit-form" class="contact-note-form">
+            <label class="field">
+              <span>组织</span>
+              <input id="contact-edit-org" type="text">
+            </label>
+            <label class="field">
+              <span>姓名</span>
+              <input id="contact-edit-name" type="text">
+            </label>
+            <label class="field">
+              <span>Role（逗号分隔）</span>
+              <input id="contact-edit-roles" type="text">
+            </label>
+            <label class="field">
+              <span>备注</span>
+              <textarea id="contact-edit-notes" rows="3"></textarea>
+            </label>
+            <button type="submit" class="primary-btn">保存</button>
+          </form>
+        </div>
       </div>
 
       <div id="contact-notes-modal" class="contact-notes-modal hidden" role="dialog" aria-labelledby="contact-notes-title">

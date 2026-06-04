@@ -24,7 +24,7 @@ def scheduler_interval_seconds() -> int:
         return 60
 
 
-async def _run_job(job: dict) -> None:
+async def run_scheduled_job(job: dict) -> dict:
     job_id = job["id"]
     user_id = job["user_id"]
     try:
@@ -44,7 +44,7 @@ async def _run_job(job: dict) -> None:
                 interval_hours=job["interval_hours"],
             )
             insert_job_run(job_id, status="error", message=msg)
-            return
+            return {"ok": False, "status": "error", "message": msg}
         leads = result.get("leads") or []
         imported = (result.get("import") or {}).get("imported", 0)
         msg = f"找到 {len(leads)} 条线索，导入 {imported} 条"
@@ -61,6 +61,13 @@ async def _run_job(job: dict) -> None:
             leads_found=len(leads),
             imported=imported,
         )
+        return {
+            "ok": True,
+            "status": "ok",
+            "message": msg,
+            "leads_found": len(leads),
+            "imported": imported,
+        }
     except Exception as exc:
         logger.exception("Scheduled job %s failed", job_id)
         msg = str(exc)
@@ -71,6 +78,11 @@ async def _run_job(job: dict) -> None:
             interval_hours=job["interval_hours"],
         )
         insert_job_run(job_id, status="error", message=msg)
+        return {"ok": False, "status": "error", "message": msg}
+
+
+async def _run_job(job: dict) -> None:
+    await run_scheduled_job(job)
 
 
 async def _scheduler_loop() -> None:

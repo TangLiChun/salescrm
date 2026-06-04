@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -20,17 +20,23 @@ from app.auth import (
     session_secret,
 )
 from app.database import (
+    bulk_delete_contacts,
+    bulk_update_contacts,
     check_db,
-    FOLLOW_UP_STATUSES,
+    contacts_to_csv,
+    count_contacts,
     create_contact_note,
     create_scheduled_job,
     create_email_template,
+    db_path,
     dedupe_contacts,
     delete_contact,
     delete_contact_note,
     delete_email_template,
     delete_scheduled_job,
+    FOLLOW_UP_STATUSES,
     get_contact_stats,
+    get_scheduled_job,
     get_user_auth_by_id,
     import_contacts,
     init_db,
@@ -40,6 +46,7 @@ from app.database import (
     list_job_runs,
     list_scheduled_jobs,
     mark_contact_sent,
+    update_contact,
     update_contact_follow_up_status,
     update_email_template,
     update_scheduled_job,
@@ -47,7 +54,7 @@ from app.database import (
 )
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
-from app.scheduler import start_scheduler, stop_scheduler
+from app.scheduler import run_scheduled_job, start_scheduler, stop_scheduler
 from app.security import verify_password
 from app.settings_store import get_public_settings, get_settings_for_edit, get_setting, update_settings
 from app.sources import list_channels
@@ -125,6 +132,19 @@ class ContactFollowUpStatusRequest(BaseModel):
 
 class ContactNoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
+
+
+class ContactUpdateRequest(BaseModel):
+    org: str | None = Field(default=None, max_length=500)
+    name: str | None = Field(default=None, max_length=200)
+    notes: str | None = Field(default=None, max_length=4000)
+    roles: str | None = Field(default=None, max_length=500)
+
+
+class ContactBulkRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+    action: str = Field(min_length=1, max_length=32)
+    follow_up_status: str | None = Field(default=None, max_length=32)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -230,6 +250,19 @@ def stats(user: CurrentUser) -> dict:
     return get_contact_stats(user["id"])
 
 
+@app.get("/api/backup")
+def download_backup(_: CurrentUser) -> FileResponse:
+    path = db_path()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="数据库文件不存在")
+    filename = f"salescrm_backup_{time.strftime('%Y%m%d_%H%M%S')}.db"
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=filename,
+    )
+
+
 @app.post("/api/me/password")
 def change_password(body: ChangePasswordRequest, user: CurrentUser) -> dict:
     auth = get_user_auth_by_id(user["id"])
@@ -262,6 +295,9 @@ def get_contacts(
     user: CurrentUser,
     status: str = "all",
     follow_up_status: str = "all",
+    q: str = "",
+    page: int = 1,
+    page_size: int = 50,
 ) -> dict:
     if status not in {"all", "sent", "unsent"}:
         raise HTTPException(status_code=400, detail="status 必须是 all/sent/unsent")
@@ -270,24 +306,63 @@ def get_contacts(
             status_code=400,
             detail=f"follow_up_status 必须是 all 或 {'/'.join(FOLLOW_UP_STATUSES)}",
         )
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    total = count_contacts(
+        user["id"],
+        status=status,
+        follow_up_status=follow_up_status,
+        q=q,
+    )
     contacts = list_contacts(
         user["id"],
         status=status,
         follow_up_status=follow_up_status,
+        q=q,
+        limit=page_size,
+        offset=(page - 1) * page_size,
     )
     sent_count = sum(1 for item in contacts if item.get("email_sent"))
+    pages = max(1, (total + page_size - 1) // page_size)
     return {
         "contacts": contacts,
-        "total": len(contacts),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
         "sent_count": sent_count,
         "unsent_count": len(contacts) - sent_count,
     }
 
 
+@app.get("/api/contacts/export")
+def export_contacts(
+    user: CurrentUser,
+    status: str = "all",
+    follow_up_status: str = "all",
+    q: str = "",
+) -> Response:
+    if status not in {"all", "sent", "unsent"}:
+        raise HTTPException(status_code=400, detail="status 必须是 all/sent/unsent")
+    contacts = list_contacts(
+        user["id"],
+        status=status,
+        follow_up_status=follow_up_status,
+        q=q,
+    )
+    csv_data = contacts_to_csv(contacts)
+    filename = f"contacts_{time.strftime('%Y%m%d')}.csv"
+    return Response(
+        content=csv_data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/api/contacts/import")
 def import_contact_rows(body: ImportContactsRequest, user: CurrentUser) -> dict:
     result = import_contacts(user["id"], body.rows)
-    result["total"] = len(list_contacts(user["id"]))
+    result["total"] = count_contacts(user["id"])
     return result
 
 
@@ -296,6 +371,41 @@ def remove_contact(contact_id: int, user: CurrentUser) -> dict:
     if not delete_contact(user["id"], contact_id):
         raise HTTPException(status_code=404, detail="联系人不存在")
     return {"ok": True}
+
+
+@app.patch("/api/contacts/{contact_id}")
+def patch_contact(
+    contact_id: int, body: ContactUpdateRequest, user: CurrentUser
+) -> dict:
+    contact = update_contact(
+        user["id"],
+        contact_id,
+        org=body.org,
+        name=body.name,
+        notes=body.notes,
+        roles=body.roles,
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="联系人不存在")
+    return contact
+
+
+@app.post("/api/contacts/bulk")
+def bulk_contacts(body: ContactBulkRequest, user: CurrentUser) -> dict:
+    action = body.action.strip().lower()
+    if action == "status":
+        if not body.follow_up_status or body.follow_up_status not in FOLLOW_UP_STATUSES:
+            raise HTTPException(status_code=400, detail="无效的 follow_up_status")
+        return bulk_update_contacts(
+            user["id"], body.ids, follow_up_status=body.follow_up_status
+        )
+    if action == "mark_sent":
+        return bulk_update_contacts(user["id"], body.ids, email_sent=True)
+    if action == "unmark_sent":
+        return bulk_update_contacts(user["id"], body.ids, email_sent=False)
+    if action == "delete":
+        return bulk_delete_contacts(user["id"], body.ids)
+    raise HTTPException(status_code=400, detail="action 无效")
 
 
 @app.post("/api/contacts/{contact_id}/mark-sent")
@@ -348,7 +458,7 @@ def patch_contact_status(
 @app.post("/api/contacts/dedupe")
 def dedupe(user: CurrentUser) -> dict:
     result = dedupe_contacts(user_id=user["id"])
-    result["total"] = len(list_contacts(user["id"]))
+    result["total"] = count_contacts(user["id"])
     return result
 
 
@@ -440,6 +550,16 @@ def get_schedule_runs(job_id: int, user: CurrentUser, limit: int = 20) -> dict:
     if runs is None:
         raise HTTPException(status_code=404, detail="定时任务不存在")
     return {"runs": runs, "total": len(runs)}
+
+
+@app.post("/api/schedules/{job_id}/run")
+async def run_schedule_now(job_id: int, user: CurrentUser) -> dict:
+    if not llm_configured():
+        raise HTTPException(status_code=503, detail="未配置 LLM API Key")
+    job = get_scheduled_job(user["id"], job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="定时任务不存在")
+    return await run_scheduled_job(job)
 
 
 @app.post("/api/lookup")

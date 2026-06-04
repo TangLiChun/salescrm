@@ -229,12 +229,13 @@ def _contact_from_row(row: sqlite3.Row) -> dict:
     return data
 
 
-def list_contacts(
+def _contact_filter_clause(
     user_id: int,
     *,
     status: str = "all",
     follow_up_status: str | None = None,
-) -> list[dict]:
+    q: str | None = None,
+) -> tuple[str, list[object]]:
     clauses = ["user_id = ?"]
     params: list[object] = [user_id]
     if status == "sent":
@@ -244,19 +245,58 @@ def list_contacts(
     if follow_up_status and follow_up_status != "all":
         clauses.append("follow_up_status = ?")
         params.append(follow_up_status)
+    if q and q.strip():
+        like = f"%{q.strip().lower()}%"
+        clauses.append(
+            "(lower(org) LIKE ? OR lower(name) LIKE ? OR lower(email) LIKE ? "
+            "OR lower(notes) LIKE ? OR lower(roles) LIKE ?)"
+        )
+        params.extend([like, like, like, like, like])
+    return " AND ".join(clauses), params
 
-    where = " AND ".join(clauses)
+
+def count_contacts(
+    user_id: int,
+    *,
+    status: str = "all",
+    follow_up_status: str | None = None,
+    q: str | None = None,
+) -> int:
+    where, params = _contact_filter_clause(
+        user_id, status=status, follow_up_status=follow_up_status, q=q
+    )
     with get_conn() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
-                   email_sent, email_sent_at, follow_up_status, created_at, updated_at
-            FROM contacts
-            WHERE {where}
-            ORDER BY email_sent ASC, created_at DESC, id DESC
-            """,
+        row = conn.execute(
+            f"SELECT COUNT(*) AS count FROM contacts WHERE {where}",
             params,
-        ).fetchall()
+        ).fetchone()
+    return int(row["count"])
+
+
+def list_contacts(
+    user_id: int,
+    *,
+    status: str = "all",
+    follow_up_status: str | None = None,
+    q: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
+    where, params = _contact_filter_clause(
+        user_id, status=status, follow_up_status=follow_up_status, q=q
+    )
+    sql = f"""
+        SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
+               email_sent, email_sent_at, follow_up_status, created_at, updated_at
+        FROM contacts
+        WHERE {where}
+        ORDER BY email_sent ASC, created_at DESC, id DESC
+    """
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [*params, limit, offset]
+    with get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
     return [_contact_from_row(row) for row in rows]
 
 
@@ -408,6 +448,84 @@ def update_contact_follow_up_status(
             (follow_up_status, now, contact_id, user_id),
         )
         return cursor.rowcount > 0
+
+
+def update_contact(
+    user_id: int,
+    contact_id: int,
+    *,
+    org: str | None = None,
+    name: str | None = None,
+    notes: str | None = None,
+    roles: str | None = None,
+) -> dict | None:
+    updates: dict[str, object] = {}
+    if org is not None:
+        updates["org"] = org.strip()
+    if name is not None:
+        updates["name"] = name.strip()
+    if notes is not None:
+        updates["notes"] = notes.strip()
+    if roles is not None:
+        updates["roles"] = roles.strip()
+    if not updates:
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
+                       email_sent, email_sent_at, follow_up_status, created_at, updated_at
+                FROM contacts WHERE id = ? AND user_id = ?
+                """,
+                (contact_id, user_id),
+            ).fetchone()
+        return _contact_from_row(row) if row else None
+
+    updates["updated_at"] = utc_now()
+    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    params = list(updates.values()) + [contact_id, user_id]
+
+    with get_conn() as conn:
+        cursor = conn.execute(
+            f"UPDATE contacts SET {set_clause} WHERE id = ? AND user_id = ?",
+            params,
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            """
+            SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
+                   email_sent, email_sent_at, follow_up_status, created_at, updated_at
+            FROM contacts WHERE id = ? AND user_id = ?
+            """,
+            (contact_id, user_id),
+        ).fetchone()
+    return _contact_from_row(row) if row else None
+
+
+def bulk_update_contacts(
+    user_id: int,
+    contact_ids: list[int],
+    *,
+    follow_up_status: str | None = None,
+    email_sent: bool | None = None,
+) -> dict:
+    updated = 0
+    for contact_id in contact_ids:
+        if follow_up_status is not None:
+            if update_contact_follow_up_status(user_id, contact_id, follow_up_status):
+                updated += 1
+        elif email_sent is not None:
+            if mark_contact_sent(user_id, contact_id, sent=email_sent):
+                updated += 1
+    return {"updated": updated, "requested": len(contact_ids)}
+
+
+def bulk_delete_contacts(user_id: int, contact_ids: list[int]) -> dict:
+    deleted = 0
+    for contact_id in contact_ids:
+        if delete_contact(user_id, contact_id):
+            deleted += 1
+    return {"deleted": deleted, "requested": len(contact_ids)}
 
 
 def _contact_owned(conn: sqlite3.Connection, user_id: int, contact_id: int) -> bool:
@@ -825,3 +943,38 @@ def get_contact_stats(user_id: int) -> dict:
         "by_source": by_source,
         "recent_imports": recent_imports,
     }
+
+
+def _csv_cell(value: object) -> str:
+    return f'"{str(value or "").replace(chr(34), chr(34) * 2)}"'
+
+
+def contacts_to_csv(contacts: list[dict]) -> str:
+    headers = [
+        "org",
+        "name",
+        "email",
+        "roles",
+        "asn",
+        "source",
+        "follow_up_status",
+        "email_sent",
+        "notes",
+        "created_at",
+    ]
+    lines = [",".join(headers)]
+    for contact in contacts:
+        row = [
+            contact.get("org") or "",
+            contact.get("name") or "",
+            contact.get("email") or "",
+            contact.get("roles") or "",
+            str(contact.get("asn") or ""),
+            contact.get("source") or "",
+            contact.get("follow_up_status") or "new",
+            "1" if contact.get("email_sent") else "0",
+            contact.get("notes") or "",
+            contact.get("created_at") or "",
+        ]
+        lines.append(",".join(_csv_cell(v) for v in row))
+    return "\n".join(lines) + "\n"
