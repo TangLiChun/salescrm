@@ -21,6 +21,7 @@ from app.auth import (
 )
 from app.database import (
     check_db,
+    FOLLOW_UP_STATUSES,
     create_scheduled_job,
     dedupe_contacts,
     delete_contact,
@@ -31,6 +32,7 @@ from app.database import (
     list_contacts,
     list_scheduled_jobs,
     mark_contact_sent,
+    update_contact_follow_up_status,
     update_scheduled_job,
     update_user_password,
 )
@@ -106,6 +108,10 @@ class ScheduleUpdateRequest(BaseModel):
 
 class MarkSentRequest(BaseModel):
     sent: bool = True
+
+
+class ContactFollowUpStatusRequest(BaseModel):
+    follow_up_status: str = Field(min_length=1, max_length=32)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -220,10 +226,23 @@ def logout(request: Request) -> dict:
 
 
 @app.get("/api/contacts")
-def get_contacts(user: CurrentUser, status: str = "all") -> dict:
+def get_contacts(
+    user: CurrentUser,
+    status: str = "all",
+    follow_up_status: str = "all",
+) -> dict:
     if status not in {"all", "sent", "unsent"}:
         raise HTTPException(status_code=400, detail="status 必须是 all/sent/unsent")
-    contacts = list_contacts(user["id"], status=status)
+    if follow_up_status != "all" and follow_up_status not in FOLLOW_UP_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"follow_up_status 必须是 all 或 {'/'.join(FOLLOW_UP_STATUSES)}",
+        )
+    contacts = list_contacts(
+        user["id"],
+        status=status,
+        follow_up_status=follow_up_status,
+    )
     sent_count = sum(1 for item in contacts if item.get("email_sent"))
     return {
         "contacts": contacts,
@@ -252,6 +271,21 @@ def mark_sent(contact_id: int, body: MarkSentRequest, user: CurrentUser) -> dict
     if not mark_contact_sent(user["id"], contact_id, sent=body.sent):
         raise HTTPException(status_code=404, detail="联系人不存在")
     return {"ok": True, "sent": body.sent}
+
+
+@app.patch("/api/contacts/{contact_id}/status")
+def patch_contact_status(
+    contact_id: int, body: ContactFollowUpStatusRequest, user: CurrentUser
+) -> dict:
+    status_value = body.follow_up_status.strip().lower()
+    if status_value not in FOLLOW_UP_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"follow_up_status 必须是 {'/'.join(FOLLOW_UP_STATUSES)}",
+        )
+    if not update_contact_follow_up_status(user["id"], contact_id, status_value):
+        raise HTTPException(status_code=404, detail="联系人不存在")
+    return {"ok": True, "follow_up_status": status_value}
 
 
 @app.post("/api/contacts/dedupe")

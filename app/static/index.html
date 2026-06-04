@@ -324,11 +324,22 @@
         </div>
         <div class="results-actions">
           <label class="field inline">
-            <span>联系状态</span>
+            <span>邮件</span>
             <select id="contact-status-filter">
               <option value="all">全部</option>
               <option value="unsent">未发邮件</option>
               <option value="sent">已发邮件</option>
+            </select>
+          </label>
+          <label class="field inline">
+            <span>跟进状态</span>
+            <select id="contact-follow-up-filter">
+              <option value="all">全部</option>
+              <option value="new">新客户</option>
+              <option value="contacted">已联系</option>
+              <option value="replied">已回复</option>
+              <option value="invalid">无效</option>
+              <option value="interested">有意向</option>
             </select>
           </label>
           <button id="dedupe-contacts-btn" type="button" class="secondary-btn">去重</button>

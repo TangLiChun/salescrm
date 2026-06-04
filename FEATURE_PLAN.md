@@ -5,7 +5,7 @@
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | 1 | 修改当前用户密码 | done | POST /api/me/password + 系统设置 UI |
-| 2 | 联系人跟进状态 | in_progress | new/contacted/replied/invalid/interested |
+| 2 | 联系人跟进状态 | done | new/contacted/replied/invalid/interested |
 | 3 | 邮件模板 + 变量发信 | pending | 模板 CRUD + mailto 预填 |
 | 4 | AI 线索导入预览勾选 | pending | 导入前可选行 |
 | 5 | 联系人备注时间线 | pending | contact_notes 表 |
