@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARIN ASN Role 邮箱查询</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div>
+        <p class="eyebrow">Sales CRM</p>
+        <h1>ARIN ASN Role 邮箱查询</h1>
+        <p class="subtitle">批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱</p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel input-panel">
+        <label for="asn-input" class="label">ASN 列表</label>
+        <textarea
+          id="asn-input"
+          rows="12"
+          placeholder="每行一个 ASN，例如：&#10;15169&#10;AS7922&#10;7922"
+        ></textarea>
+
+        <div class="controls">
+          <label class="field">
+            <span>请求间隔（秒）</span>
+            <input id="delay" type="number" min="0" max="5" step="0.5" value="1">
+          </label>
+          <button id="lookup-btn" type="button">开始查询</button>
+        </div>
+
+        <div id="progress" class="progress hidden">
+          <div class="progress-bar"><div id="progress-fill"></div></div>
+          <p id="progress-text">准备中…</p>
+        </div>
+      </section>
+
+      <section class="panel results-panel">
+        <div class="results-header">
+          <div>
+            <h2>查询结果</h2>
+            <p id="stats" class="stats">尚未查询</p>
+          </div>
+          <div class="results-actions">
+            <label class="field inline">
+              <span>筛选 Role</span>
+              <select id="role-filter">
+                <option value="">全部</option>
+                <option value="abuse">abuse</option>
+                <option value="administrative">administrative</option>
+                <option value="technical">technical</option>
+                <option value="routing">routing</option>
+                <option value="noc">noc</option>
+              </select>
+            </label>
+            <button id="export-btn" type="button" disabled>导出 CSV</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ASN</th>
+                <th>组织</th>
+                <th>Role</th>
+                <th>名称</th>
+                <th>邮箱</th>
+                <th>Handle</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="results-body">
+              <tr class="empty-row">
+                <td colspan="7">输入 ASN 列表后点击「开始查询」</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
