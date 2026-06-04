@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.database import list_due_scheduled_jobs, mark_job_run
+from app.database import insert_job_run, list_due_scheduled_jobs, mark_job_run
 from app.lead_discovery import run_lead_discovery_batch
 from app.llm import llm_configured
 from app.settings_store import get_setting
@@ -36,29 +36,41 @@ async def _run_job(job: dict) -> None:
             user_id=user_id,
         )
         if result.get("error"):
+            msg = result["error"]
             mark_job_run(
                 job_id,
                 status="error",
-                message=result["error"],
+                message=msg,
                 interval_hours=job["interval_hours"],
             )
+            insert_job_run(job_id, status="error", message=msg)
             return
         leads = result.get("leads") or []
         imported = (result.get("import") or {}).get("imported", 0)
+        msg = f"找到 {len(leads)} 条线索，导入 {imported} 条"
         mark_job_run(
             job_id,
             status="ok",
-            message=f"找到 {len(leads)} 条线索，导入 {imported} 条",
+            message=msg,
             interval_hours=job["interval_hours"],
+        )
+        insert_job_run(
+            job_id,
+            status="ok",
+            message=msg,
+            leads_found=len(leads),
+            imported=imported,
         )
     except Exception as exc:
         logger.exception("Scheduled job %s failed", job_id)
+        msg = str(exc)
         mark_job_run(
             job_id,
             status="error",
-            message=str(exc),
+            message=msg,
             interval_hours=job["interval_hours"],
         )
+        insert_job_run(job_id, status="error", message=msg)
 
 
 async def _scheduler_loop() -> None:

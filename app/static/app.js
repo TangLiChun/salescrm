@@ -578,6 +578,15 @@ async function deleteEmailTemplate(templateId) {
   }
   await loadEmailTemplates();
 }
+function formatJobRunLine(run) {
+  const statusLabel = run.status === "ok" ? "成功" : "失败";
+  const detail =
+    run.status === "ok"
+      ? `${run.leads_found} 线索 / ${run.imported} 导入`
+      : escapeHtml(run.message || statusLabel);
+  return `<li><span class="run-time">${escapeHtml(formatTime(run.ran_at))}</span> <span class="run-status run-${escapeHtml(run.status)}">${statusLabel}</span> ${detail}</li>`;
+}
+
 function renderSchedules() {
   schedulesBody.innerHTML = "";
   if (schedules.length === 0) {
@@ -607,6 +616,14 @@ function renderSchedules() {
       </td>
     `;
     schedulesBody.appendChild(tr);
+
+    const runs = scheduleRuns[job.id] || [];
+    if (runs.length > 0) {
+      const runsTr = document.createElement("tr");
+      runsTr.className = "schedule-runs-row";
+      runsTr.innerHTML = `<td colspan="7"><ul class="schedule-runs-list">${runs.map(formatJobRunLine).join("")}</ul></td>`;
+      schedulesBody.appendChild(runsTr);
+    }
   }
   schedulesStatsEl.textContent = `共 ${schedules.length} 个定时任务`;
 }
@@ -614,6 +631,13 @@ function renderSchedules() {
 async function loadSchedules() {
   const data = await api("/api/schedules");
   schedules = data.schedules || [];
+  scheduleRuns = {};
+  await Promise.all(
+    schedules.map(async (job) => {
+      const runData = await api(`/api/schedules/${job.id}/runs?limit=5`);
+      scheduleRuns[job.id] = runData.runs || [];
+    })
+  );
   renderSchedules();
 }
 
@@ -781,6 +805,65 @@ async function deleteContactNote(noteId) {
   if (!confirm("确定删除这条备注？")) return;
   await api(`/api/contacts/${notesContactId}/notes/${noteId}`, { method: "DELETE" });
   await loadContactNotes(notesContactId);
+}
+
+function renderBarChart(container, items, { getLabel = (k) => k, colors } = {}) {
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = `<p class="stats">暂无数据</p>`;
+    return;
+  }
+  const max = Math.max(...items.map((item) => item.count), 1);
+  items.forEach((item, index) => {
+    const pct = Math.round((item.count / max) * 100);
+    const fillColor = colors?.[index] ? `background:${colors[index]};` : "";
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    row.innerHTML = `
+      <label title="${escapeHtml(getLabel(item.key))}">${escapeHtml(getLabel(item.key))}</label>
+      <div class="bar-track"><div class="bar-fill" style="${fillColor}width:${pct}%"></div></div>
+      <em>${item.count}</em>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderDashboard(data) {
+  dashboardStatsEl.textContent = `共 ${data.total} 位联系人 · 已发 ${data.sent} · 未发 ${data.unsent}`;
+  statsSummaryEl.innerHTML = `
+    <div class="stat-card"><strong>${data.total}</strong><span>联系人总数</span></div>
+    <div class="stat-card"><strong>${data.sent}</strong><span>已发邮件</span></div>
+    <div class="stat-card"><strong>${data.unsent}</strong><span>未发邮件</span></div>
+    <div class="stat-card"><strong>${data.by_follow_up_status.interested || 0}</strong><span>有意向</span></div>
+  `;
+  renderBarChart(
+    chartFollowUpEl,
+    Object.entries(data.by_follow_up_status || {}).map(([key, count]) => ({ key, count })),
+    { getLabel: (key) => FOLLOW_UP_STATUS_LABELS[key] || key },
+  );
+  renderBarChart(
+    chartSentEl,
+    [
+      { key: "sent", count: data.sent },
+      { key: "unsent", count: data.unsent },
+    ],
+    { getLabel: (key) => (key === "sent" ? "已发" : "未发"), colors: ["#059669", "#64748b"] },
+  );
+  renderBarChart(
+    chartSourceEl,
+    Object.entries(data.by_source || {})
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count),
+  );
+  renderBarChart(
+    chartRecentEl,
+    (data.recent_imports || []).map((row) => ({ key: row.date, count: row.count })),
+  );
+}
+
+async function loadStats() {
+  dashboardStatsEl.textContent = "加载中…";
+  renderDashboard(await api("/api/stats"));
 }
 
 function switchView(view) {
@@ -1103,6 +1186,7 @@ contactFollowUpFilter.addEventListener("change", () => loadContacts().catch((err
 dedupeContactsBtn.addEventListener("click", () => dedupeContacts().catch((error) => alert(error.message)));
 refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
+refreshStatsBtn.addEventListener("click", () => loadStats().catch((error) => alert(error.message)));
 scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch((error) => alert(error.message)));
 settingsForm.addEventListener("submit", (event) => saveSettings(event).catch((error) => alert(error.message)));
 saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch((error) => alert(error.message)));
