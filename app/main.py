@@ -24,16 +24,19 @@ from app.database import (
     dedupe_contacts,
     delete_contact,
     delete_scheduled_job,
+    get_user_auth_by_id,
     import_contacts,
     init_db,
     list_contacts,
     list_scheduled_jobs,
     mark_contact_sent,
     update_scheduled_job,
+    update_user_password,
 )
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.scheduler import start_scheduler, stop_scheduler
+from app.security import verify_password
 from app.settings_store import get_public_settings, get_settings_for_edit, get_setting, update_settings
 from app.sources import list_channels
 from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
@@ -119,6 +122,11 @@ class SettingsUpdateRequest(BaseModel):
     session_https_only: str | None = None
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 def render_page(filename: str) -> HTMLResponse:
     html = (APP_DIR / "static" / filename).read_text(encoding="utf-8")
     return HTMLResponse(html)
@@ -175,6 +183,18 @@ def me(request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
     return user
+
+
+@app.post("/api/me/password")
+def change_password(body: ChangePasswordRequest, user: CurrentUser) -> dict:
+    auth = get_user_auth_by_id(user["id"])
+    if not auth or not verify_password(body.current_password, auth["password_hash"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确")
+    if body.current_password == body.new_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
+    if not update_user_password(user["id"], body.new_password):
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {"ok": True}
 
 
 @app.post("/api/login")

@@ -793,6 +793,32 @@ refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) 
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
 scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch((error) => alert(error.message)));
 settingsForm.addEventListener("submit", (event) => saveSettings(event).catch((error) => alert(error.message)));
+document.getElementById("change-password-btn").addEventListener("click", () => {
+  changePassword().catch((error) => alert(error.message));
+});
+
+async function changePassword() {
+  const current = document.getElementById("pwd-current").value;
+  const newPwd = document.getElementById("pwd-new").value;
+  const confirm = document.getElementById("pwd-confirm").value;
+  const statusEl = document.getElementById("password-status");
+  if (!current || !newPwd) {
+    alert("请填写当前密码和新密码");
+    return;
+  }
+  if (newPwd !== confirm) {
+    alert("两次输入的新密码不一致");
+    return;
+  }
+  await api("/api/me/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: current, new_password: newPwd }),
+  });
+  document.getElementById("pwd-current").value = "";
+  document.getElementById("pwd-new").value = "";
+  document.getElementById("pwd-confirm").value = "";
+  statusEl.textContent = "密码已更新";
+}
 logoutBtn.addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" });
   window.location.href = "/login";

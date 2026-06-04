@@ -159,6 +159,23 @@ def get_user_by_id(user_id: int) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def get_user_auth_by_id(user_id: int) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT id, username, password_hash FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+
+
+def update_user_password(user_id: int, new_password: str) -> bool:
+    with get_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(new_password), user_id),
+        )
+        return cursor.rowcount > 0
+
+
 def _contact_from_row(row: sqlite3.Row) -> dict:
     data = dict(row)
     data["email_sent"] = bool(data.get("email_sent"))
