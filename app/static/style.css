@@ -269,6 +269,132 @@ tbody tr:last-child td {
   color: var(--warning);
 }
 
+.hidden {
+  display: none !important;
+}
+
+.auth-body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: min(100%, 420px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.form-error {
+  margin: 0;
+  color: var(--error);
+  font-size: 14px;
+}
+
+.default-account {
+  margin-top: 20px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px dashed var(--border);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.default-title {
+  margin: 0 0 8px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.default-account code {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 16px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tab {
+  background: #e8eef7;
+  color: var(--text);
+}
+
+.tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.secondary-btn {
+  background: #e2e8f0;
+  color: var(--text);
+}
+
+.secondary-btn:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.success-btn {
+  background: var(--success);
+}
+
+.success-btn:hover:not(:disabled) {
+  background: #065f46;
+}
+
+.contacts-panel {
+  margin-top: 0;
+}
+
+.link-btn {
+  background: transparent;
+  color: var(--error);
+  padding: 0;
+  font-weight: 600;
+}
+
+.link-btn:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline;
+}
+
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 1fr;
@@ -276,7 +402,8 @@ tbody tr:last-child td {
 
   .results-header,
   .results-actions,
-  .controls {
+  .controls,
+  .topbar {
     flex-direction: column;
     align-items: stretch;
   }

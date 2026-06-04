@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY arin_lookup.py .
 COPY app ./app
 COPY scripts ./scripts
+RUN mkdir -p /app/data
 
 EXPOSE 8000
 

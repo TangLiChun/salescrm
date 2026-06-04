@@ -3,20 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ARIN ASN Role 邮箱查询</title>
+  <title>Sales CRM</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="page">
-    <header class="header">
+    <header class="header topbar">
       <div>
         <p class="eyebrow">Sales CRM</p>
-        <h1>ARIN ASN Role 邮箱查询</h1>
-        <p class="subtitle">批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱</p>
+        <h1 id="page-title">ARIN ASN Role 邮箱查询</h1>
+        <p id="page-subtitle" class="subtitle">批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱</p>
+      </div>
+      <div class="topbar-actions">
+        <span id="current-user" class="user-badge"></span>
+        <button id="logout-btn" type="button" class="secondary-btn">退出登录</button>
       </div>
     </header>
 
-    <main class="layout">
+    <nav class="tabs">
+      <button type="button" class="tab active" data-view="lookup">ASN 查询</button>
+      <button type="button" class="tab" data-view="contacts">联系人列表</button>
+    </nav>
+
+    <main id="lookup-view" class="layout">
       <section class="panel input-panel">
         <label for="asn-input" class="label">ASN 列表</label>
         <textarea
@@ -57,6 +66,7 @@
                 <option value="noc">noc</option>
               </select>
             </label>
+            <button id="import-btn" type="button" class="success-btn" disabled>导入联系人</button>
             <button id="export-btn" type="button" disabled>导出 CSV</button>
           </div>
         </div>
@@ -83,6 +93,40 @@
         </div>
       </section>
     </main>
+
+    <section id="contacts-view" class="panel contacts-panel hidden">
+      <div class="results-header">
+        <div>
+          <h2>联系人列表</h2>
+          <p id="contacts-stats" class="stats">加载中…</p>
+        </div>
+        <div class="results-actions">
+          <button id="refresh-contacts-btn" type="button" class="secondary-btn">刷新</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>组织</th>
+              <th>名称</th>
+              <th>邮箱</th>
+              <th>Role</th>
+              <th>ASN</th>
+              <th>来源</th>
+              <th>导入时间</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="contacts-body">
+            <tr class="empty-row">
+              <td colspan="8">暂无联系人</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
 
   <script src="/static/app.js"></script>
