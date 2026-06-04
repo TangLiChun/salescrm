@@ -24,6 +24,8 @@ def get_conn():
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -60,6 +62,15 @@ def _migrate_contacts(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_user_email_unique ON contacts(user_id, email)"
         )
+
+
+def check_db() -> bool:
+    try:
+        with get_conn() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
 
 
 def init_db() -> None:

@@ -20,6 +20,7 @@ from app.auth import (
     session_secret,
 )
 from app.database import (
+    check_db,
     create_scheduled_job,
     dedupe_contacts,
     delete_contact,
@@ -143,6 +144,12 @@ def require_login(request: Request) -> dict | None:
         request.session.clear()
         return None
     return {"id": user["id"], "username": user["username"]}
+
+
+@app.get("/health")
+def health() -> dict:
+    db_ok = check_db()
+    return {"ok": db_ok, "db": db_ok}
 
 
 @app.get("/login", response_class=HTMLResponse)
