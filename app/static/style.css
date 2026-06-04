@@ -476,6 +476,32 @@ tbody tr:last-child td {
   color: var(--warning);
 }
 
+
+.status-badge.follow-up-new {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.status-badge.follow-up-contacted {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.status-badge.follow-up-replied {
+  background: #ecfeff;
+  color: #0e7490;
+}
+
+.status-badge.follow-up-invalid {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.status-badge.follow-up-interested {
+  background: #fdf4ff;
+  color: #a21caf;
+}
+
 .row-sent {
   background: #f8fffb;
 }

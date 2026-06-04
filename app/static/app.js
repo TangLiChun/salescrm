@@ -18,6 +18,7 @@ const contactsView = document.getElementById("contacts-view");
 const contactsBody = document.getElementById("contacts-body");
 const contactsStatsEl = document.getElementById("contacts-stats");
 const contactStatusFilter = document.getElementById("contact-status-filter");
+const contactFollowUpFilter = document.getElementById("contact-follow-up-filter");
 const dedupeContactsBtn = document.getElementById("dedupe-contacts-btn");
 const refreshContactsBtn = document.getElementById("refresh-contacts-btn");
 const schedulesBody = document.getElementById("schedules-body");
@@ -52,6 +53,14 @@ const importLeadsBtn = document.getElementById("import-leads-btn");
 let allRows = [];
 let csvContent = "";
 let contacts = [];
+
+const FOLLOW_UP_STATUS_LABELS = {
+  new: "新客户",
+  contacted: "已联系",
+  replied: "已回复",
+  invalid: "无效",
+  interested: "有意向",
+};
 let schedules = [];
 let aiLeads = [];
 let llmConfigured = false;
@@ -149,6 +158,12 @@ function renderRows() {
   importBtn.disabled = getImportableRows().length === 0;
 }
 
+function followUpStatusBadge(status) {
+  const key = status || "new";
+  const label = FOLLOW_UP_STATUS_LABELS[key] || key;
+  return `<span class="status-badge follow-up-${escapeHtml(key)}">${escapeHtml(label)}</span>`;
+}
+
 function renderContacts() {
   contactsBody.innerHTML = "";
 
@@ -171,9 +186,7 @@ function renderContacts() {
       .filter(Boolean)
       .map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`)
       .join("");
-    const statusBadge = contact.email_sent
-      ? `<span class="status-badge sent">已发邮件</span>`
-      : `<span class="status-badge unsent">未联系</span>`;
+    const statusBadge = followUpStatusBadge(contact.follow_up_status);
 
     tr.innerHTML = `
       <td>${statusBadge}</td>
@@ -187,6 +200,7 @@ function renderContacts() {
       <td>${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
         <button type="button" class="link-btn action-mail" data-email="${escapeHtml(contact.email)}">发邮件</button>
+        <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">改状态</button>
         <button type="button" class="link-btn action-mark" data-id="${contact.id}" data-sent="${contact.email_sent ? "0" : "1"}">${contact.email_sent ? "取消标记" : "标记已发"}</button>
         <button type="button" class="link-btn action-delete" data-id="${contact.id}">删除</button>
       </td>
@@ -348,7 +362,9 @@ async function importResults() {
 
 async function loadContacts() {
   const status = contactStatusFilter.value || "all";
-  const data = await api(`/api/contacts?status=${encodeURIComponent(status)}`);
+  const followUp = contactFollowUpFilter.value || "all";
+  const params = new URLSearchParams({ status, follow_up_status: followUp });
+  const data = await api(`/api/contacts?${params.toString()}`);
   contacts = data.contacts || [];
   renderContacts();
 }
@@ -363,6 +379,25 @@ async function markContactSent(contactId, sent) {
   await api(`/api/contacts/${contactId}/mark-sent`, {
     method: "POST",
     body: JSON.stringify({ sent }),
+  });
+  await loadContacts();
+}
+
+async function changeContactFollowUpStatus(contactId, currentStatus) {
+  const options = Object.keys(FOLLOW_UP_STATUS_LABELS);
+  const currentLabel = FOLLOW_UP_STATUS_LABELS[currentStatus] || currentStatus;
+  const lines = options.map((opt, index) => `${index + 1}. ${FOLLOW_UP_STATUS_LABELS[opt]}`).join("\n");
+  const input = prompt(`当前：${currentLabel}\n\n${lines}\n\n输入序号 1-${options.length}：`);
+  if (input === null) return;
+  const index = Number(input.trim()) - 1;
+  if (!Number.isInteger(index) || index < 0 || index >= options.length) {
+    alert("无效序号");
+    return;
+  }
+  const follow_up_status = options[index];
+  await api(`/api/contacts/${contactId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ follow_up_status }),
   });
   await loadContacts();
 }
@@ -788,6 +823,7 @@ discoverBtn.addEventListener("click", runLeadDiscovery);
 importLeadsBtn.addEventListener("click", importAiLeads);
 roleFilter.addEventListener("change", renderRows);
 contactStatusFilter.addEventListener("change", () => loadContacts().catch((error) => alert(error.message)));
+contactFollowUpFilter.addEventListener("change", () => loadContacts().catch((error) => alert(error.message)));
 dedupeContactsBtn.addEventListener("click", () => dedupeContacts().catch((error) => alert(error.message)));
 refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
@@ -832,6 +868,13 @@ contactsBody.addEventListener("click", (event) => {
   const mailBtn = event.target.closest(".action-mail");
   if (mailBtn) {
     openMailClient(mailBtn.dataset.email);
+    return;
+  }
+  const statusBtn = event.target.closest(".action-status");
+  if (statusBtn) {
+    changeContactFollowUpStatus(statusBtn.dataset.id, statusBtn.dataset.status).catch((error) =>
+      alert(error.message)
+    );
     return;
   }
   const markBtn = event.target.closest(".action-mark");

@@ -11,6 +11,8 @@ from app.security import hash_password
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = ROOT_DIR / "data" / "salescrm.db"
 
+FOLLOW_UP_STATUSES = ("new", "contacted", "replied", "invalid", "interested")
+
 
 def db_path() -> Path:
     configured = os.getenv("DATABASE_PATH")
@@ -47,6 +49,13 @@ def _migrate_contacts(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE contacts ADD COLUMN email_sent INTEGER NOT NULL DEFAULT 0")
     if "email_sent_at" not in columns:
         conn.execute("ALTER TABLE contacts ADD COLUMN email_sent_at TEXT")
+    if "follow_up_status" not in columns:
+        conn.execute(
+            "ALTER TABLE contacts ADD COLUMN follow_up_status TEXT NOT NULL DEFAULT 'new'"
+        )
+        conn.execute(
+            "UPDATE contacts SET follow_up_status = 'contacted' WHERE email_sent = 1"
+        )
 
     dedupe_contacts(conn=conn)
 
@@ -87,6 +96,7 @@ def init_db() -> None:
                 notes TEXT,
                 email_sent INTEGER NOT NULL DEFAULT 0,
                 email_sent_at TEXT,
+                follow_up_status TEXT NOT NULL DEFAULT 'new',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES users(id)
@@ -179,23 +189,33 @@ def update_user_password(user_id: int, new_password: str) -> bool:
 def _contact_from_row(row: sqlite3.Row) -> dict:
     data = dict(row)
     data["email_sent"] = bool(data.get("email_sent"))
+    if not data.get("follow_up_status"):
+        data["follow_up_status"] = "new"
     return data
 
 
-def list_contacts(user_id: int, *, status: str = "all") -> list[dict]:
+def list_contacts(
+    user_id: int,
+    *,
+    status: str = "all",
+    follow_up_status: str | None = None,
+) -> list[dict]:
     clauses = ["user_id = ?"]
     params: list[object] = [user_id]
     if status == "sent":
         clauses.append("email_sent = 1")
     elif status == "unsent":
         clauses.append("email_sent = 0")
+    if follow_up_status and follow_up_status != "all":
+        clauses.append("follow_up_status = ?")
+        params.append(follow_up_status)
 
     where = " AND ".join(clauses)
     with get_conn() as conn:
         rows = conn.execute(
             f"""
             SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
-                   email_sent, email_sent_at, created_at, updated_at
+                   email_sent, email_sent_at, follow_up_status, created_at, updated_at
             FROM contacts
             WHERE {where}
             ORDER BY email_sent ASC, created_at DESC, id DESC
@@ -262,8 +282,8 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 """
                 INSERT INTO contacts (
                     user_id, asn, org, name, email, roles, handle, rir, source, notes,
-                    email_sent, email_sent_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+                    email_sent, email_sent_at, follow_up_status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 'new', ?, ?)
                 """,
                 (
                     user_id,
@@ -310,13 +330,41 @@ def _merge_roles(old: str | None, new: list[str] | str) -> str:
 def mark_contact_sent(user_id: int, contact_id: int, *, sent: bool = True) -> bool:
     now = utc_now()
     with get_conn() as conn:
+        if sent:
+            cursor = conn.execute(
+                """
+                UPDATE contacts
+                SET email_sent = 1, email_sent_at = ?, follow_up_status = 'contacted', updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, now, contact_id, user_id),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE contacts
+                SET email_sent = 0, email_sent_at = NULL, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, contact_id, user_id),
+            )
+        return cursor.rowcount > 0
+
+
+def update_contact_follow_up_status(
+    user_id: int, contact_id: int, follow_up_status: str
+) -> bool:
+    if follow_up_status not in FOLLOW_UP_STATUSES:
+        return False
+    now = utc_now()
+    with get_conn() as conn:
         cursor = conn.execute(
             """
             UPDATE contacts
-            SET email_sent = ?, email_sent_at = ?, updated_at = ?
+            SET follow_up_status = ?, updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
-            (1 if sent else 0, now if sent else None, now, contact_id, user_id),
+            (follow_up_status, now, contact_id, user_id),
         )
         return cursor.rowcount > 0
 
