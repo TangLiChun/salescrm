@@ -23,6 +23,7 @@
     <nav class="tabs">
       <button type="button" class="tab active" data-view="lookup">ASN 查询</button>
       <button type="button" class="tab" data-view="ai-leads">AI 线索发现</button>
+      <button type="button" class="tab" data-view="schedules">定时任务</button>
       <button type="button" class="tab" data-view="contacts">联系人列表</button>
     </nav>
 
@@ -161,6 +162,65 @@
       </section>
     </section>
 
+    <section id="schedules-view" class="panel contacts-panel hidden">
+      <div class="results-header">
+        <div>
+          <h2>定时自动找线索</h2>
+          <p id="schedules-stats" class="stats">服务启动后按间隔自动运行 AI 线索发现并导入</p>
+        </div>
+        <div class="results-actions">
+          <button id="refresh-schedules-btn" type="button" class="secondary-btn">刷新</button>
+        </div>
+      </div>
+
+      <form id="schedule-form" class="schedule-form">
+        <label class="field">
+          <span>任务名称</span>
+          <input id="schedule-name" type="text" placeholder="例如：美国 ISP 每日线索" required>
+        </label>
+        <label class="field">
+          <span>搜索描述</span>
+          <textarea id="schedule-query" rows="4" placeholder="与 AI 线索发现相同的自然语言描述" required></textarea>
+        </label>
+        <div class="controls ai-controls">
+          <label class="field">
+            <span>间隔（小时）</span>
+            <input id="schedule-interval" type="number" min="1" max="168" value="24">
+          </label>
+          <label class="field">
+            <span>最低匹配分</span>
+            <input id="schedule-min-score" type="number" min="0" max="100" value="60">
+          </label>
+          <label class="field checkbox-field">
+            <input id="schedule-auto-import" type="checkbox" checked>
+            <span>自动导入联系人</span>
+          </label>
+          <button type="submit">创建定时任务</button>
+        </div>
+      </form>
+
+      <div class="table-wrap schedule-table">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>间隔</th>
+              <th>状态</th>
+              <th>上次运行</th>
+              <th>下次运行</th>
+              <th>结果</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="schedules-body">
+            <tr class="empty-row">
+              <td colspan="7">暂无定时任务</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="contacts-view" class="panel contacts-panel hidden">
       <div class="results-header">
         <div>
@@ -168,6 +228,15 @@
           <p id="contacts-stats" class="stats">加载中…</p>
         </div>
         <div class="results-actions">
+          <label class="field inline">
+            <span>联系状态</span>
+            <select id="contact-status-filter">
+              <option value="all">全部</option>
+              <option value="unsent">未发邮件</option>
+              <option value="sent">已发邮件</option>
+            </select>
+          </label>
+          <button id="dedupe-contacts-btn" type="button" class="secondary-btn">去重</button>
           <button id="refresh-contacts-btn" type="button" class="secondary-btn">刷新</button>
         </div>
       </div>
@@ -176,6 +245,7 @@
         <table>
           <thead>
             <tr>
+              <th>状态</th>
               <th>组织</th>
               <th>名称</th>
               <th>邮箱</th>
@@ -184,12 +254,12 @@
               <th>来源</th>
               <th>备注</th>
               <th>导入时间</th>
-              <th></th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody id="contacts-body">
             <tr class="empty-row">
-              <td colspan="9">暂无联系人</td>
+              <td colspan="10">暂无联系人</td>
             </tr>
           </tbody>
         </table>

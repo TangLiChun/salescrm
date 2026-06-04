@@ -22,13 +22,20 @@ from app.auth import (
 from app.database import (
     DEFAULT_ADMIN_PASSWORD,
     DEFAULT_ADMIN_USER,
+    create_scheduled_job,
+    dedupe_contacts,
     delete_contact,
+    delete_scheduled_job,
     import_contacts,
     init_db,
     list_contacts,
+    list_scheduled_jobs,
+    mark_contact_sent,
+    update_scheduled_job,
 )
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
+from app.scheduler import start_scheduler, stop_scheduler
 from app.sources import list_channels
 from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
 
@@ -39,7 +46,9 @@ MAX_ASNS = 200
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    await start_scheduler()
     yield
+    await stop_scheduler()
 
 
 app = FastAPI(title="Sales CRM — ARIN ASN Lookup", lifespan=lifespan)
@@ -67,6 +76,28 @@ class LeadDiscoverRequest(BaseModel):
     min_score: int = Field(default=60, ge=0, le=100)
     delay: float = Field(default=0.5, ge=0, le=5)
     auto_import: bool = False
+
+
+class ScheduleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    query: str = Field(min_length=4, max_length=2000)
+    interval_hours: int = Field(default=24, ge=1, le=168)
+    min_score: int = Field(default=60, ge=0, le=100)
+    auto_import: bool = True
+    enabled: bool = True
+
+
+class ScheduleUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    query: str | None = Field(default=None, max_length=2000)
+    interval_hours: int | None = Field(default=None, ge=1, le=168)
+    min_score: int | None = Field(default=None, ge=0, le=100)
+    auto_import: bool | None = None
+    enabled: bool | None = None
+
+
+class MarkSentRequest(BaseModel):
+    sent: bool = True
 
 
 def render_page(filename: str) -> HTMLResponse:
@@ -109,6 +140,7 @@ def public_config() -> dict:
         "llm_configured": llm_configured(),
         "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
         "search_channels": list_channels(),
+        "scheduler_enabled": os.getenv("SCHEDULER_ENABLED", "1") != "0",
     }
 
 
@@ -136,9 +168,17 @@ def logout(request: Request) -> dict:
 
 
 @app.get("/api/contacts")
-def get_contacts(user: CurrentUser) -> dict:
-    contacts = list_contacts(user["id"])
-    return {"contacts": contacts, "total": len(contacts)}
+def get_contacts(user: CurrentUser, status: str = "all") -> dict:
+    if status not in {"all", "sent", "unsent"}:
+        raise HTTPException(status_code=400, detail="status 必须是 all/sent/unsent")
+    contacts = list_contacts(user["id"], status=status)
+    sent_count = sum(1 for item in contacts if item.get("email_sent"))
+    return {
+        "contacts": contacts,
+        "total": len(contacts),
+        "sent_count": sent_count,
+        "unsent_count": len(contacts) - sent_count,
+    }
 
 
 @app.post("/api/contacts/import")
@@ -152,6 +192,66 @@ def import_contact_rows(body: ImportContactsRequest, user: CurrentUser) -> dict:
 def remove_contact(contact_id: int, user: CurrentUser) -> dict:
     if not delete_contact(user["id"], contact_id):
         raise HTTPException(status_code=404, detail="联系人不存在")
+    return {"ok": True}
+
+
+@app.post("/api/contacts/{contact_id}/mark-sent")
+def mark_sent(contact_id: int, body: MarkSentRequest, user: CurrentUser) -> dict:
+    if not mark_contact_sent(user["id"], contact_id, sent=body.sent):
+        raise HTTPException(status_code=404, detail="联系人不存在")
+    return {"ok": True, "sent": body.sent}
+
+
+@app.post("/api/contacts/dedupe")
+def dedupe(user: CurrentUser) -> dict:
+    result = dedupe_contacts(user_id=user["id"])
+    result["total"] = len(list_contacts(user["id"]))
+    return result
+
+
+@app.get("/api/schedules")
+def get_schedules(user: CurrentUser) -> dict:
+    jobs = list_scheduled_jobs(user["id"])
+    return {"schedules": jobs, "total": len(jobs)}
+
+
+@app.post("/api/schedules")
+def create_schedule(body: ScheduleRequest, user: CurrentUser) -> dict:
+    if not llm_configured():
+        raise HTTPException(status_code=503, detail="未配置 LLM API Key，无法创建定时任务")
+    job = create_scheduled_job(
+        user["id"],
+        name=body.name,
+        query=body.query,
+        interval_hours=body.interval_hours,
+        min_score=body.min_score,
+        auto_import=body.auto_import,
+        enabled=body.enabled,
+    )
+    return job
+
+
+@app.patch("/api/schedules/{job_id}")
+def patch_schedule(job_id: int, body: ScheduleUpdateRequest, user: CurrentUser) -> dict:
+    job = update_scheduled_job(
+        user["id"],
+        job_id,
+        name=body.name,
+        query=body.query,
+        interval_hours=body.interval_hours,
+        min_score=body.min_score,
+        auto_import=body.auto_import,
+        enabled=body.enabled,
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="定时任务不存在")
+    return job
+
+
+@app.delete("/api/schedules/{job_id}")
+def remove_schedule(job_id: int, user: CurrentUser) -> dict:
+    if not delete_scheduled_job(user["id"], job_id):
+        raise HTTPException(status_code=404, detail="定时任务不存在")
     return {"ok": True}
 
 

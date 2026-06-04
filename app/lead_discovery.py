@@ -41,9 +41,8 @@ def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
     unique: list[dict[str, Any]] = []
     for row in candidates:
         email = (row.get("email") or "").lower()
-        roles = ",".join(row.get("roles") or [])
         if email:
-            key = f"email:{email}:{roles}"
+            key = f"email:{email}"
         else:
             key = f"asn:{row.get('asn')}:{row.get('org')}:{row.get('source')}"
         if key in seen:
@@ -236,4 +235,42 @@ async def discover_leads_stream(
         "leads": leads,
         "import": import_result,
         "message": f"完成，跨渠道共找到 {len(leads)} 条高匹配线索",
+    }
+
+
+async def run_lead_discovery_batch(
+    user_query: str,
+    *,
+    min_score: int = 60,
+    delay: float = 0.5,
+    auto_import: bool = False,
+    user_id: int | None = None,
+) -> dict:
+    leads: list[dict[str, Any]] = []
+    import_result = None
+    error = None
+    message = ""
+
+    async for event in discover_leads_stream(
+        user_query,
+        min_score=min_score,
+        delay=delay,
+        auto_import=auto_import,
+        user_id=user_id,
+    ):
+        event_type = event.get("type")
+        if event_type == "error":
+            error = event.get("message")
+        elif event_type == "lead":
+            leads.append(event["lead"])
+        elif event_type == "done":
+            leads = event.get("leads") or leads
+            import_result = event.get("import")
+            message = event.get("message") or ""
+
+    return {
+        "leads": leads,
+        "import": import_result,
+        "error": error,
+        "message": message,
     }

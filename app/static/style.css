@@ -458,6 +458,48 @@ tbody tr:last-child td {
   font-weight: 600;
 }
 
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-badge.sent {
+  background: #ecfdf5;
+  color: var(--success);
+}
+
+.status-badge.unsent {
+  background: #fff7ed;
+  color: var(--warning);
+}
+
+.row-sent {
+  background: #f8fffb;
+}
+
+.action-cell {
+  white-space: nowrap;
+}
+
+.action-cell .link-btn {
+  margin-right: 8px;
+}
+
+.schedule-form {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.schedule-table {
+  margin-top: 8px;
+}
+
 .ai-controls {
   flex-wrap: wrap;
 }
