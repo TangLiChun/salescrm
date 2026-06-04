@@ -395,6 +395,67 @@ tbody tr:last-child td {
   text-decoration: underline;
 }
 
+.llm-status {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+}
+
+.llm-status.ok {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: var(--success);
+}
+
+.llm-status.warn {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: var(--warning);
+}
+
+.ai-plan {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.ai-plan p {
+  margin: 0 0 8px;
+}
+
+.ai-plan p:last-child {
+  margin-bottom: 0;
+}
+
+.ai-controls {
+  flex-wrap: wrap;
+}
+
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.score-badge {
+  display: inline-flex;
+  min-width: 36px;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: var(--success);
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 1fr;

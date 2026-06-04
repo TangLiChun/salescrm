@@ -27,6 +27,8 @@ from app.database import (
     init_db,
     list_contacts,
 )
+from app.lead_discovery import discover_leads_stream
+from app.llm import llm_configured
 from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
 
 APP_DIR = Path(__file__).resolve().parent
@@ -57,6 +59,13 @@ class LoginRequest(BaseModel):
 
 class ImportContactsRequest(BaseModel):
     rows: list[dict] = Field(min_length=1)
+
+
+class LeadDiscoverRequest(BaseModel):
+    query: str = Field(min_length=4, max_length=2000)
+    min_score: int = Field(default=60, ge=0, le=100)
+    delay: float = Field(default=0.5, ge=0, le=5)
+    auto_import: bool = False
 
 
 def render_page(filename: str) -> HTMLResponse:
@@ -96,6 +105,8 @@ def public_config() -> dict:
     return {
         "default_username": DEFAULT_ADMIN_USER,
         "default_password_hint": DEFAULT_ADMIN_PASSWORD,
+        "llm_configured": llm_configured(),
+        "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
     }
 
 
@@ -192,6 +203,31 @@ async def lookup_stream(body: LookupRequest, _: CurrentUser) -> StreamingRespons
                 await asyncio.sleep(body.delay)
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/leads/discover/stream")
+async def discover_leads(body: LeadDiscoverRequest, user: CurrentUser) -> StreamingResponse:
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 LLM API Key，请在环境变量中设置 LLM_API_KEY",
+        )
+
+    async def event_generator():
+        async for event in discover_leads_stream(
+            body.query,
+            min_score=body.min_score,
+            delay=body.delay,
+            auto_import=body.auto_import,
+            user_id=user["id"],
+        ):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

@@ -22,6 +22,7 @@
 
     <nav class="tabs">
       <button type="button" class="tab active" data-view="lookup">ASN 查询</button>
+      <button type="button" class="tab" data-view="ai-leads">AI 线索发现</button>
       <button type="button" class="tab" data-view="contacts">联系人列表</button>
     </nav>
 
@@ -94,6 +95,70 @@
       </section>
     </main>
 
+    <section id="ai-leads-view" class="layout hidden">
+      <section class="panel input-panel">
+        <label for="lead-query" class="label">描述你要找的销售线索</label>
+        <textarea
+          id="lead-query"
+          rows="10"
+          placeholder="例如：&#10;找美国大型 ISP 和有线电视运营商，需要 networking / peering 相关联系人&#10;找提供 cloud / CDN 服务的北美公司&#10;找数据中心和网络基础设施相关的 ARIN 注册组织"
+        ></textarea>
+
+        <div id="llm-status" class="llm-status">检查 LLM 配置中…</div>
+
+        <div class="controls ai-controls">
+          <label class="field">
+            <span>最低匹配分</span>
+            <input id="min-score" type="number" min="0" max="100" step="5" value="60">
+          </label>
+          <label class="field checkbox-field">
+            <input id="auto-import" type="checkbox">
+            <span>自动导入联系人</span>
+          </label>
+          <button id="discover-btn" type="button">AI 开始找线索</button>
+        </div>
+
+        <div id="ai-plan" class="ai-plan hidden"></div>
+
+        <div id="ai-progress" class="progress hidden">
+          <div class="progress-bar"><div id="ai-progress-fill"></div></div>
+          <p id="ai-progress-text">准备中…</p>
+        </div>
+      </section>
+
+      <section class="panel results-panel">
+        <div class="results-header">
+          <div>
+            <h2>AI 线索结果</h2>
+            <p id="ai-stats" class="stats">尚未开始</p>
+          </div>
+          <div class="results-actions">
+            <button id="import-leads-btn" type="button" class="success-btn" disabled>导入选中线索</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>分数</th>
+                <th>组织</th>
+                <th>邮箱</th>
+                <th>Role</th>
+                <th>ASN</th>
+                <th>AI 理由</th>
+              </tr>
+            </thead>
+            <tbody id="ai-leads-body">
+              <tr class="empty-row">
+                <td colspan="6">用自然语言描述目标客户，AI 会自动搜索并评分</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
     <section id="contacts-view" class="panel contacts-panel hidden">
       <div class="results-header">
         <div>
@@ -115,13 +180,14 @@
               <th>Role</th>
               <th>ASN</th>
               <th>来源</th>
+              <th>备注</th>
               <th>导入时间</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="contacts-body">
             <tr class="empty-row">
-              <td colspan="8">暂无联系人</td>
+              <td colspan="9">暂无联系人</td>
             </tr>
           </tbody>
         </table>

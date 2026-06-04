@@ -12,6 +12,7 @@ const progressText = document.getElementById("progress-text");
 const currentUserEl = document.getElementById("current-user");
 const logoutBtn = document.getElementById("logout-btn");
 const lookupView = document.getElementById("lookup-view");
+const aiLeadsView = document.getElementById("ai-leads-view");
 const contactsView = document.getElementById("contacts-view");
 const contactsBody = document.getElementById("contacts-body");
 const contactsStatsEl = document.getElementById("contacts-stats");
@@ -19,10 +20,24 @@ const refreshContactsBtn = document.getElementById("refresh-contacts-btn");
 const pageTitle = document.getElementById("page-title");
 const pageSubtitle = document.getElementById("page-subtitle");
 const tabs = document.querySelectorAll(".tab");
+const leadQueryInput = document.getElementById("lead-query");
+const llmStatusEl = document.getElementById("llm-status");
+const minScoreInput = document.getElementById("min-score");
+const autoImportInput = document.getElementById("auto-import");
+const discoverBtn = document.getElementById("discover-btn");
+const aiPlanEl = document.getElementById("ai-plan");
+const aiProgressEl = document.getElementById("ai-progress");
+const aiProgressFill = document.getElementById("ai-progress-fill");
+const aiProgressText = document.getElementById("ai-progress-text");
+const aiStatsEl = document.getElementById("ai-stats");
+const aiLeadsBody = document.getElementById("ai-leads-body");
+const importLeadsBtn = document.getElementById("import-leads-btn");
 
 let allRows = [];
 let csvContent = "";
 let contacts = [];
+let aiLeads = [];
+let llmConfigured = false;
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -123,7 +138,7 @@ function renderContacts() {
   if (contacts.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="8">暂无联系人，查询 ASN 后可导入</td>`;
+    tr.innerHTML = `<td colspan="9">暂无联系人，查询 ASN 后可导入</td>`;
     contactsBody.appendChild(tr);
     contactsStatsEl.textContent = "共 0 位联系人";
     return;
@@ -144,6 +159,7 @@ function renderContacts() {
       <td>${roles || "—"}</td>
       <td>${contact.asn ? `AS${contact.asn}` : "—"}</td>
       <td>${escapeHtml(contact.source || "arin")}</td>
+      <td>${escapeHtml(contact.notes || "—")}</td>
       <td>${escapeHtml(formatTime(contact.created_at))}</td>
       <td><button type="button" class="link-btn" data-id="${contact.id}">删除</button></td>
     `;
@@ -320,15 +336,213 @@ function switchView(view) {
   });
 
   lookupView.classList.toggle("hidden", view !== "lookup");
+  aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
   contactsView.classList.toggle("hidden", view !== "contacts");
 
   if (view === "lookup") {
     pageTitle.textContent = "ARIN ASN Role 邮箱查询";
     pageSubtitle.textContent = "批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱";
+  } else if (view === "ai-leads") {
+    pageTitle.textContent = "AI 线索发现";
+    pageSubtitle.textContent = "用自然语言描述目标客户，AI 自动搜索 PeeringDB + ARIN 并评分筛选销售线索";
   } else {
     pageTitle.textContent = "联系人列表";
-    pageSubtitle.textContent = "从 ASN 查询结果导入的 role 邮箱联系人";
+    pageSubtitle.textContent = "从 ASN 查询或 AI 线索发现导入的联系人";
     loadContacts().catch((error) => alert(error.message));
+  }
+}
+
+function renderAiLeads() {
+  aiLeadsBody.innerHTML = "";
+
+  if (aiLeads.length === 0) {
+    const tr = document.createElement("tr");
+    tr.className = "empty-row";
+    tr.innerHTML = `<td colspan="6">用自然语言描述目标客户，AI 会自动搜索并评分</td>`;
+    aiLeadsBody.appendChild(tr);
+    aiStatsEl.textContent = "尚未开始";
+    importLeadsBtn.disabled = true;
+    return;
+  }
+
+  for (const lead of aiLeads) {
+    const tr = document.createElement("tr");
+    const roles = (lead.roles || []).map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`).join("");
+    tr.innerHTML = `
+      <td><span class="score-badge">${lead.lead_score || 0}</span></td>
+      <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
+      <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email)}</a></td>
+      <td>${roles || "—"}</td>
+      <td>${lead.asn ? `AS${lead.asn}` : "—"}</td>
+      <td>${escapeHtml(lead.lead_reason || "—")}</td>
+    `;
+    aiLeadsBody.appendChild(tr);
+  }
+
+  aiStatsEl.textContent = `共 ${aiLeads.length} 条高匹配线索`;
+  importLeadsBtn.disabled = aiLeads.length === 0;
+}
+
+function renderAiPlan(plan) {
+  aiPlanEl.classList.remove("hidden");
+  aiPlanEl.innerHTML = `
+    <p><strong>搜索策略：</strong>${escapeHtml(plan.summary || "")}</p>
+    <p><strong>目标客户：</strong>${escapeHtml(plan.target_profile || "")}</p>
+    <p><strong>关键词：</strong>${escapeHtml((plan.keywords || []).join(", "))}</p>
+    <p><strong>优先 Role：</strong>${escapeHtml((plan.preferred_roles || []).join(", "))}</p>
+  `;
+}
+
+async function loadLlmStatus() {
+  try {
+    const config = await fetch("/api/config").then((response) => response.json());
+    llmConfigured = Boolean(config.llm_configured);
+    if (llmConfigured) {
+      llmStatusEl.className = "llm-status ok";
+      llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）`;
+      discoverBtn.disabled = false;
+    } else {
+      llmStatusEl.className = "llm-status warn";
+      llmStatusEl.textContent = "LLM 未配置：请在环境变量设置 LLM_API_KEY（支持 OpenAI 兼容 API）";
+      discoverBtn.disabled = true;
+    }
+  } catch {
+    llmStatusEl.className = "llm-status warn";
+    llmStatusEl.textContent = "无法读取 LLM 配置";
+    discoverBtn.disabled = true;
+  }
+}
+
+async function runLeadDiscovery() {
+  const query = leadQueryInput.value.trim();
+  if (!query) {
+    alert("请先描述你要找的销售线索");
+    return;
+  }
+  if (!llmConfigured) {
+    alert("LLM 未配置，无法使用 AI 线索发现");
+    return;
+  }
+
+  aiLeads = [];
+  renderAiLeads();
+  aiPlanEl.classList.add("hidden");
+  aiProgressEl.classList.remove("hidden");
+  aiProgressFill.style.width = "0%";
+  aiProgressText.textContent = "AI 正在分析需求…";
+  discoverBtn.disabled = true;
+  importLeadsBtn.disabled = true;
+
+  try {
+    const response = await fetch("/api/leads/discover/stream", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        min_score: Number(minScoreInput.value) || 60,
+        delay: 0.5,
+        auto_import: autoImportInput.checked,
+      }),
+    });
+
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "AI 线索发现失败");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() || "";
+
+      for (const chunk of chunks) {
+        const line = chunk.trim();
+        if (!line.startsWith("data: ")) continue;
+        const payload = JSON.parse(line.slice(6));
+
+        if (payload.type === "status") {
+          aiProgressText.textContent = payload.message;
+        }
+
+        if (payload.type === "plan") {
+          renderAiPlan(payload.plan);
+        }
+
+        if (payload.type === "networks") {
+          aiProgressText.textContent = `找到 ${payload.total} 个候选网络，开始查询 ARIN…`;
+        }
+
+        if (payload.type === "progress") {
+          const percent = Math.round((payload.index / payload.total) * 100);
+          aiProgressFill.style.width = `${percent}%`;
+          aiProgressText.textContent = `${payload.message}（${payload.index}/${payload.total}）`;
+        }
+
+        if (payload.type === "lead") {
+          aiLeads.push(payload.lead);
+          renderAiLeads();
+        }
+
+        if (payload.type === "error") {
+          throw new Error(payload.message);
+        }
+
+        if (payload.type === "done") {
+          aiProgressFill.style.width = "100%";
+          aiProgressText.textContent = payload.message || "完成";
+          if (payload.leads) {
+            aiLeads = payload.leads;
+            renderAiLeads();
+          }
+          if (payload.import) {
+            alert(
+              `已自动导入：新增 ${payload.import.imported} 条，重复 ${payload.import.duplicates} 条`
+            );
+            await loadContacts();
+          }
+        }
+      }
+    }
+  } catch (error) {
+    alert(error.message || "AI 线索发现失败");
+    aiProgressText.textContent = "失败";
+  } finally {
+    discoverBtn.disabled = !llmConfigured;
+  }
+}
+
+async function importAiLeads() {
+  if (aiLeads.length === 0) return;
+
+  const rows = aiLeads.map((lead) => ({
+    ...lead,
+    source: "ai-lead",
+    notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),
+  }));
+
+  try {
+    const result = await api("/api/contacts/import", {
+      method: "POST",
+      body: JSON.stringify({ rows }),
+    });
+    alert(`导入完成：新增 ${result.imported} 条，重复 ${result.duplicates} 条，跳过 ${result.skipped} 条`);
+    await loadContacts();
+    switchView("contacts");
+  } catch (error) {
+    alert(error.message || "导入失败");
   }
 }
 
@@ -341,13 +555,17 @@ async function bootstrap() {
     return;
   }
 
+  await loadLlmStatus();
   asnInput.value = "15169\n7922\n3320";
+  leadQueryInput.value = "找美国大型 ISP 和有线电视运营商，优先 networking / peering 相关联系人";
   await loadContacts();
 }
 
 lookupBtn.addEventListener("click", runLookup);
 exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
+discoverBtn.addEventListener("click", runLeadDiscovery);
+importLeadsBtn.addEventListener("click", importAiLeads);
 roleFilter.addEventListener("change", renderRows);
 refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
 logoutBtn.addEventListener("click", async () => {

@@ -125,6 +125,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 continue
 
             roles = ",".join(row.get("roles") or [])
+            notes = row.get("notes") or ""
             payload = (
                 user_id,
                 row.get("asn"),
@@ -135,7 +136,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 row.get("handle") or "",
                 row.get("rir") or "ARIN",
                 row.get("source") or "arin",
-                "",
+                notes,
                 now,
                 now,
             )
