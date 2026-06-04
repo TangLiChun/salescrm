@@ -30,6 +30,7 @@ from app.database import (
     delete_contact_note,
     delete_email_template,
     delete_scheduled_job,
+    get_contact_stats,
     get_user_auth_by_id,
     import_contacts,
     init_db,
@@ -224,6 +225,11 @@ def me(request: Request) -> dict:
     return user
 
 
+@app.get("/api/stats")
+def stats(user: CurrentUser) -> dict:
+    return get_contact_stats(user["id"])
+
+
 @app.post("/api/me/password")
 def change_password(body: ChangePasswordRequest, user: CurrentUser) -> dict:
     auth = get_user_auth_by_id(user["id"])
@@ -249,6 +255,11 @@ def login(body: LoginRequest, request: Request) -> dict:
 def logout(request: Request) -> dict:
     request.session.clear()
     return {"ok": True}
+
+
+@app.get("/api/stats")
+def get_stats(user: CurrentUser) -> dict:
+    return get_contact_stats(user["id"])
 
 
 @app.get("/api/contacts")
