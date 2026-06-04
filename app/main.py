@@ -257,11 +257,6 @@ def logout(request: Request) -> dict:
     return {"ok": True}
 
 
-@app.get("/api/stats")
-def get_stats(user: CurrentUser) -> dict:
-    return get_contact_stats(user["id"])
-
-
 @app.get("/api/contacts")
 def get_contacts(
     user: CurrentUser,
