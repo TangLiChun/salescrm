@@ -31,6 +31,7 @@ def search_networks(keyword: str, *, limit: int = 20) -> list[dict]:
                 "info_type": item.get("info_type") or "",
                 "website": item.get("website") or "",
                 "keyword": keyword,
+                "source": "peeringdb",
             }
         )
     return rows

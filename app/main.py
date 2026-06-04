@@ -29,6 +29,7 @@ from app.database import (
 )
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
+from app.sources import list_channels
 from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
 
 APP_DIR = Path(__file__).resolve().parent
@@ -107,6 +108,7 @@ def public_config() -> dict:
         "default_password_hint": DEFAULT_ADMIN_PASSWORD,
         "llm_configured": llm_configured(),
         "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        "search_channels": list_channels(),
     }
 
 

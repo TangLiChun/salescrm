@@ -434,6 +434,30 @@ tbody tr:last-child td {
   margin-bottom: 0;
 }
 
+.ai-sources {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 14px;
+  color: #1e3a8a;
+}
+
+.ai-sources p {
+  margin: 0;
+}
+
+.source-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .ai-controls {
   flex-wrap: wrap;
 }

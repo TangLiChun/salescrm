@@ -78,13 +78,14 @@ def parse_json_response(raw: str) -> dict[str, Any]:
 
 def plan_lead_search(user_query: str) -> dict[str, Any]:
     system = (
-        "你是 B2B 网络基础设施销售线索研究助手。"
-        "根据用户的自然语言需求，输出 JSON 对象，字段："
-        "keywords(字符串数组，用于 PeeringDB 网络搜索，3-8 个英文关键词，如 isp,cable,datacenter,cloud), "
-        "preferred_roles(字符串数组，从 abuse,administrative,technical,routing,noc 中选择，销售场景优先 technical/administrative/routing), "
-        "max_asns(整数，5-30), "
-        "summary(中文，简要说明搜索策略，80字以内), "
-        "target_profile(中文，描述理想客户画像，60字以内)。"
+        "你是 B2B 销售线索研究助手，会通过多种渠道找线索：搜索引擎、PeeringDB、ARIN RDAP。"
+        "根据用户需求输出 JSON："
+        "keywords(3-8个英文词，用于 PeeringDB/网络库搜索), "
+        "web_queries(3-6个搜索引擎查询语句，英文为主，覆盖公司类型/行业/联系人/peering/ASN等角度), "
+        "preferred_roles(从 abuse,administrative,technical,routing,noc 选，销售优先 technical/administrative/routing), "
+        "max_asns(5-25), max_web_results(10-30), "
+        "summary(中文，80字内，说明多渠道搜索策略), "
+        "target_profile(中文，理想客户画像)。"
         "只返回 JSON。"
     )
     raw = chat_completion(
@@ -95,22 +96,120 @@ def plan_lead_search(user_query: str) -> dict[str, Any]:
     )
     plan = parse_json_response(raw)
     keywords = [str(item).strip() for item in plan.get("keywords") or [] if str(item).strip()]
+    web_queries = [str(item).strip() for item in plan.get("web_queries") or [] if str(item).strip()]
     roles = [str(item).strip() for item in plan.get("preferred_roles") or [] if str(item).strip()]
     max_asns = plan.get("max_asns", 15)
+    max_web_results = plan.get("max_web_results", 20)
     try:
-        max_asns = max(5, min(30, int(max_asns)))
+        max_asns = max(5, min(25, int(max_asns)))
     except (TypeError, ValueError):
         max_asns = 15
+    try:
+        max_web_results = max(10, min(30, int(max_web_results)))
+    except (TypeError, ValueError):
+        max_web_results = 20
     if not keywords:
         keywords = _fallback_keywords(user_query)
+    if not web_queries:
+        web_queries = [f"{kw} ASN peering contact email" for kw in keywords[:4]]
     if not roles:
         roles = ["technical", "administrative", "routing"]
     plan["keywords"] = keywords[:8]
+    plan["web_queries"] = web_queries[:6]
     plan["preferred_roles"] = roles[:5]
     plan["max_asns"] = max_asns
-    plan["summary"] = str(plan.get("summary") or "将根据关键词搜索 PeeringDB 网络并查询 ARIN role 邮箱。")
+    plan["max_web_results"] = max_web_results
+    plan["summary"] = str(
+        plan.get("summary") or "将通过搜索引擎、PeeringDB 和 ARIN RDAP 多渠道搜索并汇总线索。"
+    )
     plan["target_profile"] = str(plan.get("target_profile") or user_query)
     return plan
+
+
+def extract_leads_from_web(
+    user_query: str,
+    plan: dict[str, Any],
+    web_results: list[dict[str, Any]],
+    regex_emails: list[str],
+    regex_asns: list[int],
+) -> list[dict[str, Any]]:
+    if not web_results and not regex_emails:
+        return []
+
+    compact_results = [
+        {
+            "title": item.get("title"),
+            "url": item.get("url"),
+            "snippet": item.get("snippet"),
+            "backend": item.get("backend"),
+        }
+        for item in web_results[:25]
+    ]
+    system = (
+        "你是销售线索提取助手。从搜索引擎结果中提取潜在客户线索，输出 JSON："
+        '{"leads":[{"org":"公司/组织名","name":"联系人或部门名","email":"邮箱或空","asn":12345或null,"source_detail":"来源说明","confidence":0-100}]}。'
+        "规则：只提取与用户需求相关的网络/ISP/数据中心/云/CDN/基础设施公司；"
+        "优先有邮箱的；没有邮箱但有明确 ASN 也可输出；不要编造邮箱；confidence 表示匹配度。"
+        "最多 20 条。只返回 JSON。"
+    )
+    user = json.dumps(
+        {
+            "user_query": user_query,
+            "target_profile": plan.get("target_profile"),
+            "search_results": compact_results,
+            "regex_emails": regex_emails[:20],
+            "regex_asns": regex_asns[:20],
+        },
+        ensure_ascii=False,
+    )
+    raw = chat_completion(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.1,
+    )
+    parsed = parse_json_response(raw)
+    leads: list[dict[str, Any]] = []
+    for item in parsed.get("leads") or []:
+        if not isinstance(item, dict):
+            continue
+        email = str(item.get("email") or "").strip().lower()
+        org = str(item.get("org") or "").strip()
+        asn = item.get("asn")
+        if not email and not org and not asn:
+            continue
+        row: dict[str, Any] = {
+            "org": org,
+            "name": str(item.get("name") or "").strip(),
+            "email": email,
+            "roles": [],
+            "source": "web-search",
+            "source_detail": str(item.get("source_detail") or "搜索引擎"),
+            "lead_confidence": max(0, min(100, int(item.get("confidence", 50)))),
+        }
+        if asn:
+            try:
+                row["asn"] = int(asn)
+            except (TypeError, ValueError):
+                pass
+        leads.append(row)
+
+    for email in regex_emails:
+        if any(lead.get("email") == email for lead in leads):
+            continue
+        leads.append(
+            {
+                "org": "",
+                "name": "",
+                "email": email,
+                "roles": [],
+                "source": "web-search",
+                "source_detail": "搜索引擎正则提取",
+                "lead_confidence": 40,
+            }
+        )
+    return leads[:20]
 
 
 def score_leads(user_query: str, plan: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -127,6 +226,8 @@ def score_leads(user_query: str, plan: dict[str, Any], candidates: list[dict[str
                 "name": row.get("name"),
                 "email": row.get("email"),
                 "roles": row.get("roles"),
+                "source": row.get("source"),
+                "source_detail": row.get("source_detail"),
             }
         )
 

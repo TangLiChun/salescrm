@@ -26,6 +26,7 @@ const minScoreInput = document.getElementById("min-score");
 const autoImportInput = document.getElementById("auto-import");
 const discoverBtn = document.getElementById("discover-btn");
 const aiPlanEl = document.getElementById("ai-plan");
+const aiSourcesEl = document.getElementById("ai-sources");
 const aiProgressEl = document.getElementById("ai-progress");
 const aiProgressFill = document.getElementById("ai-progress-fill");
 const aiProgressText = document.getElementById("ai-progress-text");
@@ -344,7 +345,7 @@ function switchView(view) {
     pageSubtitle.textContent = "批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱";
   } else if (view === "ai-leads") {
     pageTitle.textContent = "AI 线索发现";
-    pageSubtitle.textContent = "用自然语言描述目标客户，AI 自动搜索 PeeringDB + ARIN 并评分筛选销售线索";
+    pageSubtitle.textContent = "AI 自动通过搜索引擎、PeeringDB、ARIN RDAP 等多渠道搜索并评分筛选销售线索";
   } else {
     pageTitle.textContent = "联系人列表";
     pageSubtitle.textContent = "从 ASN 查询或 AI 线索发现导入的联系人";
@@ -358,7 +359,7 @@ function renderAiLeads() {
   if (aiLeads.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="6">用自然语言描述目标客户，AI 会自动搜索并评分</td>`;
+    tr.innerHTML = `<td colspan="7">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>`;
     aiLeadsBody.appendChild(tr);
     aiStatsEl.textContent = "尚未开始";
     importLeadsBtn.disabled = true;
@@ -370,11 +371,12 @@ function renderAiLeads() {
     const roles = (lead.roles || []).map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`).join("");
     tr.innerHTML = `
       <td><span class="score-badge">${lead.lead_score || 0}</span></td>
+      <td><span class="source-tag">${escapeHtml(formatSource(lead))}</span></td>
       <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
       <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email)}</a></td>
       <td>${roles || "—"}</td>
       <td>${lead.asn ? `AS${lead.asn}` : "—"}</td>
-      <td>${escapeHtml(lead.lead_reason || "—")}</td>
+      <td>${escapeHtml(lead.lead_reason || lead.source_detail || "—")}</td>
     `;
     aiLeadsBody.appendChild(tr);
   }
@@ -383,13 +385,34 @@ function renderAiLeads() {
   importLeadsBtn.disabled = aiLeads.length === 0;
 }
 
+function formatSource(lead) {
+  const source = lead.source || "unknown";
+  const map = {
+    "web-search": "搜索引擎",
+    "arin-rdap": "ARIN RDAP",
+    peeringdb: "PeeringDB",
+    "ai-lead": "AI",
+  };
+  return map[source] || source;
+}
+
 function renderAiPlan(plan) {
   aiPlanEl.classList.remove("hidden");
   aiPlanEl.innerHTML = `
     <p><strong>搜索策略：</strong>${escapeHtml(plan.summary || "")}</p>
     <p><strong>目标客户：</strong>${escapeHtml(plan.target_profile || "")}</p>
-    <p><strong>关键词：</strong>${escapeHtml((plan.keywords || []).join(", "))}</p>
+    <p><strong>PeeringDB 关键词：</strong>${escapeHtml((plan.keywords || []).join(", "))}</p>
+    <p><strong>搜索引擎查询：</strong>${escapeHtml((plan.web_queries || []).join(" | "))}</p>
     <p><strong>优先 Role：</strong>${escapeHtml((plan.preferred_roles || []).join(", "))}</p>
+  `;
+}
+
+function renderAiSources(channels) {
+  if (!channels) return;
+  aiSourcesEl.classList.remove("hidden");
+  const web = (channels.web_search || []).join(", ") || "duckduckgo";
+  aiSourcesEl.innerHTML = `
+    <p><strong>已启用渠道：</strong>搜索引擎(${escapeHtml(web)}) · PeeringDB · ARIN RDAP · LLM 提取/评分</p>
   `;
 }
 
@@ -397,13 +420,15 @@ async function loadLlmStatus() {
   try {
     const config = await fetch("/api/config").then((response) => response.json());
     llmConfigured = Boolean(config.llm_configured);
+    renderAiSources(config.search_channels);
     if (llmConfigured) {
       llmStatusEl.className = "llm-status ok";
-      llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）`;
+      const web = (config.search_channels?.web_search || []).join(", ") || "duckduckgo";
+      llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）· 搜索渠道：${web} + PeeringDB + ARIN`;
       discoverBtn.disabled = false;
     } else {
       llmStatusEl.className = "llm-status warn";
-      llmStatusEl.textContent = "LLM 未配置：请在环境变量设置 LLM_API_KEY（支持 OpenAI 兼容 API）";
+      llmStatusEl.textContent = "LLM 未配置：请设置 LLM_API_KEY。搜索引擎默认 DuckDuckGo，也可配 Tavily/SerpAPI/Bing";
       discoverBtn.disabled = true;
     }
   } catch {
@@ -427,6 +452,7 @@ async function runLeadDiscovery() {
   aiLeads = [];
   renderAiLeads();
   aiPlanEl.classList.add("hidden");
+  aiSourcesEl.classList.add("hidden");
   aiProgressEl.classList.remove("hidden");
   aiProgressFill.style.width = "0%";
   aiProgressText.textContent = "AI 正在分析需求…";
@@ -479,6 +505,11 @@ async function runLeadDiscovery() {
 
         if (payload.type === "plan") {
           renderAiPlan(payload.plan);
+          renderAiSources(payload.plan.channels);
+        }
+
+        if (payload.type === "source_result") {
+          aiProgressText.textContent = `${payload.source} 返回 ${payload.count} 条`;
         }
 
         if (payload.type === "networks") {

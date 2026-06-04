@@ -14,3 +14,9 @@ services:
         value: https://api.openai.com/v1
       - key: LLM_MODEL
         value: gpt-4o-mini
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SERPAPI_KEY
+        sync: false
+      - key: BING_SEARCH_KEY
+        sync: false

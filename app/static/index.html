@@ -101,7 +101,7 @@
         <textarea
           id="lead-query"
           rows="10"
-          placeholder="例如：&#10;找美国大型 ISP 和有线电视运营商，需要 networking / peering 相关联系人&#10;找提供 cloud / CDN 服务的北美公司&#10;找数据中心和网络基础设施相关的 ARIN 注册组织"
+          placeholder="例如：&#10;找美国大型 ISP 和有线电视运营商，需要 networking / peering 联系人&#10;找北美 CDN 和 cloud 基础网络公司&#10;找数据中心互联 peering 负责人邮箱"
         ></textarea>
 
         <div id="llm-status" class="llm-status">检查 LLM 配置中…</div>
@@ -118,6 +118,7 @@
           <button id="discover-btn" type="button">AI 开始找线索</button>
         </div>
 
+        <div id="ai-sources" class="ai-sources hidden"></div>
         <div id="ai-plan" class="ai-plan hidden"></div>
 
         <div id="ai-progress" class="progress hidden">
@@ -142,6 +143,7 @@
             <thead>
               <tr>
                 <th>分数</th>
+                <th>来源</th>
                 <th>组织</th>
                 <th>邮箱</th>
                 <th>Role</th>
@@ -151,7 +153,7 @@
             </thead>
             <tbody id="ai-leads-body">
               <tr class="empty-row">
-                <td colspan="6">用自然语言描述目标客户，AI 会自动搜索并评分</td>
+                <td colspan="7">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>
               </tr>
             </tbody>
           </table>
