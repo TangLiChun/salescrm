@@ -15,6 +15,14 @@ const lookupView = document.getElementById("lookup-view");
 const aiLeadsView = document.getElementById("ai-leads-view");
 const schedulesView = document.getElementById("schedules-view");
 const contactsView = document.getElementById("contacts-view");
+const statsView = document.getElementById("stats-view");
+const dashboardStatsEl = document.getElementById("dashboard-stats");
+const statsSummaryEl = document.getElementById("stats-summary");
+const chartFollowUpEl = document.getElementById("chart-follow-up");
+const chartSentEl = document.getElementById("chart-sent");
+const chartSourceEl = document.getElementById("chart-source");
+const chartRecentEl = document.getElementById("chart-recent");
+const refreshStatsBtn = document.getElementById("refresh-stats-btn");
 const contactsBody = document.getElementById("contacts-body");
 const contactsStatsEl = document.getElementById("contacts-stats");
 const contactStatusFilter = document.getElementById("contact-status-filter");
@@ -76,6 +84,7 @@ const FOLLOW_UP_STATUS_LABELS = {
   interested: "有意向",
 };
 let schedules = [];
+let scheduleRuns = {};
 let aiLeads = [];
 let llmConfigured = false;
 let emailTemplates = [];
@@ -235,6 +244,7 @@ function renderContacts() {
       <td>${escapeHtml(contact.notes || "—")}</td>
       <td>${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
+        <button type="button" class="link-btn action-notes" data-id="${contact.id}">时间线</button>
         <button type="button" class="link-btn action-mail" data-id="${contact.id}">发邮件</button>
         <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">改状态</button>
         <button type="button" class="link-btn action-mark" data-id="${contact.id}" data-sent="${contact.email_sent ? "0" : "1"}">${contact.email_sent ? "取消标记" : "标记已发"}</button>
@@ -389,7 +399,7 @@ async function importResults() {
       method: "POST",
       body: JSON.stringify({ rows }),
     });
-    alert(`导入完成：新增 ${result.imported} 条，重复 ${result.duplicates} 条，跳过 ${result.skipped} 条`);
+    alert(formatImportResult(result));
     await loadContacts();
     switchView("contacts");
   } catch (error) {
@@ -702,7 +712,75 @@ async function saveSettings(event) {
 async function deleteContact(contactId) {
   if (!confirm("确定删除该联系人？")) return;
   await api(`/api/contacts/${contactId}`, { method: "DELETE" });
+  if (String(notesContactId) === String(contactId)) {
+    closeContactNotes();
+  }
   await loadContacts();
+}
+
+function renderContactNotesList(notes) {
+  contactNotesList.innerHTML = "";
+  if (!notes.length) {
+    const li = document.createElement("li");
+    li.className = "empty-note";
+    li.textContent = "暂无备注，在下方添加第一条。";
+    contactNotesList.appendChild(li);
+    return;
+  }
+  for (const note of notes) {
+    const li = document.createElement("li");
+    li.className = "note-item";
+    li.innerHTML = `
+      <div class="note-item-meta">
+        <span>${escapeHtml(formatTime(note.created_at))}</span>
+        <button type="button" class="link-btn note-delete" data-note-id="${note.id}">删除</button>
+      </div>
+      <p class="note-item-body">${escapeHtml(note.body)}</p>
+    `;
+    contactNotesList.appendChild(li);
+  }
+}
+
+async function loadContactNotes(contactId) {
+  const data = await api(`/api/contacts/${contactId}/notes`);
+  renderContactNotesList(data.notes || []);
+}
+
+function closeContactNotes() {
+  notesContactId = null;
+  contactNotesModal.classList.add("hidden");
+  contactNoteBody.value = "";
+}
+
+async function openContactNotes(contactId) {
+  const contact = contacts.find((item) => String(item.id) === String(contactId));
+  if (!contact) return;
+  notesContactId = contact.id;
+  contactNotesTitle.textContent = "备注时间线";
+  contactNotesSubtitle.textContent = `${contact.name || "—"} · ${contact.email}`;
+  contactNoteBody.value = "";
+  contactNotesModal.classList.remove("hidden");
+  await loadContactNotes(contact.id);
+}
+
+async function addContactNote(event) {
+  event.preventDefault();
+  if (!notesContactId) return;
+  const body = contactNoteBody.value.trim();
+  if (!body) return;
+  await api(`/api/contacts/${notesContactId}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
+  contactNoteBody.value = "";
+  await loadContactNotes(notesContactId);
+}
+
+async function deleteContactNote(noteId) {
+  if (!notesContactId) return;
+  if (!confirm("确定删除这条备注？")) return;
+  await api(`/api/contacts/${notesContactId}/notes/${noteId}`, { method: "DELETE" });
+  await loadContactNotes(notesContactId);
 }
 
 function switchView(view) {
@@ -715,6 +793,7 @@ function switchView(view) {
   schedulesView.classList.toggle("hidden", view !== "schedules");
   settingsView.classList.toggle("hidden", view !== "settings");
   contactsView.classList.toggle("hidden", view !== "contacts");
+  statsView.classList.toggle("hidden", view !== "stats");
 
   if (view === "lookup") {
     pageTitle.textContent = "ARIN ASN Role 邮箱查询";
@@ -731,6 +810,10 @@ function switchView(view) {
     pageSubtitle.textContent = "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理";
     loadSettingsForm().catch((error) => alert(error.message));
     loadEmailTemplates().catch((error) => alert(error.message));
+  } else if (view === "stats") {
+    pageTitle.textContent = "统计概览";
+    pageSubtitle.textContent = "联系人跟进状态、发信与来源分布，以及近期导入趋势";
+    loadStats().catch((error) => alert(error.message));
   } else {
     pageTitle.textContent = "联系人列表";
     pageSubtitle.textContent = "管理联系人状态：标记已发邮件、筛选未联系对象、一键去重";
@@ -952,9 +1035,7 @@ async function runLeadDiscovery() {
             renderAiLeads();
           }
           if (payload.import) {
-            alert(
-              `已自动导入：新增 ${payload.import.imported} 条，重复 ${payload.import.duplicates} 条`
-            );
+            alert(formatImportResult(payload.import));
             await loadContacts();
           }
         }
@@ -986,7 +1067,7 @@ async function importAiLeads() {
       method: "POST",
       body: JSON.stringify({ rows }),
     });
-    alert(`导入完成：新增 ${result.imported} 条，重复 ${result.duplicates} 条，跳过 ${result.skipped} 条`);
+    alert(formatImportResult(result));
     await loadContacts();
     switchView("contacts");
   } catch (error) {
@@ -1071,7 +1152,27 @@ tabs.forEach((tab) => {
   tab.addEventListener("click", () => switchView(tab.dataset.view));
 });
 
+contactNoteForm.addEventListener("submit", (event) => {
+  addContactNote(event).catch((error) => alert(error.message));
+});
+
+contactNotesModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-notes]")) {
+    closeContactNotes();
+    return;
+  }
+  const deleteBtn = event.target.closest(".note-delete");
+  if (deleteBtn) {
+    deleteContactNote(deleteBtn.dataset.noteId).catch((error) => alert(error.message));
+  }
+});
+
 contactsBody.addEventListener("click", (event) => {
+  const notesBtn = event.target.closest(".action-notes");
+  if (notesBtn) {
+    openContactNotes(notesBtn.dataset.id).catch((error) => alert(error.message));
+    return;
+  }
   const mailBtn = event.target.closest(".action-mail");
   if (mailBtn) {
     openMailClient(mailBtn.dataset.id);

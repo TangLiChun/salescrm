@@ -26,6 +26,7 @@
       <button type="button" class="tab" data-view="schedules">定时任务</button>
       <button type="button" class="tab" data-view="settings">系统设置</button>
       <button type="button" class="tab" data-view="contacts">联系人列表</button>
+      <button type="button" class="tab" data-view="stats">统计概览</button>
     </nav>
 
     <main id="lookup-view" class="layout">
@@ -300,6 +301,19 @@
         </fieldset>
 
         <fieldset>
+          <legend>导入过滤（黑名单 / 白名单）</legend>
+          <p class="stats">每行一条：域名（如 <code>example.com</code>）或带 <code>*</code> 的邮箱模式。白名单非空时仅导入匹配的邮箱；黑名单始终排除匹配项。</p>
+          <label class="field">
+            <span>黑名单</span>
+            <textarea id="setting-import-blocklist" rows="4" placeholder="noreply.com&#10;*@mailinator.com"></textarea>
+          </label>
+          <label class="field">
+            <span>白名单（留空表示不启用）</span>
+            <textarea id="setting-import-allowlist" rows="4" placeholder="yourcompany.com"></textarea>
+          </label>
+        </fieldset>
+
+        <fieldset>
           <legend>定时任务</legend>
           <label class="field checkbox-field">
             <input id="setting-scheduler-enabled" type="checkbox">
@@ -338,6 +352,37 @@
         </div>
         <p id="settings-status" class="stats"></p>
       </form>
+    </section>
+
+    <section id="stats-view" class="panel contacts-panel hidden">
+      <div class="results-header">
+        <div>
+          <h2>联系人统计</h2>
+          <p id="dashboard-stats" class="stats">加载中…</p>
+        </div>
+        <div class="results-actions">
+          <button id="refresh-stats-btn" type="button" class="secondary-btn">刷新</button>
+        </div>
+      </div>
+      <div id="stats-summary" class="stats-cards"></div>
+      <div class="stats-charts">
+        <div class="stats-chart-panel">
+          <h3>跟进状态</h3>
+          <div id="chart-follow-up" class="bar-chart"></div>
+        </div>
+        <div class="stats-chart-panel">
+          <h3>发信状态</h3>
+          <div id="chart-sent" class="bar-chart"></div>
+        </div>
+        <div class="stats-chart-panel">
+          <h3>来源分布</h3>
+          <div id="chart-source" class="bar-chart"></div>
+        </div>
+        <div class="stats-chart-panel">
+          <h3>近期导入（按日）</h3>
+          <div id="chart-recent" class="bar-chart"></div>
+        </div>
+      </div>
     </section>
 
     <section id="contacts-view" class="panel contacts-panel hidden">

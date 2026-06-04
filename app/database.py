@@ -270,9 +270,12 @@ def contact_exists(user_id: int, email: str) -> bool:
 
 
 def import_contacts(user_id: int, rows: list[dict]) -> dict:
+    from app.import_filters import email_allowed_for_import
+
     imported = 0
     skipped = 0
     duplicates = 0
+    filtered = 0
     now = utc_now()
 
     with get_conn() as conn:
@@ -280,6 +283,9 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
             email = (row.get("email") or "").strip().lower()
             if not email or row.get("error"):
                 skipped += 1
+                continue
+            if not email_allowed_for_import(email):
+                filtered += 1
                 continue
 
             existing = conn.execute(
@@ -337,7 +343,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
             )
             imported += 1
 
-    return {"imported": imported, "skipped": skipped, "duplicates": duplicates}
+    return {"imported": imported, "skipped": skipped, "duplicates": duplicates, "filtered": filtered}
 
 
 def _merge_notes(old: str | None, new: str) -> str:
@@ -774,3 +780,48 @@ def delete_email_template(user_id: int, template_id: int) -> bool:
             (template_id, user_id),
         )
         return cursor.rowcount > 0
+
+
+def get_contact_stats(user_id: int) -> dict:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT follow_up_status, email_sent, source, date(created_at) AS day
+            FROM contacts
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+
+    by_status: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    sent = 0
+    unsent = 0
+    recent: dict[str, int] = {}
+
+    for row in rows:
+        status = row["follow_up_status"] or "new"
+        by_status[status] = by_status.get(status, 0) + 1
+        source = row["source"] or "unknown"
+        by_source[source] = by_source.get(source, 0) + 1
+        if row["email_sent"]:
+            sent += 1
+        else:
+            unsent += 1
+        if row["day"]:
+            recent[row["day"]] = recent.get(row["day"], 0) + 1
+
+    recent_imports = [
+        {"date": day, "count": count}
+        for day, count in sorted(recent.items(), reverse=True)[:14]
+    ]
+    recent_imports.reverse()
+
+    return {
+        "total": len(rows),
+        "sent": sent,
+        "unsent": unsent,
+        "by_follow_up_status": by_status,
+        "by_source": by_source,
+        "recent_imports": recent_imports,
+    }

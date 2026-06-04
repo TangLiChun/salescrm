@@ -8,12 +8,12 @@
 | 2 | 联系人跟进状态 | done | new/contacted/replied/invalid/interested |
 | 3 | 邮件模板 + 变量发信 | done | 模板 CRUD + mailto 预填 |
 | 4 | AI 线索导入预览勾选 | done | 导入前可选行 |
-| 5 | 联系人备注时间线 | pending | contact_notes 表 |
+| 5 | 联系人备注时间线 | done | contact_notes 表 |
 | 6 | 健康检查 /health | done | 探活用 |
 | 7 | SQLite WAL 模式 | done | 并发写入优化 |
 | 8 | 定时任务运行历史 | done | job_runs 表 + UI |
-| 9 | 黑名单/白名单 | pending | 导入过滤 |
-| 10 | 统计仪表盘 | pending | 首页概览 |
+| 9 | 黑名单/白名单 | done | 导入过滤 |
+| 10 | 统计仪表盘 | done | 首页概览 |
 
 ## Loop 指令
 

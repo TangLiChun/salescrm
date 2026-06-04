@@ -27,6 +27,8 @@ DEFAULTS: dict[str, str] = {
     "bing_search_key": "",
     "scheduler_enabled": "1",
     "scheduler_poll_seconds": "60",
+    "import_blocklist": "",
+    "import_allowlist": "",
 }
 
 
