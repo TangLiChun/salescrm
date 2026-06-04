@@ -89,11 +89,21 @@ async function api(url, options = {}) {
 function setLoading(isLoading) {
   lookupBtn.disabled = isLoading;
   exportBtn.disabled = isLoading || allRows.length === 0;
-  importBtn.disabled = isLoading || getImportableRows().length === 0;
+  importBtn.disabled = isLoading || getSelectedImportableRows().length === 0;
 }
 
 function getImportableRows() {
   return allRows.filter((row) => row.email && !row.error);
+}
+
+function ensureRowSelected(row) {
+  if (row.email && !row.error && row._selected === undefined) {
+    row._selected = true;
+  }
+}
+
+function getSelectedImportableRows() {
+  return getImportableRows().filter((row) => row._selected !== false);
 }
 
 function updateStats() {
@@ -101,7 +111,10 @@ function updateStats() {
   const uniqueAsns = new Set(visibleRows.map((row) => row.asn)).size;
   const emails = visibleRows.filter((row) => row.email).length;
   const errors = visibleRows.filter((row) => row.error).length;
-  statsEl.textContent = `${uniqueAsns} 个 ASN · ${emails} 条邮箱 · ${errors} 条异常 · 可导入 ${getImportableRows().length} 条`;
+  const importable = getImportableRows().length;
+  const selected = getSelectedImportableRows().length;
+  const selection = importable > 0 ? ` · 已选 ${selected} / 共 ${importable}` : "";
+  statsEl.textContent = `${uniqueAsns} 个 ASN · ${emails} 条邮箱 · ${errors} 条异常${selection}`;
 }
 
 function getVisibleRows() {
@@ -117,23 +130,30 @@ function renderRows() {
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="7">${allRows.length ? "当前筛选无结果" : "输入 ASN 列表后点击「开始查询」"}</td>`;
+    tr.innerHTML = `<td colspan="8">${allRows.length ? "当前筛选无结果" : "输入 ASN 列表后点击「开始查询」"}</td>`;
     resultsBody.appendChild(tr);
     updateStats();
-    importBtn.disabled = getImportableRows().length === 0;
+    importBtn.disabled = getSelectedImportableRows().length === 0;
     return;
   }
 
   for (const row of rows) {
     const tr = document.createElement("tr");
+    const rowIndex = allRows.indexOf(row);
     const roles = row.roles.map((role) => `<span class="role-tag">${role}</span>`).join("");
     const emailCell = row.email
       ? `<a class="email-link" href="mailto:${row.email}">${row.email}</a>`
       : "—";
     const statusClass = row.error ? "status-error" : row.email ? "status-ok" : "status-warn";
     const statusText = row.error || (row.email ? "OK" : "无邮箱");
+    const importable = Boolean(row.email && !row.error);
+    ensureRowSelected(row);
+    const selectCell = importable
+      ? `<input type="checkbox" class="row-import-check" data-kind="lookup" data-index="${rowIndex}" ${row._selected !== false ? "checked" : ""}>`
+      : "—";
 
     tr.innerHTML = `
+      <td class="col-select">${selectCell}</td>
       <td>AS${row.asn}</td>
       <td>${escapeHtml(row.org || "—")}</td>
       <td>${roles || "—"}</td>
@@ -146,7 +166,7 @@ function renderRows() {
   }
 
   updateStats();
-  importBtn.disabled = getImportableRows().length === 0;
+  importBtn.disabled = getSelectedImportableRows().length === 0;
 }
 
 function renderContacts() {
@@ -299,6 +319,9 @@ async function runLookup() {
         const payload = JSON.parse(line.slice(6));
 
         if (payload.type === "progress") {
+          for (const row of payload.rows) {
+            ensureRowSelected(row);
+          }
           allRows.push(...payload.rows);
           renderRows();
           const percent = Math.round((payload.index / payload.total) * 100);
@@ -311,7 +334,7 @@ async function runLookup() {
           progressText.textContent = "查询完成";
           csvContent = rowsToCsv(allRows);
           exportBtn.disabled = allRows.length === 0;
-          importBtn.disabled = getImportableRows().length === 0;
+          importBtn.disabled = getSelectedImportableRows().length === 0;
         }
       }
     }
@@ -324,9 +347,9 @@ async function runLookup() {
 }
 
 async function importResults() {
-  const rows = getImportableRows();
+  const rows = getSelectedImportableRows();
   if (rows.length === 0) {
-    alert("没有可导入的邮箱记录");
+    alert("请先勾选要导入的邮箱记录");
     return;
   }
 
@@ -342,7 +365,7 @@ async function importResults() {
   } catch (error) {
     alert(error.message || "导入失败");
   } finally {
-    importBtn.disabled = getImportableRows().length === 0;
+    importBtn.disabled = getSelectedImportableRows().length === 0;
   }
 }
 
@@ -540,23 +563,47 @@ function switchView(view) {
   }
 }
 
+function ensureLeadSelected(lead) {
+  if (lead._selected === undefined) {
+    lead._selected = true;
+  }
+}
+
+function getSelectedAiLeads() {
+  return aiLeads.filter((lead) => lead._selected !== false);
+}
+
+function updateAiLeadsStats() {
+  const total = aiLeads.length;
+  const selected = getSelectedAiLeads().length;
+  if (total === 0) {
+    aiStatsEl.textContent = "尚未开始";
+    importLeadsBtn.disabled = true;
+    return;
+  }
+  aiStatsEl.textContent = `已选 ${selected} / 共 ${total}`;
+  importLeadsBtn.disabled = selected === 0;
+}
+
 function renderAiLeads() {
   aiLeadsBody.innerHTML = "";
 
   if (aiLeads.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="7">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>`;
+    tr.innerHTML = `<td colspan="8">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>`;
     aiLeadsBody.appendChild(tr);
-    aiStatsEl.textContent = "尚未开始";
-    importLeadsBtn.disabled = true;
+    updateAiLeadsStats();
     return;
   }
 
-  for (const lead of aiLeads) {
+  for (let index = 0; index < aiLeads.length; index += 1) {
+    const lead = aiLeads[index];
+    ensureLeadSelected(lead);
     const tr = document.createElement("tr");
     const roles = (lead.roles || []).map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`).join("");
     tr.innerHTML = `
+      <td class="col-select"><input type="checkbox" class="row-import-check" data-kind="ai" data-index="${index}" ${lead._selected !== false ? "checked" : ""}></td>
       <td><span class="score-badge">${lead.lead_score || 0}</span></td>
       <td><span class="source-tag">${escapeHtml(formatSource(lead))}</span></td>
       <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
@@ -568,8 +615,7 @@ function renderAiLeads() {
     aiLeadsBody.appendChild(tr);
   }
 
-  aiStatsEl.textContent = `共 ${aiLeads.length} 条高匹配线索`;
-  importLeadsBtn.disabled = aiLeads.length === 0;
+  updateAiLeadsStats();
 }
 
 function formatSource(lead) {
@@ -710,6 +756,7 @@ async function runLeadDiscovery() {
         }
 
         if (payload.type === "lead") {
+          ensureLeadSelected(payload.lead);
           aiLeads.push(payload.lead);
           renderAiLeads();
         }
@@ -722,7 +769,10 @@ async function runLeadDiscovery() {
           aiProgressFill.style.width = "100%";
           aiProgressText.textContent = payload.message || "完成";
           if (payload.leads) {
-            aiLeads = payload.leads;
+            aiLeads = payload.leads.map((lead) => {
+              ensureLeadSelected(lead);
+              return lead;
+            });
             renderAiLeads();
           }
           if (payload.import) {
@@ -743,9 +793,13 @@ async function runLeadDiscovery() {
 }
 
 async function importAiLeads() {
-  if (aiLeads.length === 0) return;
+  const selected = getSelectedAiLeads();
+  if (selected.length === 0) {
+    alert("请先勾选要导入的线索");
+    return;
+  }
 
-  const rows = aiLeads.map((lead) => ({
+  const rows = selected.map((lead) => ({
     ...lead,
     source: "ai-lead",
     notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),

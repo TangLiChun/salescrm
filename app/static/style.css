@@ -230,6 +230,17 @@ tbody tr:last-child td {
   border-bottom: 0;
 }
 
+.col-select {
+  width: 44px;
+  text-align: center;
+}
+
+.col-select input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
 .empty-row td {
   text-align: center;
   color: var(--muted);

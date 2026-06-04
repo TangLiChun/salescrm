@@ -69,7 +69,7 @@
                 <option value="noc">noc</option>
               </select>
             </label>
-            <button id="import-btn" type="button" class="success-btn" disabled>导入联系人</button>
+            <button id="import-btn" type="button" class="success-btn" disabled>导入选中联系人</button>
             <button id="export-btn" type="button" disabled>导出 CSV</button>
           </div>
         </div>
@@ -78,6 +78,7 @@
           <table>
             <thead>
               <tr>
+                <th class="col-select">选</th>
                 <th>ASN</th>
                 <th>组织</th>
                 <th>Role</th>
@@ -89,7 +90,7 @@
             </thead>
             <tbody id="results-body">
               <tr class="empty-row">
-                <td colspan="7">输入 ASN 列表后点击「开始查询」</td>
+                <td colspan="8">输入 ASN 列表后点击「开始查询」</td>
               </tr>
             </tbody>
           </table>
@@ -144,6 +145,7 @@
           <table>
             <thead>
               <tr>
+                <th class="col-select">选</th>
                 <th>分数</th>
                 <th>来源</th>
                 <th>组织</th>
@@ -155,7 +157,7 @@
             </thead>
             <tbody id="ai-leads-body">
               <tr class="empty-row">
-                <td colspan="7">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>
+                <td colspan="8">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>
               </tr>
             </tbody>
           </table>
