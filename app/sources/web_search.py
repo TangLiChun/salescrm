@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.error
 import urllib.parse
@@ -12,13 +11,16 @@ EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 ASN_RE = re.compile(r"\bAS[N]?[\s\-]?(\d{1,10})\b", re.IGNORECASE)
 
 
+from app.settings_store import get_setting
+
+
 def available_backends() -> list[str]:
     backends: list[str] = []
-    if os.getenv("TAVILY_API_KEY", "").strip():
+    if get_setting("tavily_api_key", "").strip():
         backends.append("tavily")
-    if os.getenv("SERPAPI_KEY", "").strip():
+    if get_setting("serpapi_key", "").strip():
         backends.append("serpapi")
-    if os.getenv("BING_SEARCH_KEY", "").strip():
+    if get_setting("bing_search_key", "").strip():
         backends.append("bing")
     backends.append("duckduckgo")
     return backends
@@ -107,7 +109,7 @@ def _search_with_backend(backend: str, query: str, *, max_results: int) -> list[
 
 
 def _search_tavily(query: str, *, max_results: int) -> list[dict[str, str]]:
-    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    api_key = get_setting("tavily_api_key", "").strip()
     payload = {"api_key": api_key, "query": query, "max_results": max_results}
     req = urllib.request.Request(
         "https://api.tavily.com/search",
@@ -132,7 +134,7 @@ def _search_tavily(query: str, *, max_results: int) -> list[dict[str, str]]:
 
 
 def _search_serpapi(query: str, *, max_results: int) -> list[dict[str, str]]:
-    api_key = os.getenv("SERPAPI_KEY", "").strip()
+    api_key = get_setting("serpapi_key", "").strip()
     params = urllib.parse.urlencode({"q": query, "api_key": api_key, "num": max_results})
     url = f"https://serpapi.com/search.json?{params}"
     with urllib.request.urlopen(url, timeout=30) as resp:
@@ -152,7 +154,7 @@ def _search_serpapi(query: str, *, max_results: int) -> list[dict[str, str]]:
 
 
 def _search_bing(query: str, *, max_results: int) -> list[dict[str, str]]:
-    api_key = os.getenv("BING_SEARCH_KEY", "").strip()
+    api_key = get_setting("bing_search_key", "").strip()
     params = urllib.parse.urlencode({"q": query, "count": max_results})
     url = f"https://api.bing.microsoft.com/v7.0/search?{params}"
     req = urllib.request.Request(url, headers={"Ocp-Apim-Subscription-Key": api_key})

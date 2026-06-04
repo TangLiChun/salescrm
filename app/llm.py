@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
+from app.settings_store import get_setting
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
 REQUEST_TIMEOUT = 60.0
@@ -18,15 +18,15 @@ class LLMError(RuntimeError):
 
 
 def llm_configured() -> bool:
-    return bool(os.getenv("LLM_API_KEY", "").strip())
+    return bool(get_setting("llm_api_key", "").strip())
 
 
 def _settings() -> tuple[str, str, str]:
-    api_key = os.getenv("LLM_API_KEY", "").strip()
+    api_key = get_setting("llm_api_key", "").strip()
     if not api_key:
-        raise LLMError("未配置 LLM API Key，请设置环境变量 LLM_API_KEY")
-    base_url = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-    model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
+        raise LLMError("未配置 LLM API Key，请在系统设置中填写")
+    base_url = get_setting("llm_base_url", DEFAULT_BASE_URL).rstrip("/")
+    model = get_setting("llm_model", DEFAULT_MODEL)
     return api_key, base_url, model
 
 

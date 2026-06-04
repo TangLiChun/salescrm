@@ -29,6 +29,9 @@ const scheduleIntervalInput = document.getElementById("schedule-interval");
 const scheduleMinScoreInput = document.getElementById("schedule-min-score");
 const scheduleAutoImportInput = document.getElementById("schedule-auto-import");
 const refreshSchedulesBtn = document.getElementById("refresh-schedules-btn");
+const settingsView = document.getElementById("settings-view");
+const settingsForm = document.getElementById("settings-form");
+const settingsStatusEl = document.getElementById("settings-status");
 const pageTitle = document.getElementById("page-title");
 const pageSubtitle = document.getElementById("page-subtitle");
 const tabs = document.querySelectorAll(".tab");
@@ -441,6 +444,64 @@ async function deleteSchedule(jobId) {
   await loadSchedules();
 }
 
+function setInputValue(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value ?? "";
+}
+
+async function loadSettingsForm() {
+  const data = await api("/api/settings");
+  setInputValue("setting-default-admin-user", data.default_admin_user);
+  setInputValue("setting-llm-base-url", data.llm_base_url);
+  setInputValue("setting-llm-model", data.llm_model);
+  setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
+  document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
+
+  const secretFields = [
+    ["setting-default-admin-password", data.default_admin_password, data.default_admin_password_configured],
+    ["setting-session-secret", data.session_secret, data.session_secret_configured],
+    ["setting-llm-api-key", data.llm_api_key, data.llm_api_key_configured],
+    ["setting-tavily-api-key", data.tavily_api_key, data.tavily_api_key_configured],
+    ["setting-serpapi-key", data.serpapi_key, data.serpapi_key_configured],
+    ["setting-bing-search-key", data.bing_search_key, data.bing_search_key_configured],
+  ];
+  for (const [id, masked, configured] of secretFields) {
+    const el = document.getElementById(id);
+    el.value = "";
+    el.placeholder = configured ? `已配置 ${masked}，留空则不修改` : "未配置";
+  }
+  settingsStatusEl.textContent = "";
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const payload = {
+    default_admin_user: document.getElementById("setting-default-admin-user").value.trim(),
+    llm_base_url: document.getElementById("setting-llm-base-url").value.trim(),
+    llm_model: document.getElementById("setting-llm-model").value.trim(),
+    scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
+    scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
+  };
+
+  const secrets = [
+    ["default_admin_password", "setting-default-admin-password"],
+    ["session_secret", "setting-session-secret"],
+    ["llm_api_key", "setting-llm-api-key"],
+    ["tavily_api_key", "setting-tavily-api-key"],
+    ["serpapi_key", "setting-serpapi-key"],
+    ["bing_search_key", "setting-bing-search-key"],
+  ];
+  for (const [key, id] of secrets) {
+    const value = document.getElementById(id).value.trim();
+    if (value) payload[key] = value;
+  }
+
+  await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+  settingsStatusEl.textContent = "设置已保存";
+  await loadLlmStatus();
+  await loadSettingsForm();
+}
+
 async function deleteContact(contactId) {
   if (!confirm("确定删除该联系人？")) return;
   await api(`/api/contacts/${contactId}`, { method: "DELETE" });
@@ -455,6 +516,7 @@ function switchView(view) {
   lookupView.classList.toggle("hidden", view !== "lookup");
   aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
   schedulesView.classList.toggle("hidden", view !== "schedules");
+  settingsView.classList.toggle("hidden", view !== "settings");
   contactsView.classList.toggle("hidden", view !== "contacts");
 
   if (view === "lookup") {
@@ -467,6 +529,10 @@ function switchView(view) {
     pageTitle.textContent = "定时任务";
     pageSubtitle.textContent = "按设定间隔自动运行 AI 线索发现，并自动导入联系人（按邮箱去重）";
     loadSchedules().catch((error) => alert(error.message));
+  } else if (view === "settings") {
+    pageTitle.textContent = "系统设置";
+    pageSubtitle.textContent = "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理";
+    loadSettingsForm().catch((error) => alert(error.message));
   } else {
     pageTitle.textContent = "联系人列表";
     pageSubtitle.textContent = "管理联系人状态：标记已发邮件、筛选未联系对象、一键去重";
@@ -549,7 +615,7 @@ async function loadLlmStatus() {
       discoverBtn.disabled = false;
     } else {
       llmStatusEl.className = "llm-status warn";
-      llmStatusEl.textContent = "LLM 未配置：请设置 LLM_API_KEY。搜索引擎默认 DuckDuckGo，也可配 Tavily/SerpAPI/Bing";
+      llmStatusEl.textContent = "LLM 未配置：请在「系统设置」填写 API Key。搜索引擎默认 DuckDuckGo";
       discoverBtn.disabled = true;
     }
   } catch {
@@ -726,6 +792,7 @@ dedupeContactsBtn.addEventListener("click", () => dedupeContacts().catch((error)
 refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
 scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch((error) => alert(error.message)));
+settingsForm.addEventListener("submit", (event) => saveSettings(event).catch((error) => alert(error.message)));
 logoutBtn.addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" });
   window.location.href = "/login";

@@ -24,6 +24,7 @@
       <button type="button" class="tab active" data-view="lookup">ASN 查询</button>
       <button type="button" class="tab" data-view="ai-leads">AI 线索发现</button>
       <button type="button" class="tab" data-view="schedules">定时任务</button>
+      <button type="button" class="tab" data-view="settings">系统设置</button>
       <button type="button" class="tab" data-view="contacts">联系人列表</button>
     </nav>
 
@@ -219,6 +220,82 @@
           </tbody>
         </table>
       </div>
+    </section>
+
+    <section id="settings-view" class="panel contacts-panel hidden">
+      <div class="results-header">
+        <div>
+          <h2>系统设置</h2>
+          <p class="stats">配置保存在数据库中，无需 .env 文件</p>
+        </div>
+      </div>
+
+      <form id="settings-form" class="settings-form">
+        <fieldset>
+          <legend>登录账号（仅首次初始化使用）</legend>
+          <label class="field">
+            <span>默认用户名</span>
+            <input id="setting-default-admin-user" type="text">
+          </label>
+          <label class="field">
+            <span>默认密码</span>
+            <input id="setting-default-admin-password" type="password" placeholder="留空则不修改">
+          </label>
+          <label class="field">
+            <span>Session Secret</span>
+            <input id="setting-session-secret" type="password" placeholder="留空则不修改">
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>LLM（AI 线索发现必填）</legend>
+          <label class="field">
+            <span>API Key</span>
+            <input id="setting-llm-api-key" type="password" placeholder="留空则不修改">
+          </label>
+          <label class="field">
+            <span>Base URL</span>
+            <input id="setting-llm-base-url" type="url">
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input id="setting-llm-model" type="text">
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>搜索引擎 API（可选）</legend>
+          <label class="field">
+            <span>Tavily API Key</span>
+            <input id="setting-tavily-api-key" type="password" placeholder="留空则不修改">
+          </label>
+          <label class="field">
+            <span>SerpAPI Key</span>
+            <input id="setting-serpapi-key" type="password" placeholder="留空则不修改">
+          </label>
+          <label class="field">
+            <span>Bing Search Key</span>
+            <input id="setting-bing-search-key" type="password" placeholder="留空则不修改">
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>定时任务</legend>
+          <label class="field checkbox-field">
+            <input id="setting-scheduler-enabled" type="checkbox">
+            <span>启用后台定时任务</span>
+          </label>
+          <label class="field">
+            <span>检查间隔（秒）</span>
+            <input id="setting-scheduler-poll-seconds" type="number" min="30" max="3600">
+          </label>
+        </fieldset>
+
+        <div class="controls">
+          <button type="submit">保存设置</button>
+        </div>
+        <p id="settings-status" class="stats"></p>
+      </form>
     </section>
 
     <section id="contacts-view" class="panel contacts-panel hidden">

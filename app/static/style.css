@@ -500,6 +500,23 @@ tbody tr:last-child td {
   margin-top: 8px;
 }
 
+.settings-form {
+  display: grid;
+  gap: 20px;
+}
+
+.settings-form fieldset {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 0;
+}
+
+.settings-form legend {
+  padding: 0 8px;
+  font-weight: 600;
+}
+
 .ai-controls {
   flex-wrap: wrap;
 }

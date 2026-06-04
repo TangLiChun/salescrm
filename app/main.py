@@ -20,8 +20,6 @@ from app.auth import (
     session_secret,
 )
 from app.database import (
-    DEFAULT_ADMIN_PASSWORD,
-    DEFAULT_ADMIN_USER,
     create_scheduled_job,
     dedupe_contacts,
     delete_contact,
@@ -36,23 +34,29 @@ from app.database import (
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.scheduler import start_scheduler, stop_scheduler
+from app.settings_store import get_public_settings, get_settings_for_edit, get_setting, update_settings
 from app.sources import list_channels
 from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
 
 APP_DIR = Path(__file__).resolve().parent
 MAX_ASNS = 200
 
+init_db()
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    init_db()
     await start_scheduler()
     yield
     await stop_scheduler()
 
 
 app = FastAPI(title="Sales CRM — ARIN ASN Lookup", lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=session_secret(), https_only=os.getenv("SESSION_HTTPS_ONLY") == "1")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret(),
+    https_only=get_setting("session_https_only", "0") == "1",
+)
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 
 
@@ -100,6 +104,21 @@ class MarkSentRequest(BaseModel):
     sent: bool = True
 
 
+class SettingsUpdateRequest(BaseModel):
+    default_admin_user: str | None = None
+    default_admin_password: str | None = None
+    session_secret: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    tavily_api_key: str | None = None
+    serpapi_key: str | None = None
+    bing_search_key: str | None = None
+    scheduler_enabled: str | None = None
+    scheduler_poll_seconds: str | None = None
+    session_https_only: str | None = None
+
+
 def render_page(filename: str) -> HTMLResponse:
     html = (APP_DIR / "static" / filename).read_text(encoding="utf-8")
     return HTMLResponse(html)
@@ -134,14 +153,20 @@ def index(request: Request) -> HTMLResponse | RedirectResponse:
 
 @app.get("/api/config")
 def public_config() -> dict:
-    return {
-        "default_username": DEFAULT_ADMIN_USER,
-        "default_password_hint": DEFAULT_ADMIN_PASSWORD,
-        "llm_configured": llm_configured(),
-        "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
-        "search_channels": list_channels(),
-        "scheduler_enabled": os.getenv("SCHEDULER_ENABLED", "1") != "0",
-    }
+    config = get_public_settings()
+    config["search_channels"] = list_channels()
+    return config
+
+
+@app.get("/api/settings")
+def get_settings(_: CurrentUser) -> dict:
+    return get_settings_for_edit()
+
+
+@app.put("/api/settings")
+def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
+    updates = body.model_dump(exclude_none=True)
+    return update_settings(updates)
 
 
 @app.get("/api/me")
@@ -318,7 +343,7 @@ async def discover_leads(body: LeadDiscoverRequest, user: CurrentUser) -> Stream
     if not llm_configured():
         raise HTTPException(
             status_code=503,
-            detail="未配置 LLM API Key，请在环境变量中设置 LLM_API_KEY",
+            detail="未配置 LLM API Key，请在系统设置中填写",
         )
 
     async def event_generator():

@@ -10,8 +10,6 @@ from app.security import hash_password
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = ROOT_DIR / "data" / "salescrm.db"
-DEFAULT_ADMIN_USER = os.getenv("DEFAULT_ADMIN_USER", "admin")
-DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
 
 
 def db_path() -> Path:
@@ -112,6 +110,12 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
 
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
             CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
             CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(enabled, next_run_at);
@@ -120,12 +124,22 @@ def init_db() -> None:
 
         _migrate_contacts(conn)
 
+        from app.settings_store import init_settings
+
+        init_settings(conn)
+
         row = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()
         if row["count"] == 0:
+            admin_user = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'default_admin_user'"
+            ).fetchone()["value"]
+            admin_pass = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'default_admin_password'"
+            ).fetchone()["value"]
             now = utc_now()
             conn.execute(
                 "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-                (DEFAULT_ADMIN_USER, hash_password(DEFAULT_ADMIN_PASSWORD), now),
+                (admin_user, hash_password(admin_pass), now),
             )
 
 

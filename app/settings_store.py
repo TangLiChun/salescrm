@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import secrets
+from typing import Any
+
+from app.database import get_conn, utc_now
+
+SECRET_KEYS = {
+    "llm_api_key",
+    "tavily_api_key",
+    "serpapi_key",
+    "bing_search_key",
+    "session_secret",
+    "default_admin_password",
+}
+
+DEFAULTS: dict[str, str] = {
+    "default_admin_user": "admin",
+    "default_admin_password": "admin123",
+    "session_secret": "",
+    "session_https_only": "0",
+    "llm_api_key": "",
+    "llm_base_url": "https://api.openai.com/v1",
+    "llm_model": "gpt-4o-mini",
+    "tavily_api_key": "",
+    "serpapi_key": "",
+    "bing_search_key": "",
+    "scheduler_enabled": "1",
+    "scheduler_poll_seconds": "60",
+}
+
+
+def init_settings(conn) -> None:
+    now = utc_now()
+    for key, value in DEFAULTS.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (key, value, now),
+        )
+
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'session_secret'").fetchone()
+    if row and not (row["value"] or "").strip():
+        conn.execute(
+            "UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'session_secret'",
+            (secrets.token_hex(32), now),
+        )
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return DEFAULTS.get(key, default)
+    value = row["value"]
+    return value if value is not None else DEFAULTS.get(key, default)
+
+
+def get_settings() -> dict[str, str]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+    values = dict(DEFAULTS)
+    for row in rows:
+        values[row["key"]] = row["value"]
+    return values
+
+
+def get_public_settings() -> dict[str, Any]:
+    values = get_settings()
+    return {
+        "default_username": values.get("default_admin_user", "admin"),
+        "default_password_hint": values.get("default_admin_password", "admin123"),
+        "llm_configured": bool(values.get("llm_api_key", "").strip()),
+        "llm_model": values.get("llm_model", DEFAULTS["llm_model"]),
+        "llm_base_url": values.get("llm_base_url", DEFAULTS["llm_base_url"]),
+        "scheduler_enabled": values.get("scheduler_enabled", "1") != "0",
+        "scheduler_poll_seconds": int(values.get("scheduler_poll_seconds", "60") or 60),
+        "search_keys": {
+            "tavily": bool(values.get("tavily_api_key", "").strip()),
+            "serpapi": bool(values.get("serpapi_key", "").strip()),
+            "bing": bool(values.get("bing_search_key", "").strip()),
+            "duckduckgo": True,
+        },
+    }
+
+
+def get_settings_for_edit() -> dict[str, Any]:
+    values = get_settings()
+    payload: dict[str, Any] = {}
+    for key, value in values.items():
+        if key in SECRET_KEYS:
+            payload[key] = mask_secret(value)
+            payload[f"{key}_configured"] = bool(value.strip())
+        else:
+            payload[key] = value
+    return payload
+
+
+def mask_secret(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "********"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def update_settings(updates: dict[str, str | None]) -> dict[str, Any]:
+    allowed = set(DEFAULTS.keys())
+    now = utc_now()
+    with get_conn() as conn:
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            if value is None:
+                continue
+            value = str(value)
+            if key in SECRET_KEYS and not value.strip():
+                continue
+            if key in SECRET_KEYS and "..." in value:
+                continue
+            conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (key, value.strip(), now),
+            )
+    return get_settings_for_edit()

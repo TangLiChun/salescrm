@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 from app.database import list_due_scheduled_jobs, mark_job_run
 from app.lead_discovery import run_lead_discovery_batch
 from app.llm import llm_configured
+from app.settings_store import get_setting
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +14,12 @@ _scheduler_task: asyncio.Task | None = None
 
 
 def scheduler_enabled() -> bool:
-    return os.getenv("SCHEDULER_ENABLED", "1") != "0"
+    return get_setting("scheduler_enabled", "1") != "0"
 
 
 def scheduler_interval_seconds() -> int:
     try:
-        return max(30, int(os.getenv("SCHEDULER_POLL_SECONDS", "60")))
+        return max(30, int(get_setting("scheduler_poll_seconds", "60") or 60))
     except ValueError:
         return 60
 

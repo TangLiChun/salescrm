@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import os
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
 from app.database import get_user_by_id, get_user_by_username
 from app.security import verify_password
+from app.settings_store import get_setting
 
 SESSION_USER_KEY = "user_id"
+
 
 def authenticate_user(username: str, password: str) -> dict | None:
     row = get_user_by_username(username)
@@ -31,7 +32,8 @@ def get_current_user(request: Request) -> dict:
 
 
 def session_secret() -> str:
-    return os.getenv("SESSION_SECRET", "salescrm-dev-secret-change-me")
+    value = get_setting("session_secret")
+    return value or "salescrm-dev-secret-change-me"
 
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
