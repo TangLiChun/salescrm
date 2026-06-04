@@ -137,9 +137,33 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS contact_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contact_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(contact_id) REFERENCES contacts(id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
             CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
+            CREATE INDEX IF NOT EXISTS idx_contact_notes_contact ON contact_notes(contact_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(enabled, next_run_at);
+
+            CREATE TABLE IF NOT EXISTS job_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT,
+                leads_found INTEGER NOT NULL DEFAULT 0,
+                imported INTEGER NOT NULL DEFAULT 0,
+                ran_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC);
             """
         )
 
@@ -380,8 +404,73 @@ def update_contact_follow_up_status(
         return cursor.rowcount > 0
 
 
+def _contact_owned(conn: sqlite3.Connection, user_id: int, contact_id: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM contacts WHERE id = ? AND user_id = ?",
+        (contact_id, user_id),
+    ).fetchone()
+    return row is not None
+
+
+def list_contact_notes(user_id: int, contact_id: int) -> list[dict] | None:
+    with get_conn() as conn:
+        if not _contact_owned(conn, user_id, contact_id):
+            return None
+        rows = conn.execute(
+            """
+            SELECT id, contact_id, user_id, body, created_at
+            FROM contact_notes
+            WHERE contact_id = ? AND user_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (contact_id, user_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_contact_note(user_id: int, contact_id: int, body: str) -> dict | None:
+    text = body.strip()
+    if not text:
+        return None
+    now = utc_now()
+    with get_conn() as conn:
+        if not _contact_owned(conn, user_id, contact_id):
+            return None
+        cursor = conn.execute(
+            """
+            INSERT INTO contact_notes (contact_id, user_id, body, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (contact_id, user_id, text, now),
+        )
+        note_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, contact_id, user_id, body, created_at FROM contact_notes WHERE id = ?",
+            (note_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_contact_note(user_id: int, contact_id: int, note_id: int) -> bool:
+    with get_conn() as conn:
+        if not _contact_owned(conn, user_id, contact_id):
+            return False
+        cursor = conn.execute(
+            """
+            DELETE FROM contact_notes
+            WHERE id = ? AND contact_id = ? AND user_id = ?
+            """,
+            (note_id, contact_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
 def delete_contact(user_id: int, contact_id: int) -> bool:
     with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM contact_notes WHERE contact_id = ? AND user_id = ?",
+            (contact_id, user_id),
+        )
         cursor = conn.execute(
             "DELETE FROM contacts WHERE id = ? AND user_id = ?",
             (contact_id, user_id),
@@ -566,3 +655,122 @@ def mark_job_run(job_id: int, *, status: str, message: str, interval_hours: int)
             """,
             (now, status, message[:500], next_run, now, job_id),
         )
+
+
+def insert_job_run(
+    job_id: int,
+    *,
+    status: str,
+    message: str,
+    leads_found: int = 0,
+    imported: int = 0,
+) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO job_runs (job_id, status, message, leads_found, imported, ran_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (job_id, status, message[:500], leads_found, imported, utc_now()),
+        )
+
+
+def list_job_runs(user_id: int, job_id: int, *, limit: int = 20) -> list[dict] | None:
+    if get_scheduled_job(user_id, job_id) is None:
+        return None
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, job_id, status, message, leads_found, imported, ran_at
+            FROM job_runs
+            WHERE job_id = ?
+            ORDER BY ran_at DESC, id DESC
+            LIMIT ?
+            """,
+            (job_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_email_templates(user_id: int) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, subject, body, created_at, updated_at
+            FROM email_templates
+            WHERE user_id = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_email_template(user_id: int, template_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, name, subject, body, created_at, updated_at
+            FROM email_templates
+            WHERE id = ? AND user_id = ?
+            """,
+            (template_id, user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_email_template(
+    user_id: int, *, name: str, subject: str = "", body: str = ""
+) -> dict:
+    now = utc_now()
+    with get_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO email_templates (user_id, name, subject, body, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, name.strip(), subject, body, now, now),
+        )
+        template_id = cursor.lastrowid
+    return get_email_template(user_id, template_id)  # type: ignore[arg-type]
+
+
+def update_email_template(
+    user_id: int,
+    template_id: int,
+    *,
+    name: str | None = None,
+    subject: str | None = None,
+    body: str | None = None,
+) -> dict | None:
+    updates: dict[str, object] = {}
+    if name is not None:
+        updates["name"] = name.strip()
+    if subject is not None:
+        updates["subject"] = subject
+    if body is not None:
+        updates["body"] = body
+    if not updates:
+        return get_email_template(user_id, template_id)
+
+    updates["updated_at"] = utc_now()
+    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    params = list(updates.values()) + [template_id, user_id]
+
+    with get_conn() as conn:
+        cursor = conn.execute(
+            f"UPDATE email_templates SET {set_clause} WHERE id = ? AND user_id = ?",
+            params,
+        )
+        if cursor.rowcount == 0:
+            return None
+    return get_email_template(user_id, template_id)
+
+
+def delete_email_template(user_id: int, template_id: int) -> bool:
+    with get_conn() as conn:
+        cursor = conn.execute(
+            "DELETE FROM email_templates WHERE id = ? AND user_id = ?",
+            (template_id, user_id),
+        )
+        return cursor.rowcount > 0

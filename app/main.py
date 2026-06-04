@@ -22,17 +22,25 @@ from app.auth import (
 from app.database import (
     check_db,
     FOLLOW_UP_STATUSES,
+    create_contact_note,
     create_scheduled_job,
+    create_email_template,
     dedupe_contacts,
     delete_contact,
+    delete_contact_note,
+    delete_email_template,
     delete_scheduled_job,
     get_user_auth_by_id,
     import_contacts,
     init_db,
+    list_contact_notes,
     list_contacts,
+    list_email_templates,
+    list_job_runs,
     list_scheduled_jobs,
     mark_contact_sent,
     update_contact_follow_up_status,
+    update_email_template,
     update_scheduled_job,
     update_user_password,
 )
@@ -114,6 +122,10 @@ class ContactFollowUpStatusRequest(BaseModel):
     follow_up_status: str = Field(min_length=1, max_length=32)
 
 
+class ContactNoteRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
 class SettingsUpdateRequest(BaseModel):
     default_admin_user: str | None = None
     default_admin_password: str | None = None
@@ -132,6 +144,18 @@ class SettingsUpdateRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=6, max_length=128)
+
+
+class EmailTemplateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    subject: str = Field(default="", max_length=500)
+    body: str = Field(default="", max_length=10000)
+
+
+class EmailTemplateUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    subject: str | None = Field(default=None, max_length=500)
+    body: str | None = Field(default=None, max_length=10000)
 
 
 def render_page(filename: str) -> HTMLResponse:
@@ -273,6 +297,31 @@ def mark_sent(contact_id: int, body: MarkSentRequest, user: CurrentUser) -> dict
     return {"ok": True, "sent": body.sent}
 
 
+@app.get("/api/contacts/{contact_id}/notes")
+def get_contact_notes(contact_id: int, user: CurrentUser) -> dict:
+    notes = list_contact_notes(user["id"], contact_id)
+    if notes is None:
+        raise HTTPException(status_code=404, detail="联系人不存在")
+    return {"notes": notes, "total": len(notes)}
+
+
+@app.post("/api/contacts/{contact_id}/notes")
+def add_contact_note(
+    contact_id: int, body: ContactNoteRequest, user: CurrentUser
+) -> dict:
+    note = create_contact_note(user["id"], contact_id, body.body)
+    if note is None:
+        raise HTTPException(status_code=404, detail="联系人不存在或备注为空")
+    return note
+
+
+@app.delete("/api/contacts/{contact_id}/notes/{note_id}")
+def remove_contact_note(contact_id: int, note_id: int, user: CurrentUser) -> dict:
+    if not delete_contact_note(user["id"], contact_id, note_id):
+        raise HTTPException(status_code=404, detail="备注不存在")
+    return {"ok": True}
+
+
 @app.patch("/api/contacts/{contact_id}/status")
 def patch_contact_status(
     contact_id: int, body: ContactFollowUpStatusRequest, user: CurrentUser
@@ -293,6 +342,42 @@ def dedupe(user: CurrentUser) -> dict:
     result = dedupe_contacts(user_id=user["id"])
     result["total"] = len(list_contacts(user["id"]))
     return result
+
+
+@app.get("/api/email-templates")
+def get_email_templates(user: CurrentUser) -> dict:
+    templates = list_email_templates(user["id"])
+    return {"templates": templates, "total": len(templates)}
+
+
+@app.post("/api/email-templates")
+def add_email_template(body: EmailTemplateRequest, user: CurrentUser) -> dict:
+    return create_email_template(
+        user["id"], name=body.name, subject=body.subject, body=body.body
+    )
+
+
+@app.put("/api/email-templates/{template_id}")
+def save_email_template(
+    template_id: int, body: EmailTemplateUpdateRequest, user: CurrentUser
+) -> dict:
+    template = update_email_template(
+        user["id"],
+        template_id,
+        name=body.name,
+        subject=body.subject,
+        body=body.body,
+    )
+    if not template:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return template
+
+
+@app.delete("/api/email-templates/{template_id}")
+def remove_email_template(template_id: int, user: CurrentUser) -> dict:
+    if not delete_email_template(user["id"], template_id):
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return {"ok": True}
 
 
 @app.get("/api/schedules")
@@ -339,6 +424,14 @@ def remove_schedule(job_id: int, user: CurrentUser) -> dict:
     if not delete_scheduled_job(user["id"], job_id):
         raise HTTPException(status_code=404, detail="定时任务不存在")
     return {"ok": True}
+
+
+@app.get("/api/schedules/{job_id}/runs")
+def get_schedule_runs(job_id: int, user: CurrentUser, limit: int = 20) -> dict:
+    runs = list_job_runs(user["id"], job_id, limit=min(max(limit, 1), 100))
+    if runs is None:
+        raise HTTPException(status_code=404, detail="定时任务不存在")
+    return {"runs": runs, "total": len(runs)}
 
 
 @app.post("/api/lookup")

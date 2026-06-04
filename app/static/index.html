@@ -311,6 +311,28 @@
           </label>
         </fieldset>
 
+        <fieldset>
+          <legend>邮件模板</legend>
+          <p class="stats">变量：<code>{org}</code> <code>{name}</code> <code>{email}</code> <code>{asn}</code> <code>{roles}</code></p>
+          <div id="email-templates-list" class="template-list"></div>
+          <label class="field">
+            <span>模板名称</span>
+            <input id="template-name" type="text" placeholder="例如：Peering 初次联系">
+          </label>
+          <label class="field">
+            <span>主题</span>
+            <input id="template-subject" type="text" placeholder="Peering inquiry — {org}">
+          </label>
+          <label class="field">
+            <span>正文</span>
+            <textarea id="template-body" rows="6" placeholder="Hi {name},&#10;&#10;We would like to discuss peering with {org} (AS{asn})…"></textarea>
+          </label>
+          <div class="controls">
+            <button id="save-template-btn" type="button" class="secondary-btn">保存模板</button>
+          </div>
+          <p id="template-status" class="stats"></p>
+        </fieldset>
+
         <div class="controls">
           <button type="submit">保存设置</button>
         </div>
@@ -325,6 +347,12 @@
           <p id="contacts-stats" class="stats">加载中…</p>
         </div>
         <div class="results-actions">
+          <label class="field inline">
+            <span>发信模板</span>
+            <select id="mail-template-select">
+              <option value="">无模板</option>
+            </select>
+          </label>
           <label class="field inline">
             <span>邮件</span>
             <select id="contact-status-filter">
@@ -371,6 +399,25 @@
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div id="contact-notes-modal" class="contact-notes-modal hidden" role="dialog" aria-labelledby="contact-notes-title">
+        <div class="contact-notes-backdrop" data-close-notes></div>
+        <div class="contact-notes-dialog">
+          <div class="contact-notes-header">
+            <h3 id="contact-notes-title">备注时间线</h3>
+            <button type="button" class="secondary-btn contact-notes-close" data-close-notes>关闭</button>
+          </div>
+          <p id="contact-notes-subtitle" class="contact-notes-subtitle"></p>
+          <ul id="contact-notes-list" class="contact-notes-list"></ul>
+          <form id="contact-note-form" class="contact-note-form">
+            <label class="field">
+              <span>新备注</span>
+              <textarea id="contact-note-body" rows="3" placeholder="记录跟进内容…" required></textarea>
+            </label>
+            <button type="submit" class="primary-btn">添加备注</button>
+          </form>
+        </div>
       </div>
     </section>
   </div>

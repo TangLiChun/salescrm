@@ -21,6 +21,12 @@ const contactStatusFilter = document.getElementById("contact-status-filter");
 const contactFollowUpFilter = document.getElementById("contact-follow-up-filter");
 const dedupeContactsBtn = document.getElementById("dedupe-contacts-btn");
 const refreshContactsBtn = document.getElementById("refresh-contacts-btn");
+const contactNotesModal = document.getElementById("contact-notes-modal");
+const contactNotesTitle = document.getElementById("contact-notes-title");
+const contactNotesSubtitle = document.getElementById("contact-notes-subtitle");
+const contactNotesList = document.getElementById("contact-notes-list");
+const contactNoteForm = document.getElementById("contact-note-form");
+const contactNoteBody = document.getElementById("contact-note-body");
 const schedulesBody = document.getElementById("schedules-body");
 const schedulesStatsEl = document.getElementById("schedules-stats");
 const scheduleForm = document.getElementById("schedule-form");
@@ -33,6 +39,13 @@ const refreshSchedulesBtn = document.getElementById("refresh-schedules-btn");
 const settingsView = document.getElementById("settings-view");
 const settingsForm = document.getElementById("settings-form");
 const settingsStatusEl = document.getElementById("settings-status");
+const emailTemplatesListEl = document.getElementById("email-templates-list");
+const templateNameInput = document.getElementById("template-name");
+const templateSubjectInput = document.getElementById("template-subject");
+const templateBodyInput = document.getElementById("template-body");
+const saveTemplateBtn = document.getElementById("save-template-btn");
+const templateStatusEl = document.getElementById("template-status");
+const mailTemplateSelect = document.getElementById("mail-template-select");
 const pageTitle = document.getElementById("page-title");
 const pageSubtitle = document.getElementById("page-subtitle");
 const tabs = document.querySelectorAll(".tab");
@@ -53,6 +66,7 @@ const importLeadsBtn = document.getElementById("import-leads-btn");
 let allRows = [];
 let csvContent = "";
 let contacts = [];
+let notesContactId = null;
 
 const FOLLOW_UP_STATUS_LABELS = {
   new: "新客户",
@@ -64,6 +78,8 @@ const FOLLOW_UP_STATUS_LABELS = {
 let schedules = [];
 let aiLeads = [];
 let llmConfigured = false;
+let emailTemplates = [];
+let editingTemplateId = null;
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -219,7 +235,7 @@ function renderContacts() {
       <td>${escapeHtml(contact.notes || "—")}</td>
       <td>${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
-        <button type="button" class="link-btn action-mail" data-email="${escapeHtml(contact.email)}">发邮件</button>
+        <button type="button" class="link-btn action-mail" data-id="${contact.id}">发邮件</button>
         <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">改状态</button>
         <button type="button" class="link-btn action-mark" data-id="${contact.id}" data-sent="${contact.email_sent ? "0" : "1"}">${contact.email_sent ? "取消标记" : "标记已发"}</button>
         <button type="button" class="link-btn action-delete" data-id="${contact.id}">删除</button>
@@ -425,10 +441,133 @@ async function changeContactFollowUpStatus(contactId, currentStatus) {
   await loadContacts();
 }
 
-function openMailClient(email) {
-  window.location.href = `mailto:${email}`;
+function renderTemplateText(text, contact) {
+  const asn = contact.asn ? String(contact.asn) : "";
+  return String(text || "")
+    .replaceAll("{org}", contact.org || "")
+    .replaceAll("{name}", contact.name || "")
+    .replaceAll("{email}", contact.email || "")
+    .replaceAll("{asn}", asn)
+    .replaceAll("{roles}", contact.roles || "");
 }
 
+function openMailClient(contactId) {
+  const contact = contacts.find((item) => String(item.id) === String(contactId));
+  if (!contact?.email) return;
+
+  const templateId = mailTemplateSelect.value;
+  const template = emailTemplates.find((item) => String(item.id) === templateId);
+  let url = `mailto:${encodeURIComponent(contact.email)}`;
+  if (template) {
+    const params = new URLSearchParams();
+    const subject = renderTemplateText(template.subject, contact);
+    const body = renderTemplateText(template.body, contact);
+    if (subject) params.set("subject", subject);
+    if (body) params.set("body", body);
+    const query = params.toString();
+    if (query) url += `?${query}`;
+  }
+  window.location.href = url;
+}
+
+function renderMailTemplateSelect() {
+  const current = mailTemplateSelect.value;
+  mailTemplateSelect.innerHTML = `<option value="">无模板</option>`;
+  for (const template of emailTemplates) {
+    const option = document.createElement("option");
+    option.value = String(template.id);
+    option.textContent = template.name;
+    mailTemplateSelect.appendChild(option);
+  }
+  if (current && emailTemplates.some((item) => String(item.id) === current)) {
+    mailTemplateSelect.value = current;
+  }
+}
+
+function renderEmailTemplatesList() {
+  emailTemplatesListEl.innerHTML = "";
+  if (emailTemplates.length === 0) {
+    emailTemplatesListEl.innerHTML = `<p class="stats">暂无模板，可在下方创建</p>`;
+    return;
+  }
+
+  for (const template of emailTemplates) {
+    const item = document.createElement("div");
+    item.className = "template-item";
+    item.innerHTML = `
+      <div class="template-item-head">
+        <strong>${escapeHtml(template.name)}</strong>
+        <span class="template-item-actions">
+          <button type="button" class="link-btn template-edit" data-id="${template.id}">编辑</button>
+          <button type="button" class="link-btn template-delete" data-id="${template.id}">删除</button>
+        </span>
+      </div>
+      <p class="stats">${escapeHtml(template.subject || "（无主题）")}</p>
+    `;
+    emailTemplatesListEl.appendChild(item);
+  }
+}
+
+async function loadEmailTemplates() {
+  const data = await api("/api/email-templates");
+  emailTemplates = data.templates || [];
+  renderMailTemplateSelect();
+  renderEmailTemplatesList();
+}
+
+function resetTemplateForm() {
+  editingTemplateId = null;
+  templateNameInput.value = "";
+  templateSubjectInput.value = "";
+  templateBodyInput.value = "";
+  saveTemplateBtn.textContent = "保存模板";
+  templateStatusEl.textContent = "";
+}
+
+async function saveEmailTemplate() {
+  const name = templateNameInput.value.trim();
+  if (!name) {
+    alert("请填写模板名称");
+    return;
+  }
+  const payload = {
+    name,
+    subject: templateSubjectInput.value,
+    body: templateBodyInput.value,
+  };
+  if (editingTemplateId) {
+    await api(`/api/email-templates/${editingTemplateId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    templateStatusEl.textContent = "模板已更新";
+  } else {
+    await api("/api/email-templates", { method: "POST", body: JSON.stringify(payload) });
+    templateStatusEl.textContent = "模板已创建";
+  }
+  resetTemplateForm();
+  await loadEmailTemplates();
+}
+
+async function editEmailTemplate(templateId) {
+  const template = emailTemplates.find((item) => item.id === templateId);
+  if (!template) return;
+  editingTemplateId = templateId;
+  templateNameInput.value = template.name || "";
+  templateSubjectInput.value = template.subject || "";
+  templateBodyInput.value = template.body || "";
+  saveTemplateBtn.textContent = "更新模板";
+  templateStatusEl.textContent = `正在编辑：${template.name}`;
+}
+
+async function deleteEmailTemplate(templateId) {
+  if (!confirm("确定删除该模板？")) return;
+  await api(`/api/email-templates/${templateId}`, { method: "DELETE" });
+  if (String(editingTemplateId) === String(templateId)) {
+    resetTemplateForm();
+  }
+  await loadEmailTemplates();
+}
 function renderSchedules() {
   schedulesBody.innerHTML = "";
   if (schedules.length === 0) {
@@ -591,10 +730,12 @@ function switchView(view) {
     pageTitle.textContent = "系统设置";
     pageSubtitle.textContent = "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理";
     loadSettingsForm().catch((error) => alert(error.message));
+    loadEmailTemplates().catch((error) => alert(error.message));
   } else {
     pageTitle.textContent = "联系人列表";
     pageSubtitle.textContent = "管理联系人状态：标记已发邮件、筛选未联系对象、一键去重";
     loadContacts().catch((error) => alert(error.message));
+    loadEmailTemplates().catch(() => {});
   }
 }
 
@@ -883,6 +1024,18 @@ refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) 
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
 scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch((error) => alert(error.message)));
 settingsForm.addEventListener("submit", (event) => saveSettings(event).catch((error) => alert(error.message)));
+saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch((error) => alert(error.message)));
+emailTemplatesListEl.addEventListener("click", (event) => {
+  const editBtn = event.target.closest(".template-edit");
+  if (editBtn) {
+    editEmailTemplate(Number(editBtn.dataset.id));
+    return;
+  }
+  const deleteBtn = event.target.closest(".template-delete");
+  if (deleteBtn) {
+    deleteEmailTemplate(Number(deleteBtn.dataset.id)).catch((error) => alert(error.message));
+  }
+});
 document.getElementById("change-password-btn").addEventListener("click", () => {
   changePassword().catch((error) => alert(error.message));
 });
@@ -921,7 +1074,7 @@ tabs.forEach((tab) => {
 contactsBody.addEventListener("click", (event) => {
   const mailBtn = event.target.closest(".action-mail");
   if (mailBtn) {
-    openMailClient(mailBtn.dataset.email);
+    openMailClient(mailBtn.dataset.id);
     return;
   }
   const statusBtn = event.target.closest(".action-status");

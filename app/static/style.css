@@ -525,6 +525,111 @@ tbody tr:last-child td {
   margin-right: 8px;
 }
 
+.contact-notes-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.contact-notes-modal.hidden {
+  display: none;
+}
+
+.contact-notes-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.contact-notes-dialog {
+  position: relative;
+  width: min(520px, 100%);
+  max-height: min(80vh, 640px);
+  overflow: auto;
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+  padding: 20px;
+}
+
+.contact-notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.contact-notes-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.contact-notes-subtitle {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.contact-notes-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.contact-notes-list .empty-note {
+  padding: 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.note-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+
+.note-item:last-child {
+  margin-bottom: 0;
+}
+
+.note-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.note-item-body {
+  margin: 0;
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-item .link-btn {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.contact-note-form textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+}
+
 .schedule-form {
   display: grid;
   gap: 12px;
@@ -552,6 +657,32 @@ tbody tr:last-child td {
 .settings-form legend {
   padding: 0 8px;
   font-weight: 600;
+}
+
+.template-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.template-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.template-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.template-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .ai-controls {
