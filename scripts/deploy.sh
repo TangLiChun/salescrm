@@ -310,10 +310,15 @@ wait_healthy() {
     fi
   fi
 
+  # 诊断性完整检查：quiet 可能因慢启动误失败，verbose 通过则视为成功
+  if run_check; then
+    warn "健康检查在最终诊断中通过（先前重试可能因慢启动失败，部署成功）"
+    return 0
+  fi
+
   echo ""
   echo "ERROR: 部署完成但服务未通过完整健康检查（${last_phase}）" >&2
   echo "提示: 若 ./scripts/check.sh 已通过，服务通常已正常，可手动确认后忽略" >&2
-  run_check || true
   show_failure_logs
   exit 1
 }
