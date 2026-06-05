@@ -79,7 +79,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "import_leads",
-            "description": "将线索行导入 CRM；每行需含 email，并尽量填写 org（公司/组织）和 name（联系人姓名）",
+            "description": "将线索行导入 CRM；每行需含 email，并尽量填写 org 和 name；asn 为纯数字（如 395092，勿写 AS 前缀）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -116,8 +116,8 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "contact_id": {"type": "integer", "description": "CRM 联系人 ID"},
-                    "min_score": {"type": "integer", "description": "最低相关度，默认 50"},
-                    "auto_import": {"type": "boolean", "description": "找到后自动导入 CRM"},
+                    "min_score": {"type": "integer", "description": "最低相关度，默认 60"},
+                    "auto_import": {"type": "boolean", "description": "≥60 分线索自动导入，默认 true"},
                 },
                 "required": ["contact_id"],
             },
@@ -132,8 +132,8 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "min_score": {"type": "integer"},
-                    "auto_import": {"type": "boolean"},
+                    "min_score": {"type": "integer", "description": "最低相关度，默认 60"},
+                    "auto_import": {"type": "boolean", "description": "≥60 分线索自动导入，默认 true"},
                 },
                 "required": ["query"],
             },
@@ -331,7 +331,9 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 联网搜索说明：系统设置 → AI 与搜索 中配置。默认优先级 brightdata(Bright Data Google SERP) > zhipu(智谱) > tavily > serpapi > brave > duckduckgo。
 用户问「AI 搜索用的什么 / 怎么调用 / 有哪些渠道」时，先调用 get_search_config 再回答，不要猜测。
 
-规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。"""
+规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。
+入库：线索 lead_score ≥ 60 时直接调用 import_leads 入库（无需再问用户）；discover_leads / enrich_contact 默认 auto_import=true、min_score=60。
+import_leads 的 asn 字段必须是纯数字（如 395092），不要带 AS 前缀。"""
 
 
 async def _stream_lead_events(
@@ -561,7 +563,11 @@ async def _discover_leads_tool(
 ) -> dict[str, Any]:
     query = str(args.get("query") or "").strip()
     min_score = int(args.get("min_score") or 60)
-    auto_import = bool(args.get("auto_import"))
+    auto_import = args.get("auto_import")
+    if auto_import is None:
+        auto_import = True
+    else:
+        auto_import = bool(auto_import)
 
     leads, import_result, message, error = await _stream_lead_events(
         discover_leads_stream(
@@ -583,8 +589,12 @@ async def _enrich_contact_tool(
     contact_id = int(args.get("contact_id") or 0)
     if contact_id <= 0:
         return {"error": "contact_id 无效"}
-    min_score = int(args.get("min_score") or 50)
-    auto_import = bool(args.get("auto_import"))
+    min_score = int(args.get("min_score") or 60)
+    auto_import = args.get("auto_import")
+    if auto_import is None:
+        auto_import = True
+    else:
+        auto_import = bool(auto_import)
 
     leads, import_result, message, error = await _stream_lead_events(
         enrich_contact_stream(

@@ -95,6 +95,7 @@ def chat_completion_with_tools_stream(
     timeout = AGENT_REQUEST_TIMEOUT if tools else REQUEST_TIMEOUT
 
     content_parts: list[str] = []
+    reasoning_parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
 
     try:
@@ -118,6 +119,10 @@ def chat_completion_with_tools_stream(
                     content_parts.append(piece)
                     if not tools:
                         yield {"type": "content_delta", "text": piece}
+
+                reasoning_piece = delta.get("reasoning_content")
+                if reasoning_piece:
+                    reasoning_parts.append(reasoning_piece)
 
                 for tool_delta in delta.get("tool_calls") or []:
                     index = int(tool_delta.get("index") or 0)
@@ -145,6 +150,8 @@ def chat_completion_with_tools_stream(
         return
 
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
+    if reasoning_parts:
+        message["reasoning_content"] = "".join(reasoning_parts)
     if tool_calls:
         message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
     yield {"type": "message", "message": message}

@@ -5,6 +5,7 @@ from typing import Any
 
 import psycopg
 
+from arin_lookup import parse_asn
 from app.db import db_path, get_conn
 from app.security import hash_password
 
@@ -480,8 +481,12 @@ def normalize_import_row(row: dict) -> dict:
 
     normalized["org"] = org
     normalized["name"] = name
-    if not normalized.get("asn") and row.get("asn"):
-        normalized["asn"] = row.get("asn")
+    asn_raw = row.get("asn")
+    if asn_raw is not None and str(asn_raw).strip():
+        parsed_asn = parse_asn(str(asn_raw))
+        normalized["asn"] = parsed_asn
+    elif "asn" in normalized:
+        normalized.pop("asn", None)
     return normalized
 
 
