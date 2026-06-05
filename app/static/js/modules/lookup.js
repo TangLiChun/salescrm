@@ -62,8 +62,11 @@ export function renderRows() {
     return;
   }
 
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
     const tr = document.createElement("tr");
+    tr.className = "motion-row-in";
+    tr.style.animationDelay = `${Math.min(index, 12) * 35}ms`;
     const rowIndex = state.allRows.indexOf(row);
     const roles = row.roles.map((role) => `<span class="role-tag">${role}</span>`).join("");
     const emailCell = row.email

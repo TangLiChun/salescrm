@@ -514,6 +514,8 @@ async function bootstrap() {
   await loadSchedules().catch((error) => console.warn("Schedules load failed:", error));
   startJobEventStream();
   await resumeBackgroundJobs().catch((error) => console.warn("Job resume failed:", error));
+  document.body.classList.add("app-ready");
+  switchView("lookup");
 }
 
 bootstrap().catch((error) => {

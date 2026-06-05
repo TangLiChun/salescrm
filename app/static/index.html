@@ -34,7 +34,7 @@
           <span class="nav-label" data-i18n="nav.piAgent">Pi 助手</span>
         </button>
         <button type="button" class="tab nav-item" data-view="schedules">
-          <span class="nav-icon" aria-hidden="true">⏱</span>
+          <span class="nav-icon" aria-hidden="true">CR</span>
           <span class="nav-label" data-i18n="nav.schedules">定时任务</span>
         </button>
         <button type="button" class="tab nav-item" data-view="contacts">
@@ -46,7 +46,7 @@
           <span class="nav-label" data-i18n="nav.stats">统计概览</span>
         </button>
         <button type="button" class="tab nav-item" data-view="settings">
-          <span class="nav-icon" aria-hidden="true">⚙</span>
+          <span class="nav-icon" aria-hidden="true">ST</span>
           <span class="nav-label" data-i18n="nav.settings">系统设置</span>
         </button>
       </nav>
@@ -496,22 +496,27 @@
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="import">
+              <header class="settings-pane-head">
+                <h2 class="settings-pane-title" data-i18n="settings.cat.import">线索导入</h2>
+                <p class="settings-desc" data-i18n="settings.importDesc">控制哪些邮箱可以被导入。白名单非空时仅导入匹配项；黑名单始终排除。</p>
+              </header>
               <fieldset>
                 <legend data-i18n="settings.importFilter">导入过滤（黑名单 / 白名单）</legend>
+                <p class="settings-field-hint" data-i18n="settings.importFilterHint">每行一条：域名（如 example.com）或带 * 的邮箱模式。</p>
                 <label class="field"><span data-i18n="settings.blocklist">黑名单</span>
                   <textarea id="setting-import-blocklist" rows="5" data-i18n-placeholder="settings.blocklistPlaceholder" placeholder=""></textarea></label>
                 <label class="field"><span data-i18n="settings.allowlist">白名单（留空表示不启用）</span>
                   <textarea id="setting-import-allowlist" rows="5" data-i18n-placeholder="settings.allowlistPlaceholder" placeholder=""></textarea></label>
               </fieldset>
-              <fieldset>
+              <fieldset class="lead-prefs-fieldset">
                 <legend data-i18n="settings.leadPreferences">AI 线索偏好（自动学习）</legend>
-                <p class="settings-desc" data-i18n="settings.leadPreferencesHint">系统会根据你的导入、跟进状态与删除操作自动调整搜索策略。此处为只读预览，可随时重置。</p>
-                <div id="lead-prefs-panel" class="lead-prefs-panel">
+                <p class="settings-field-hint" data-i18n="settings.leadPreferencesHint">系统会根据你的导入、跟进状态与删除操作自动调整搜索策略。此处为只读预览，可随时重置。</p>
+                <div id="lead-prefs-panel" class="lead-prefs-panel" aria-live="polite" aria-busy="true">
                   <p class="lead-prefs-empty" data-i18n="settings.leadPrefsLoading">加载中…</p>
                 </div>
                 <div class="controls lead-prefs-actions">
-                  <button type="button" id="reset-lead-prefs-btn" class="secondary-btn" data-i18n="settings.resetLeadPrefs">重置偏好</button>
-                  <p id="lead-prefs-status" class="stats"></p>
+                  <button type="button" id="reset-lead-prefs-btn" class="secondary-btn lead-prefs-reset-btn" data-i18n="settings.resetLeadPrefs">重置偏好</button>
+                  <p id="lead-prefs-status" class="stats lead-prefs-status" role="status"></p>
                 </div>
               </fieldset>
             </div>

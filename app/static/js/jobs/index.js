@@ -2,6 +2,7 @@ import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { api, escapeHtml, errorMessage } from "../core/utils.js";
+import { replayAnimation, staggerChildren } from "../core/motion.js";
 import {
   notifySuccess,
   notifyError,
@@ -31,6 +32,8 @@ let jobsSseConnected = false;
 export function openJobsPanel() {
   if (!jobsPanelEl) return;
   jobsPanelEl.classList.remove("hidden");
+  replayAnimation(jobsPanelEl.querySelector(".jobs-panel-backdrop"), "motion-fade-in");
+  replayAnimation(jobsPanelEl.querySelector(".jobs-panel-sheet"), "motion-sheet-enter");
   loadJobsPanelList().catch(() => {});
 }
 
@@ -62,6 +65,7 @@ export async function loadJobsPanelList() {
         </li>`;
     })
     .join("");
+  staggerChildren(jobsPanelListEl, ".jobs-panel-item");
 }
 
 export async function navigateForCompletedJob(job) {
@@ -134,6 +138,7 @@ export function backgroundJobLabel(job) {
 
 export function renderBackgroundJobsBar() {
   if (!backgroundJobsBar) return;
+  const wasHidden = backgroundJobsBar.classList.contains("hidden");
   const active = [...backgroundJobTrackers.values()]
     .map((entry) => entry.job)
     .filter((job) => job && (job.status === "pending" || job.status === "running"));
@@ -152,6 +157,10 @@ export function renderBackgroundJobsBar() {
       )
       .join("")}
     <button type="button" class="secondary-btn background-jobs-open">${escapeHtml(t("jobs.viewAll"))}</button>`;
+  if (wasHidden) {
+    replayAnimation(backgroundJobsBar, "motion-bar-enter");
+    staggerChildren(backgroundJobsBar, ".background-job-chip");
+  }
 }
 
 function applyLookupJobResult(job) {

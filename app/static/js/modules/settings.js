@@ -2,6 +2,8 @@ import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state, SETTINGS_FORM_CATS } from "../core/state.js";
 import { api, escapeHtml, setInputValue } from "../core/utils.js";
+import { showToast } from "../core/toast.js";
+import { replayAnimation } from "../core/motion.js";
 import { loadLlmStatus } from "./leads.js";
 
 const { settingsView, pageTitle, settingsStatusEl } = dom;
@@ -14,6 +16,15 @@ export const SETTINGS_CAT_TITLE_KEYS = {
   templates: "settings.cat.templates",
   backup: "settings.cat.backup",
 };
+
+const LEAD_PREF_STAT_META = [
+  { key: "settings.leadPrefsStatImports", field: "imports", tone: "positive" },
+  { key: "settings.leadPrefsStatInterested", field: "interested", tone: "positive" },
+  { key: "settings.leadPrefsStatReplied", field: "replied", tone: "accent" },
+  { key: "settings.leadPrefsStatContacted", field: "contacted", tone: "neutral" },
+  { key: "settings.leadPrefsStatInvalid", field: "invalid", tone: "danger" },
+  { key: "settings.leadPrefsStatDeleted", field: "deleted", tone: "caution" },
+];
 
 export function switchSettingsCat(cat) {
   state.activeSettingsCat = cat;
@@ -28,25 +39,50 @@ export function switchSettingsCat(cat) {
   if (!settingsView.classList.contains("hidden")) {
     pageTitle.textContent = t(SETTINGS_CAT_TITLE_KEYS[cat] || "page.settings.title");
   }
+  const pane = document.querySelector(`.settings-pane[data-settings-pane="${cat}"]`);
+  replayAnimation(pane, "motion-pane-enter");
   if (cat === "import") {
     loadLeadPreferences().catch(() => {});
   }
 }
 
-function renderPrefTags(items) {
+function renderPrefTags(items, tone = "neutral") {
   if (!items?.length) {
     return `<span class="lead-prefs-none">${escapeHtml(t("settings.leadPrefsNone"))}</span>`;
   }
   return items
-    .map((item) => `<span class="lead-prefs-tag">${escapeHtml(String(item))}</span>`)
+    .map(
+      (item) =>
+        `<span class="lead-prefs-tag lead-prefs-tag--${tone}">${escapeHtml(String(item))}</span>`,
+    )
     .join("");
 }
 
-function renderPrefSection(labelKey, items) {
+function renderPrefSection(labelKey, items, tone = "neutral") {
   return `
-    <div class="lead-prefs-section">
-      <div class="lead-prefs-label">${escapeHtml(t(labelKey))}</div>
-      <div class="lead-prefs-tags">${renderPrefTags(items)}</div>
+    <section class="lead-prefs-section" aria-label="${escapeHtml(t(labelKey))}">
+      <h3 class="lead-prefs-label">${escapeHtml(t(labelKey))}</h3>
+      <div class="lead-prefs-tags">${renderPrefTags(items, tone)}</div>
+    </section>`;
+}
+
+function renderLeadPrefsSkeleton() {
+  return `
+    <div class="lead-prefs-skeleton" aria-hidden="true">
+      <div class="lead-prefs-skeleton-hero"></div>
+      <div class="lead-prefs-skeleton-grid">
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <div class="lead-prefs-skeleton-line"></div>
+      <div class="lead-prefs-skeleton-line short"></div>
+    </div>`;
+}
+
+function renderLeadPrefsEmpty() {
+  return `
+    <div class="lead-prefs-empty-state">
+      <div class="lead-prefs-empty-mark" aria-hidden="true"></div>
+      <p class="lead-prefs-empty">${escapeHtml(t("settings.leadPrefsEmpty"))}</p>
     </div>`;
 }
 
@@ -68,59 +104,77 @@ function hasLeadPreferenceData(prefs) {
   return Object.values(stats).some((value) => Number(value) > 0);
 }
 
+function setLeadPrefsBusy(panel, busy) {
+  panel.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
 export async function loadLeadPreferences() {
   const panel = document.getElementById("lead-prefs-panel");
   if (!panel) return;
 
-  panel.innerHTML = `<p class="lead-prefs-empty">${escapeHtml(t("settings.leadPrefsLoading"))}</p>`;
+  setLeadPrefsBusy(panel, true);
+  panel.innerHTML = renderLeadPrefsSkeleton();
 
-  const data = await api("/api/lead-preferences");
-  const prefs = data.preferences || {};
-  const stats = prefs.stats || {};
+  try {
+    const data = await api("/api/lead-preferences");
+    const prefs = data.preferences || {};
+    const stats = prefs.stats || {};
 
-  if (!hasLeadPreferenceData(prefs)) {
-    panel.innerHTML = `<p class="lead-prefs-empty">${escapeHtml(t("settings.leadPrefsEmpty"))}</p>`;
-    return;
+    if (!hasLeadPreferenceData(prefs)) {
+      panel.innerHTML = renderLeadPrefsEmpty();
+      return;
+    }
+
+    const statItems = LEAD_PREF_STAT_META.map(
+      ({ key, field, tone }) => `
+        <div class="lead-prefs-stat lead-prefs-stat--${tone}">
+          <span class="lead-prefs-stat-label">${escapeHtml(t(key))}</span>
+          <span class="lead-prefs-stat-value mono">${escapeHtml(String(stats[field] || 0))}</span>
+        </div>`,
+    ).join("");
+
+    panel.innerHTML = `
+      <div class="lead-prefs-hero">
+        <div class="lead-prefs-hero-copy">
+          <span class="lead-prefs-label">${escapeHtml(t("settings.leadPrefsMinScore"))}</span>
+          <p class="lead-prefs-hero-value mono">${escapeHtml(String(prefs.min_score_hint ?? 60))}</p>
+        </div>
+        <p class="lead-prefs-hero-note">${escapeHtml(t("settings.leadPrefsHeroNote"))}</p>
+      </div>
+      <div class="lead-prefs-stats" role="list">${statItems}</div>
+      ${renderPrefSection("settings.leadPrefsPreferredRoles", prefs.preferred_roles, "accent")}
+      ${renderPrefSection("settings.leadPrefsKeywordHints", prefs.keyword_hints, "neutral")}
+      ${renderPrefSection("settings.leadPrefsLikedOrgs", prefs.liked_orgs, "positive")}
+      ${renderPrefSection("settings.leadPrefsAvoidOrgs", prefs.avoid_orgs, "danger")}
+      ${renderPrefSection("settings.leadPrefsAvoidDomains", prefs.avoid_domains, "danger")}
+    `;
+    replayAnimation(panel, "motion-prefs-enter");
+  } finally {
+    setLeadPrefsBusy(panel, false);
   }
-
-  const statItems = [
-    ["settings.leadPrefsStatImports", stats.imports],
-    ["settings.leadPrefsStatInvalid", stats.invalid],
-    ["settings.leadPrefsStatInterested", stats.interested],
-    ["settings.leadPrefsStatReplied", stats.replied],
-    ["settings.leadPrefsStatContacted", stats.contacted],
-    ["settings.leadPrefsStatDeleted", stats.deleted],
-  ]
-    .map(
-      ([key, value]) =>
-        `<div class="lead-prefs-stat"><span class="lead-prefs-stat-label">${escapeHtml(t(key))}</span><span class="lead-prefs-stat-value">${escapeHtml(String(value || 0))}</span></div>`,
-    )
-    .join("");
-
-  panel.innerHTML = `
-    <div class="lead-prefs-min-score">
-      <span class="lead-prefs-label">${escapeHtml(t("settings.leadPrefsMinScore"))}</span>
-      <strong>${escapeHtml(String(prefs.min_score_hint ?? 60))}</strong>
-    </div>
-    <div class="lead-prefs-stats">${statItems}</div>
-    ${renderPrefSection("settings.leadPrefsPreferredRoles", prefs.preferred_roles)}
-    ${renderPrefSection("settings.leadPrefsKeywordHints", prefs.keyword_hints)}
-    ${renderPrefSection("settings.leadPrefsLikedOrgs", prefs.liked_orgs)}
-    ${renderPrefSection("settings.leadPrefsAvoidOrgs", prefs.avoid_orgs)}
-    ${renderPrefSection("settings.leadPrefsAvoidDomains", prefs.avoid_domains)}
-  `;
 }
 
 export async function resetLeadPreferences() {
   if (!window.confirm(t("settings.resetLeadPrefsConfirm"))) {
     return;
   }
-  await api("/api/lead-preferences/reset", { method: "POST" });
+
+  const btn = document.getElementById("reset-lead-prefs-btn");
   const statusEl = document.getElementById("lead-prefs-status");
-  if (statusEl) {
-    statusEl.textContent = t("settings.leadPrefsReset");
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = "";
+
+  try {
+    await api("/api/lead-preferences/reset", { method: "POST" });
+    showToast(t("settings.leadPrefsReset"), { type: "success", duration: 4000 });
+    if (statusEl) statusEl.textContent = t("settings.leadPrefsReset");
+    await loadLeadPreferences();
+  } catch (error) {
+    if (statusEl) statusEl.textContent = error.message || String(error);
+    showToast(error.message || String(error), { type: "error" });
+  } finally {
+    if (btn) btn.disabled = false;
   }
-  await loadLeadPreferences();
 }
 
 export async function regenerateAgentToken() {

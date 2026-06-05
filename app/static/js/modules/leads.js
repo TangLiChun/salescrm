@@ -87,6 +87,8 @@ export function renderAiLeads() {
     const lead = state.aiLeads[index];
     ensureLeadSelected(lead);
     const tr = document.createElement("tr");
+    tr.className = "motion-row-in";
+    tr.style.animationDelay = `${Math.min(index, 12) * 35}ms`;
     const roles = (lead.roles || []).map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`).join("");
     tr.innerHTML = `
       <td class="col-select"><input type="checkbox" class="row-import-check" data-kind="ai" data-index="${index}" ${lead._selected !== false ? "checked" : ""}></td>
