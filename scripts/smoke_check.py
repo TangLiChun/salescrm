@@ -5,6 +5,12 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+# docker exec python scripts/smoke_check.py puts scripts/ on sys.path, not /app
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from app.auth import authenticate_user
 from app.database import (

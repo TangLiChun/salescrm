@@ -99,13 +99,15 @@ check_health_http() {
 }
 
 check_smoke() {
-  if ! $DOCKER exec "${CONTAINER}" python scripts/smoke_check.py >/dev/null 2>&1; then
+  local smoke_cmd="env PYTHONPATH=/app python /app/scripts/smoke_check.py"
+  if ! $DOCKER exec "${CONTAINER}" sh -c "${smoke_cmd}" >/dev/null 2>&1; then
     say "API 冒烟测试失败："
-    $DOCKER exec "${CONTAINER}" python scripts/smoke_check.py 2>&1 || true
+    $DOCKER exec "${CONTAINER}" sh -c "${smoke_cmd}" 2>&1 || true
     show_logs
     fail "关键 API / 数据库查询异常（如缺表导致 500）"
   fi
   say "冒烟: scripts/smoke_check.py — ok"
+}
 }
 
 check_docker_health() {
