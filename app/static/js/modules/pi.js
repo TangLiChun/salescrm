@@ -180,6 +180,19 @@ export function normalizeHistoryItems(history) {
   return Array.isArray(history) ? history.filter(isValidHistoryItem) : [];
 }
 
+export function historyPayloadForApi(history) {
+  return normalizeHistoryItems(history).map((item) => {
+    if (item.role === "user" || item.role === "assistant") {
+      return { role: item.role, content: String(item.content || "") };
+    }
+    return {
+      role: "tool",
+      name: String(item.name || "tool"),
+      summary: String(item.summary || ""),
+    };
+  });
+}
+
 export function appendPiHistoryEntry(entry) {
   state.piChatHistory.push(entry);
   if (state.piChatHistory.length > PI_CHAT_MAX_STORED) {
@@ -1457,8 +1470,8 @@ export async function sendPiChatMessage(message) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: text,
-        history: state.piChatHistory.slice(0, -1),
-        thread_id: state.activePiThreadId,
+        history: historyPayloadForApi(state.piChatHistory.slice(0, -1)),
+        thread_id: state.activePiThreadId || null,
       }),
       signal: state.piChatController.signal,
     });

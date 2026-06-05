@@ -136,11 +136,25 @@ def chat_completion_with_tools_stream(
                     )
                     if tool_delta.get("id"):
                         slot["id"] = tool_delta["id"]
-                    fn = tool_delta.get("function") or {}
+                    fn = tool_delta.get("function")
+                    if isinstance(fn, str):
+                        try:
+                            fn = json.loads(fn)
+                        except json.JSONDecodeError:
+                            fn = {}
+                    if not isinstance(fn, dict):
+                        fn = {}
                     if fn.get("name"):
                         slot["function"]["name"] += fn["name"]
+                    elif tool_delta.get("name"):
+                        slot["function"]["name"] += str(tool_delta["name"])
                     if fn.get("arguments"):
                         slot["function"]["arguments"] += fn["arguments"]
+                    elif tool_delta.get("arguments"):
+                        piece = tool_delta["arguments"]
+                        slot["function"]["arguments"] += (
+                            piece if isinstance(piece, str) else json.dumps(piece, ensure_ascii=False)
+                        )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         yield {"type": "error", "message": f"LLM 请求失败 ({exc.code}): {detail[:300]}"}

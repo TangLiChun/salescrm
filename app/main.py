@@ -6,6 +6,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -272,8 +273,27 @@ class EmailTemplateUpdateRequest(BaseModel):
 
 class AgentChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
-    history: list[dict[str, str]] = Field(default_factory=list)
+    history: list[dict[str, Any]] = Field(default_factory=list)
     thread_id: str | None = Field(default=None, max_length=64)
+
+
+def _sanitize_agent_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop non-string fields (e.g. tool preview arrays) before LLM context build."""
+    cleaned: list[dict[str, Any]] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        if role in {"user", "assistant"}:
+            content = str(item.get("content") or "").strip()
+            if content:
+                cleaned.append({"role": role, "content": content})
+        elif role == "tool":
+            name = str(item.get("name") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            if name:
+                cleaned.append({"role": "tool", "name": name, "summary": summary})
+    return cleaned
 
 
 class PiThreadCreateRequest(BaseModel):
@@ -740,7 +760,7 @@ async def agent_chat_stream_route(body: AgentChatRequest, user: CurrentUser) -> 
         async for event in agent_chat_stream(
             user["id"],
             body.message,
-            body.history,
+            _sanitize_agent_history(body.history),
             thread_id=body.thread_id,
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

@@ -853,21 +853,72 @@ def tool_result_summary(name: str, result: Any) -> str:
         return str(result)[:8000]
 
 
+_TOOL_NAME_ALIASES = {
+    "search_contacts": "list_contacts",
+    "list_contact": "list_contacts",
+    "find_contacts": "list_contacts",
+    "delete_contact": "delete_contacts",
+    "remove_contacts": "delete_contacts",
+    "bulk_delete_contacts": "delete_contacts",
+}
+
+
 def _infer_tool_name(name: str, args: dict[str, Any]) -> str:
     cleaned = (name or "").strip().lower()
     if cleaned in KNOWN_TOOL_NAMES:
         return cleaned
-    if "queries" in args or "query" in args or "max_results" in args:
+    if cleaned in _TOOL_NAME_ALIASES:
+        return _TOOL_NAME_ALIASES[cleaned]
+    if "contact_ids" in args or "ids" in args:
+        return "delete_contacts"
+    if "queries" in args or ("query" in args and "q" not in args and "max_results" in args):
         return "web_search"
     if "text" in args or "asns" in args:
         return "lookup_asns"
-    if "contact_id" in args:
+    if "contact_id" in args and ("auto_import" in args or "min_score" in args):
         return "enrich_contact"
+    if "contact_id" in args and "note" in args:
+        return "add_contact_note"
+    if "contact_id" in args and "sent" in args:
+        return "mark_contact_sent"
+    if "contact_id" in args and not args.get("q"):
+        return "get_contact"
     if "rows" in args:
         return "import_leads"
-    if "q" in args and "limit" in args:
+    if "q" in args or ("limit" in args and "query" not in args and "queries" not in args):
         return "list_contacts"
     return cleaned or "unknown"
+
+
+def _parse_tool_call(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """Normalize provider-specific tool_call payloads; skip empty/invalid calls."""
+    fn = tool_call.get("function")
+    if isinstance(fn, str):
+        try:
+            fn = json.loads(fn)
+        except json.JSONDecodeError:
+            fn = {}
+    if not isinstance(fn, dict):
+        fn = {}
+
+    name = str(fn.get("name") or tool_call.get("name") or "").strip()
+    raw_args = fn.get("arguments")
+    if raw_args is None:
+        raw_args = tool_call.get("arguments") or "{}"
+    if isinstance(raw_args, dict):
+        args = raw_args
+    else:
+        try:
+            args = json.loads(raw_args) if raw_args else {}
+        except json.JSONDecodeError:
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+
+    name = _infer_tool_name(name, args)
+    if name == "unknown":
+        return None
+    return name, args
 
 
 def _parse_inline_tool_calls(content: str) -> tuple[str, list[dict[str, Any]]]:
@@ -1510,13 +1561,10 @@ async def agent_chat_stream(
         messages.append({**assistant, "content": intro or None})
 
         for tool_call in tool_calls:
-            fn = tool_call.get("function") or {}
-            name = fn.get("name") or "unknown"
-            raw_args = fn.get("arguments") or "{}"
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except json.JSONDecodeError:
-                args = {}
+            parsed = _parse_tool_call(tool_call if isinstance(tool_call, dict) else {})
+            if not parsed:
+                continue
+            name, args = parsed
 
             yield {"type": "tool_start", "name": name, "args": args}
 
