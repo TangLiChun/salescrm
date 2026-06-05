@@ -7,3 +7,7 @@ venv/
 .DS_Store
 *.csv
 data/*.db
+
+# Local AI / design tooling (not part of the CRM app)
+.claude/
+.impeccable/critique/
