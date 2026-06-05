@@ -1481,6 +1481,19 @@ export async function sendPiChatMessage(message) {
   let activeAssistantEl = null;
   let assistantStreamText = "";
 
+  const settlePendingAssistantBubble = () => {
+    const visibleText = sanitizePiAssistantDisplay(assistantStreamText);
+    if (activeAssistantEl) {
+      if (visibleText) {
+        updatePiChatAssistantBubble(activeAssistantEl, visibleText, false);
+      } else {
+        activeAssistantEl.remove();
+      }
+    }
+    activeAssistantEl = null;
+    assistantStreamText = "";
+  };
+
   try {
     const response = await fetch("/api/agent/chat/stream", {
       method: "POST",
@@ -1627,29 +1640,44 @@ export async function sendPiChatMessage(message) {
           activeToolEl = null;
           setProgressFill(piChatProgressFill, 85);
         } else if (payload.type === "assistant_start") {
-          activeAssistantEl = appendPiChatBubble("assistant", "");
-          activeAssistantEl.classList.add("streaming");
+          settlePendingAssistantBubble();
           assistantStreamText = "";
           setProgressFill(piChatProgressFill, 90);
         } else if (payload.type === "assistant_delta") {
           assistantStreamText += payload.text || "";
-          updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, true);
+          const visibleText = sanitizePiAssistantDisplay(assistantStreamText);
+          if (visibleText) {
+            if (!activeAssistantEl) {
+              activeAssistantEl = appendPiChatBubble("assistant", visibleText);
+              activeAssistantEl.classList.add("streaming");
+            } else {
+              updatePiChatAssistantBubble(activeAssistantEl, visibleText, true);
+            }
+          }
         } else if (payload.type === "assistant_done") {
           assistantStreamText = sanitizePiAssistantDisplay(payload.text || assistantStreamText);
-          updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, false);
-          if (!activeAssistantEl && assistantStreamText) {
-            activeAssistantEl = appendPiChatBubble("assistant", assistantStreamText);
+          if (assistantStreamText) {
+            if (activeAssistantEl) {
+              updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, false);
+            } else {
+              activeAssistantEl = appendPiChatBubble("assistant", assistantStreamText);
+            }
+            appendPiHistoryEntry({ role: "assistant", content: assistantStreamText });
+          } else if (activeAssistantEl) {
+            activeAssistantEl.remove();
           }
-          state.piChatHistory.push({ role: "assistant", content: assistantStreamText });
-          savePiChatHistory();
           activeAssistantEl = null;
           assistantStreamText = "";
           setProgressFill(piChatProgressFill, 100);
         } else if (payload.type === "assistant") {
-          appendPiChatBubble("assistant", payload.text || "");
-          appendPiHistoryEntry({ role: "assistant", content: payload.text || "" });
-          setProgressFill(piChatProgressFill, 100);
+          const assistantText = sanitizePiAssistantDisplay(payload.text || "");
+          if (assistantText) {
+            appendPiChatBubble("assistant", assistantText);
+            appendPiHistoryEntry({ role: "assistant", content: assistantText });
+            setProgressFill(piChatProgressFill, 100);
+          }
         } else if (payload.type === "error") {
+          settlePendingAssistantBubble();
           appendPiChatStatus(payload.message || t("msg.errorGeneric"));
         } else if (payload.type === "done") {
           piChatProgressText.textContent = t("pi.done");
@@ -1663,18 +1691,22 @@ export async function sendPiChatMessage(message) {
         try {
           const payload = JSON.parse(trailing.slice(6));
           if (payload.type === "error") {
+            settlePendingAssistantBubble();
             appendPiChatStatus(payload.message || t("msg.errorGeneric"));
           }
         } catch {
+          settlePendingAssistantBubble();
           appendPiChatStatus(t("pi.streamInterrupted"));
         }
       }
     }
 
     if (piChatProgressText.textContent === t("pi.processingShort") && !assistantStreamText) {
+      settlePendingAssistantBubble();
       appendPiChatStatus(t("pi.streamInterrupted"));
     }
   } catch (error) {
+    settlePendingAssistantBubble();
     if (error.name !== "AbortError") {
       appendPiChatStatus(errorMessage(error, t("pi.requestFailed")));
     } else {
