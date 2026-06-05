@@ -921,6 +921,40 @@ def _parse_tool_call(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]] | 
     return name, args
 
 
+def _ensure_tool_call_id(tool_call: dict[str, Any]) -> str:
+    tool_id = str(tool_call.get("id") or "").strip()
+    if not tool_id:
+        tool_id = f"call_{uuid.uuid4().hex[:12]}"
+        tool_call["id"] = tool_id
+    return tool_id
+
+
+def _prepare_tool_calls(
+    tool_calls: list[Any],
+) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+    """Resolve tool calls and drop invalid entries before OpenAI-style message assembly."""
+    prepared: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+    for raw in tool_calls:
+        if not isinstance(raw, dict):
+            continue
+        parsed = _parse_tool_call(raw)
+        if not parsed:
+            continue
+        name, args = parsed
+        tool_call = dict(raw)
+        _ensure_tool_call_id(tool_call)
+        fn = tool_call.get("function")
+        if not isinstance(fn, dict):
+            fn = {}
+        tool_call["function"] = {
+            "name": name,
+            "arguments": json.dumps(args, ensure_ascii=False),
+        }
+        tool_call["type"] = tool_call.get("type") or "function"
+        prepared.append((tool_call, name, args))
+    return prepared
+
+
 def _parse_inline_tool_calls(content: str) -> tuple[str, list[dict[str, Any]]]:
     text = (content or "").strip()
     if not text or not _content_looks_like_tool_call(text):
@@ -1552,21 +1586,33 @@ async def agent_chat_stream(
             yield {"type": "error", "message": "模型未返回有效回复"}
             return
 
+        prepared_calls = _prepare_tool_calls(tool_calls)
+        if not prepared_calls:
+            if content:
+                yield {"type": "assistant_start"}
+                yield {"type": "assistant_delta", "text": content}
+                yield {"type": "assistant_done", "text": content}
+                yield {"type": "done"}
+                return
+            yield {"type": "error", "message": "模型未返回有效回复"}
+            return
+
         intro = _assistant_intro_before_tools(content)
         if intro:
             yield {"type": "assistant_start"}
             yield {"type": "assistant_delta", "text": intro}
             yield {"type": "assistant_done", "text": intro}
 
-        messages.append({**assistant, "content": intro or None})
+        executed_calls = [tool_call for tool_call, _, _ in prepared_calls]
+        messages.append(
+            {
+                **assistant,
+                "content": intro or None,
+                "tool_calls": executed_calls,
+            }
+        )
 
-        for tool_call in tool_calls:
-            parsed = _parse_tool_call(tool_call if isinstance(tool_call, dict) else {})
-            if not parsed:
-                continue
-            name, args = parsed
-
-            yield {"type": "tool_start", "name": name, "args": args}
+        for tool_call, name, args in prepared_calls:
 
             event_queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
             emitter = ToolEmitter(event_queue)
@@ -1602,7 +1648,7 @@ async def agent_chat_stream(
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tool_call.get("id"),
+                    "tool_call_id": tool_call["id"],
                     "content": tool_content,
                 }
             )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -167,7 +168,19 @@ def chat_completion_with_tools_stream(
     if reasoning_parts:
         message["reasoning_content"] = "".join(reasoning_parts)
     if tool_calls:
-        message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
+        assembled: list[dict[str, Any]] = []
+        for index in sorted(tool_calls):
+            slot = tool_calls[index]
+            fn = slot.get("function") or {}
+            name = (fn.get("name") or "").strip()
+            args = (fn.get("arguments") or "").strip()
+            if not name and not args:
+                continue
+            if not slot.get("id"):
+                slot["id"] = f"call_{uuid.uuid4().hex[:12]}"
+            assembled.append(slot)
+        if assembled:
+            message["tool_calls"] = assembled
     yield {"type": "message", "message": message}
 
 
