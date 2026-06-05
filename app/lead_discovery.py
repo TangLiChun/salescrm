@@ -523,6 +523,18 @@ async def discover_leads_stream(
             payload.append({**lead, "source": source, "notes": notes.strip(" ·")})
         import_result = await asyncio.to_thread(import_contacts, user_id, payload)
 
+    review_result = None
+    if user_id and leads:
+        from app.database import save_lead_reviews
+
+        review_result = await asyncio.to_thread(
+            save_lead_reviews,
+            user_id,
+            leads,
+            query=user_query,
+            status="imported" if auto_import else "pending",
+        )
+
     if user_id and leads:
         try:
             await asyncio.to_thread(record_search_feedback, user_id, user_query, plan)
@@ -533,6 +545,7 @@ async def discover_leads_stream(
         "type": "done",
         "leads": leads,
         "import": import_result,
+        "review": review_result,
         "message": f"完成，跨渠道共找到 {len(leads)} 条高匹配线索",
     }
 
@@ -547,6 +560,7 @@ async def run_lead_discovery_batch(
 ) -> dict:
     leads: list[dict[str, Any]] = []
     import_result = None
+    review_result = None
     error = None
     message = ""
 
@@ -565,11 +579,13 @@ async def run_lead_discovery_batch(
         elif event_type == "done":
             leads = event.get("leads") or leads
             import_result = event.get("import")
+            review_result = event.get("review")
             message = event.get("message") or ""
 
     return {
         "leads": leads,
         "import": import_result,
+        "review": review_result,
         "error": error,
         "message": message,
     }

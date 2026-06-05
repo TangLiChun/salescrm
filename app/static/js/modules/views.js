@@ -9,14 +9,16 @@ import { loadContacts, renderContacts, renderMailTemplateSelect, renderEmailTemp
 import { loadSettingsForm } from "./settings.js";
 import { renderRows, refreshAsnPreview, updateStats } from "./lookup.js";
 import { renderAiLeads, updateAiLeadsStats, loadLlmStatus } from "./leads.js";
-import { updatePiAgentStatus, updatePiChatHistoryHint, refreshPiAgentChrome, setPiMobilePanel } from "./pi.js";
+import { updatePiAgentStatus, updatePiChatHistoryHint, refreshPiAgentChrome, setPiMobilePanel, settlePiChatAtBottom } from "./pi.js";
 import { renderSchedules } from "./schedules.js";
+import { loadWorkbench } from "./workbench.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
 import { showApiError } from "../core/api-feedback.js";
 
-const { tabs, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
+const { tabs, workbenchView, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
 
 const VIEW_ELEMENTS = {
+  workbench: workbenchView,
   lookup: lookupView,
   "ai-leads": aiLeadsView,
   "pi-agent": piAgentView,
@@ -36,6 +38,7 @@ export function switchView(view) {
     tab.classList.toggle("active", tab.dataset.view === view);
   });
 
+  workbenchView.classList.toggle("hidden", view !== "workbench");
   lookupView.classList.toggle("hidden", view !== "lookup");
   aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
   piAgentView.classList.toggle("hidden", view !== "pi-agent");
@@ -47,7 +50,10 @@ export function switchView(view) {
   replayAnimation(VIEW_ELEMENTS[view], "motion-enter");
   animatePageTitle();
 
-  if (view === "lookup") {
+  if (view === "workbench") {
+    pageTitle.textContent = t("page.workbench.title");
+    loadWorkbench().catch(showApiError);
+  } else if (view === "lookup") {
     pageTitle.textContent = t("page.lookup.title");
   } else if (view === "ai-leads") {
     pageTitle.textContent = t("page.aiLeads.title");
@@ -56,6 +62,7 @@ export function switchView(view) {
     setPiMobilePanel("chat");
     refreshPiAgentChrome();
     updatePiAgentStatus();
+    settlePiChatAtBottom();
   } else if (view === "schedules") {
     pageTitle.textContent = t("page.schedules.title");
     loadSchedules().catch(showApiError);
@@ -101,4 +108,7 @@ export function refreshUiOnLanguageChange() {
     updatePiAgentStatus();
   }
   renderBackgroundJobsBar();
+  if (activeView === "workbench") {
+    loadWorkbench().catch(() => {});
+  }
 }

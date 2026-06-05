@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -10,6 +11,7 @@ from app.db import db_path, get_conn
 from app.security import hash_password
 
 FOLLOW_UP_STATUSES = ("new", "contacted", "replied", "invalid", "interested")
+LEAD_REVIEW_STATUSES = ("pending", "approved", "skipped", "imported")
 
 CONTACT_SELECT_SQL = """
     id, asn, org, name, email, roles, handle, rir, source, notes,
@@ -133,6 +135,35 @@ def _migrate_user_lead_preferences(conn) -> None:
     )
 
 
+def _migrate_lead_reviews(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lead_reviews (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            query TEXT NOT NULL DEFAULT '',
+            lead_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            org TEXT NOT NULL DEFAULT '',
+            email TEXT NOT NULL DEFAULT '',
+            asn INTEGER,
+            source TEXT NOT NULL DEFAULT '',
+            score INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            reviewed_at TIMESTAMPTZ
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lead_reviews_user_status ON lead_reviews(user_id, status, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lead_reviews_user_email ON lead_reviews(user_id, lower(email))"
+    )
+
+
 REQUIRED_TABLES = (
     "users",
     "contacts",
@@ -145,6 +176,7 @@ REQUIRED_TABLES = (
     "pi_chat_threads",
     "asn_lookup_cache",
     "user_lead_preferences",
+    "lead_reviews",
 )
 
 
@@ -347,6 +379,7 @@ def init_db() -> None:
         _migrate_background_jobs(conn)
         _migrate_pi_chat_threads(conn)
         _migrate_user_lead_preferences(conn)
+        _migrate_lead_reviews(conn)
 
         from app.settings_store import init_settings
 
@@ -577,6 +610,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
     duplicates = 0
     filtered = 0
     imported_rows: list[dict] = []
+    reviewed_emails: set[str] = set()
     now = utc_now()
 
     with get_conn() as conn:
@@ -599,6 +633,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
             ).fetchone()
             if existing:
                 duplicates += 1
+                reviewed_emails.add(email)
                 merged_notes = _merge_notes(existing["notes"], row.get("notes") or "")
                 merged_roles = _merge_roles(existing["roles"], row.get("roles") or [])
                 existing_org = (existing["org"] or "").strip()
@@ -663,6 +698,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 ),
             )
             imported += 1
+            reviewed_emails.add(email)
             imported_rows.append(
                 {
                     "email": email,
@@ -674,6 +710,18 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 }
             )
 
+        if reviewed_emails:
+            conn.execute(
+                """
+                UPDATE lead_reviews
+                SET status = 'imported', reviewed_at = %s, updated_at = %s
+                WHERE user_id = %s
+                  AND status = 'pending'
+                  AND lower(email) = ANY(%s)
+                """,
+                (now, now, user_id, sorted(reviewed_emails)),
+            )
+
     if imported_rows:
         try:
             from app.lead_preferences import record_import_feedback
@@ -683,6 +731,355 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
             pass
 
     return {"imported": imported, "skipped": skipped, "duplicates": duplicates, "filtered": filtered}
+
+
+def _lead_review_payload(lead: dict, *, query: str = "") -> dict:
+    email = (lead.get("email") or "").strip().lower()
+    asn_raw = lead.get("asn")
+    asn: int | None = None
+    if asn_raw is not None and str(asn_raw).strip():
+        try:
+            asn = parse_asn(str(asn_raw))
+        except ValueError:
+            asn = None
+    return {
+        "lead_json": lead,
+        "query": query.strip(),
+        "org": (lead.get("org") or lead.get("network_name") or "").strip(),
+        "email": email,
+        "asn": asn,
+        "source": (lead.get("source") or "ai-lead").strip(),
+        "score": int(lead.get("lead_score") or lead.get("score") or 0),
+        "reason": (lead.get("lead_reason") or lead.get("source_detail") or "").strip(),
+    }
+
+
+def _lead_review_from_row(row: dict | None) -> dict:
+    if not row:
+        return {}
+    item = dict(row)
+    lead = item.get("lead_json") or {}
+    if isinstance(lead, str):
+        try:
+            lead = json.loads(lead)
+        except json.JSONDecodeError:
+            lead = {}
+    item["lead"] = lead
+    item.pop("lead_json", None)
+    item["created_at"] = _iso(item.get("created_at"))
+    item["updated_at"] = _iso(item.get("updated_at"))
+    item["reviewed_at"] = _iso(item.get("reviewed_at"))
+    return item
+
+
+def save_lead_reviews(
+    user_id: int,
+    leads: list[dict],
+    *,
+    query: str = "",
+    status: str = "pending",
+) -> dict:
+    status = status if status in LEAD_REVIEW_STATUSES else "pending"
+    inserted = 0
+    updated = 0
+    skipped = 0
+    now = utc_now()
+    with get_conn() as conn:
+        for lead in leads:
+            payload = _lead_review_payload(lead, query=query)
+            if not payload["email"]:
+                skipped += 1
+                continue
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM lead_reviews
+                WHERE user_id = %s
+                  AND lower(email) = lower(%s)
+                  AND status = 'pending'
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (user_id, payload["email"]),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE lead_reviews
+                    SET query = %s,
+                        lead_json = %s::jsonb,
+                        org = %s,
+                        asn = %s,
+                        source = %s,
+                        score = %s,
+                        reason = %s,
+                        updated_at = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (
+                        payload["query"],
+                        json.dumps(payload["lead_json"], ensure_ascii=False),
+                        payload["org"],
+                        payload["asn"],
+                        payload["source"],
+                        payload["score"],
+                        payload["reason"],
+                        now,
+                        existing["id"],
+                        user_id,
+                    ),
+                )
+                updated += 1
+                continue
+            conn.execute(
+                """
+                INSERT INTO lead_reviews (
+                    user_id, status, query, lead_json, org, email, asn, source, score, reason,
+                    created_at, updated_at, reviewed_at
+                )
+                VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    user_id,
+                    status,
+                    payload["query"],
+                    json.dumps(payload["lead_json"], ensure_ascii=False),
+                    payload["org"],
+                    payload["email"],
+                    payload["asn"],
+                    payload["source"],
+                    payload["score"],
+                    payload["reason"],
+                    now,
+                    now,
+                    now if status != "pending" else None,
+                ),
+            )
+            inserted += 1
+    return {"inserted": inserted, "updated": updated, "skipped": skipped}
+
+
+def list_lead_reviews(user_id: int, *, status: str = "pending", limit: int = 100) -> list[dict]:
+    if status not in LEAD_REVIEW_STATUSES and status != "all":
+        status = "pending"
+    params: list[object] = [user_id]
+    where = "user_id = %s"
+    if status != "all":
+        where += " AND status = %s"
+        params.append(status)
+    params.append(min(max(int(limit), 1), 200))
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, status, query, lead_json, org, email, asn, source, score, reason,
+                   created_at, updated_at, reviewed_at
+            FROM lead_reviews
+            WHERE {where}
+            ORDER BY
+              CASE status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'imported' THEN 2 ELSE 3 END,
+              score DESC, updated_at DESC, id DESC
+            LIMIT %s
+            """,
+            params,
+        ).fetchall()
+    return [_lead_review_from_row(row) for row in rows]
+
+
+def update_lead_review_status(user_id: int, review_id: int, status: str) -> dict | None:
+    if status not in LEAD_REVIEW_STATUSES:
+        return None
+    now = utc_now()
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            UPDATE lead_reviews
+            SET status = %s, reviewed_at = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s
+            RETURNING id, status, query, lead_json, org, email, asn, source, score, reason,
+                      created_at, updated_at, reviewed_at
+            """,
+            (status, now if status != "pending" else None, now, review_id, user_id),
+        ).fetchone()
+    return _lead_review_from_row(row) if row else None
+
+
+def import_lead_reviews(user_id: int, review_ids: list[int]) -> dict:
+    ids = sorted({int(value) for value in review_ids if int(value) > 0})
+    if not ids:
+        return {"imported": 0, "skipped": 0, "duplicates": 0, "filtered": 0, "updated": 0}
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, lead_json, score, reason, source
+            FROM lead_reviews
+            WHERE user_id = %s AND id = ANY(%s)
+            """,
+            (user_id, ids),
+        ).fetchall()
+    payload: list[dict] = []
+    row_ids: list[int] = []
+    for row in rows:
+        lead = row["lead_json"] or {}
+        if isinstance(lead, str):
+            try:
+                lead = json.loads(lead)
+            except json.JSONDecodeError:
+                lead = {}
+        if not lead.get("email"):
+            continue
+        source = lead.get("source") or row.get("source") or "ai-lead"
+        detail = lead.get("source_detail") or ""
+        notes = f"AI评分 {row.get('score') or lead.get('lead_score') or 0} · {row.get('reason') or lead.get('lead_reason') or ''}"
+        if detail:
+            notes += f" · {detail}"
+        payload.append({**lead, "source": source, "notes": notes.strip(" ·")})
+        row_ids.append(int(row["id"]))
+
+    result = import_contacts(user_id, payload) if payload else {
+        "imported": 0,
+        "skipped": len(ids),
+        "duplicates": 0,
+        "filtered": 0,
+    }
+    if row_ids:
+        now = utc_now()
+        with get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE lead_reviews
+                SET status = 'imported', reviewed_at = %s, updated_at = %s
+                WHERE user_id = %s AND id = ANY(%s)
+                """,
+                (now, now, user_id, row_ids),
+            )
+    result["updated"] = len(row_ids)
+    return result
+
+
+def get_workbench_summary(user_id: int) -> dict:
+    now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+    today = now_dt.date().isoformat()
+    followup_before = (now_dt - timedelta(days=3)).isoformat()
+    with get_conn() as conn:
+        pending_reviews = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM lead_reviews
+            WHERE user_id = %s AND status = 'pending'
+            """,
+            (user_id,),
+        ).fetchone()["count"]
+        imported_today = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM contacts
+            WHERE user_id = %s AND created_at::date = %s::date
+            """,
+            (user_id, today),
+        ).fetchone()["count"]
+        unsent_new = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM contacts
+            WHERE user_id = %s AND email_sent = FALSE AND follow_up_status = 'new'
+            """,
+            (user_id,),
+        ).fetchone()["count"]
+        due_followups = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM contacts
+            WHERE user_id = %s
+              AND follow_up_status = 'contacted'
+              AND email_sent = TRUE
+              AND COALESCE(email_sent_at, updated_at, created_at) <= %s
+            """,
+            (user_id, followup_before),
+        ).fetchone()["count"]
+        warm_contacts = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM contacts
+            WHERE user_id = %s AND follow_up_status IN ('replied', 'interested')
+            """,
+            (user_id,),
+        ).fetchone()["count"]
+        followup_rows = conn.execute(
+            f"""
+            SELECT {CONTACT_SELECT_SQL}
+            FROM contacts
+            WHERE user_id = %s
+              AND follow_up_status = 'contacted'
+              AND email_sent = TRUE
+              AND COALESCE(email_sent_at, updated_at, created_at) <= %s
+            ORDER BY COALESCE(email_sent_at, updated_at, created_at) ASC, id ASC
+            LIMIT 8
+            """,
+            (user_id, followup_before),
+        ).fetchall()
+
+    return {
+        "today": today,
+        "pending_reviews": int(pending_reviews),
+        "imported_today": int(imported_today),
+        "unsent_new": int(unsent_new),
+        "due_followups": int(due_followups),
+        "warm_contacts": int(warm_contacts),
+        "review_items": list_lead_reviews(user_id, status="pending", limit=8),
+        "followup_items": [_contact_from_row(row) for row in followup_rows],
+        "new_items": list_contacts(
+            user_id,
+            status="unsent",
+            follow_up_status="new",
+            limit=8,
+        ),
+    }
+
+
+def list_contact_organizations(user_id: int, *, limit: int = 80) -> list[dict]:
+    contacts = list_contacts(user_id, limit=100000)
+    groups: dict[str, dict] = {}
+    for contact in contacts:
+        org = (contact.get("org") or "").strip()
+        email = contact.get("email") or ""
+        domain = email.split("@", 1)[1] if "@" in email else ""
+        key = org.lower() or f"domain:{domain.lower()}" or f"contact:{contact.get('id')}"
+        group = groups.setdefault(
+            key,
+            {
+                "org": org or domain or "—",
+                "domain": domain,
+                "asn": contact.get("asn"),
+                "contacts": [],
+                "roles": set(),
+                "sent": 0,
+                "warm": 0,
+                "latest_at": contact.get("updated_at") or contact.get("created_at") or "",
+            },
+        )
+        if not group.get("asn") and contact.get("asn"):
+            group["asn"] = contact.get("asn")
+        if contact.get("email_sent"):
+            group["sent"] += 1
+        if contact.get("follow_up_status") in {"replied", "interested"}:
+            group["warm"] += 1
+        for role in str(contact.get("roles") or "").split(","):
+            role = role.strip()
+            if role:
+                group["roles"].add(role)
+        group["contacts"].append(contact)
+        latest = contact.get("updated_at") or contact.get("created_at") or ""
+        if latest > (group.get("latest_at") or ""):
+            group["latest_at"] = latest
+
+    items = []
+    for group in groups.values():
+        group["roles"] = sorted(group["roles"])
+        group["count"] = len(group["contacts"])
+        group["contacts"] = group["contacts"][:8]
+        items.append(group)
+    items.sort(key=lambda item: (item["warm"], item["count"], item.get("latest_at") or ""), reverse=True)
+    return items[: min(max(int(limit), 1), 200)]
 
 
 def _merge_notes(old: str | None, new: str) -> str:

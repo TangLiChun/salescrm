@@ -22,8 +22,34 @@ from app.database import (
 )
 
 
+def check_static_index(errors: list[str]) -> None:
+    index_path = _ROOT / "app" / "static" / "index.html"
+    try:
+        html = index_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"static index: cannot read index.html: {exc}")
+        return
+
+    if '<th scope="col"ead>' in html:
+        errors.append("static index: malformed table header tag")
+    if html.count("<thead>") != html.count("</thead>"):
+        errors.append("static index: unbalanced thead tags")
+
+    required_tbody_ids = (
+        "results-body",
+        "ai-leads-body",
+        "schedules-body",
+        "contacts-body",
+    )
+    for tbody_id in required_tbody_ids:
+        if f'id="{tbody_id}"' not in html:
+            errors.append(f"static index: missing #{tbody_id}")
+
+
 def main() -> int:
     errors: list[str] = []
+
+    check_static_index(errors)
 
     if not check_db():
         errors.append("database connection failed")

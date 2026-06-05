@@ -3,6 +3,7 @@ import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { api, escapeHtml, errorMessage } from "../core/utils.js";
 import { replayAnimation, staggerChildren } from "../core/motion.js";
+import { deps } from "../core/deps.js";
 import {
   notifySuccess,
   notifyError,
@@ -198,6 +199,7 @@ function applyLeadDiscoverJobResult(job) {
     if (result.import) {
       deps.loadContacts?.().catch(() => {});
     }
+    deps.loadWorkbench?.().catch(() => {});
   }
   const activeView = document.querySelector(".tab.active")?.dataset.view;
   if (activeView !== "ai-leads") {
@@ -213,6 +215,7 @@ function applyEnrichContactJobResult(job) {
   if (result.import) {
     deps.loadContacts?.().catch(() => {});
   }
+  deps.loadWorkbench?.().catch(() => {});
   const count = Array.isArray(result.leads) ? result.leads.length : 0;
   const contactId = result.contact_id || "";
   notifySuccess(
@@ -238,6 +241,7 @@ async function applyPiAgentJobResult(job) {
     }
   }
   deps.loadContacts?.().catch(() => {});
+  deps.loadWorkbench?.().catch(() => {});
   const snippet = String(result.assistant || job.message || "").trim().slice(0, 120);
   const activeView = document.querySelector(".tab.active")?.dataset.view;
   if (activeView !== "pi-agent") {

@@ -38,21 +38,27 @@ from app.database import (
     delete_email_template,
     delete_scheduled_job,
     FOLLOW_UP_STATUSES,
+    LEAD_REVIEW_STATUSES,
     get_contact,
     get_contact_stats,
     get_scheduled_job,
     get_user_auth_by_id,
+    get_workbench_summary,
     import_contacts,
+    import_lead_reviews,
     init_db,
     list_contact_notes,
+    list_contact_organizations,
     list_contacts,
     list_email_templates,
     list_job_runs,
+    list_lead_reviews,
     list_scheduled_jobs,
     mark_contact_sent,
     update_contact,
     update_contact_follow_up_status,
     update_email_template,
+    update_lead_review_status,
     update_scheduled_job,
     update_user_password,
 )
@@ -217,6 +223,14 @@ class ContactBulkRequest(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=500)
     action: str = Field(min_length=1, max_length=32)
     follow_up_status: str | None = Field(default=None, max_length=32)
+
+
+class LeadReviewStatusRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=32)
+
+
+class LeadReviewImportRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -415,6 +429,49 @@ def me(request: Request) -> dict:
 @app.get("/api/stats")
 def stats(user: CurrentUser) -> dict:
     return get_contact_stats(user["id"])
+
+
+@app.get("/api/workbench")
+def workbench(user: CurrentUser) -> dict:
+    return get_workbench_summary(user["id"])
+
+
+@app.get("/api/contact-orgs")
+def contact_orgs(user: CurrentUser, limit: int = 80) -> dict:
+    orgs = list_contact_organizations(user["id"], limit=limit)
+    return {"organizations": orgs, "total": len(orgs)}
+
+
+@app.get("/api/lead-reviews")
+def get_lead_reviews(user: CurrentUser, status: str = "pending", limit: int = 100) -> dict:
+    if status != "all" and status not in LEAD_REVIEW_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status 必须是 all 或 {'/'.join(LEAD_REVIEW_STATUSES)}",
+        )
+    reviews = list_lead_reviews(user["id"], status=status, limit=limit)
+    return {"reviews": reviews, "total": len(reviews)}
+
+
+@app.patch("/api/lead-reviews/{review_id}")
+def patch_lead_review(review_id: int, body: LeadReviewStatusRequest, user: CurrentUser) -> dict:
+    status_value = body.status.strip().lower()
+    if status_value not in LEAD_REVIEW_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status 必须是 {'/'.join(LEAD_REVIEW_STATUSES)}",
+        )
+    review = update_lead_review_status(user["id"], review_id, status_value)
+    if not review:
+        raise HTTPException(status_code=404, detail="审核线索不存在")
+    return review
+
+
+@app.post("/api/lead-reviews/import")
+def import_reviewed_leads(body: LeadReviewImportRequest, user: CurrentUser) -> dict:
+    result = import_lead_reviews(user["id"], body.ids)
+    result["total"] = count_contacts(user["id"])
+    return result
 
 
 @app.get("/api/backup")

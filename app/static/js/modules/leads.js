@@ -116,8 +116,19 @@ export function formatSource(lead) {
   const source = lead.source || "unknown";
   const map = {
     "web-search": t("source.webSearch"),
+    web_search: t("source.webSearch"),
+    web_regex: t("channel.webRegex"),
+    web_unlocker: t("channel.webUnlocker"),
+    llm_extract: t("channel.llmExtract"),
     "arin-rdap": t("source.arinRdap"),
+    arin: t("channel.arin"),
     peeringdb: t("channel.peeringdb"),
+    shodan: t("channel.shodan"),
+    lowendtalk: t("channel.lowendtalk"),
+    webhostingtalk: t("channel.webhostingtalk"),
+    linkedin: t("channel.linkedin"),
+    x: t("channel.x"),
+    facebook: t("channel.facebook"),
     "ai-lead": "AI",
   };
   return map[source] || source;
@@ -372,6 +383,9 @@ export async function runLeadDiscovery() {
             showApiSuccess(formatImportResult(payload.import));
             await deps.loadContacts?.();
           }
+          if (payload.review) {
+            await deps.loadWorkbench?.();
+          }
           if ((payload.leads || state.aiLeads).length === 0) {
             showLeadsEmpty();
           }
@@ -417,6 +431,7 @@ export async function importAiLeads() {
     });
     showApiSuccess(formatImportResult(result));
     await deps.loadContacts?.();
+    await deps.loadWorkbench?.();
     deps.switchView("contacts");
   } catch (error) {
     showApiError(error, error.message || t("msg.importFailed"));

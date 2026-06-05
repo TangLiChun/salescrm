@@ -43,6 +43,7 @@ import {
   syncContactsSelectAllCheckbox,
   closeAllContactActionMenus,
   positionContactActionMenu,
+  switchContactViewMode,
   saveEmailTemplate,
   editEmailTemplate,
   deleteEmailTemplate,
@@ -92,6 +93,12 @@ import {
   resetLeadPreferences,
 } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
+import {
+  loadWorkbench,
+  importSelectedLeadReviews,
+  handleLeadReviewSelection,
+  handleLeadReviewAction,
+} from "./modules/workbench.js";
 import { switchView, refreshUiOnLanguageChange } from "./modules/views.js";
 
 const {
@@ -103,6 +110,9 @@ const {
   resultsBody,
   currentUserEl,
   logoutBtn,
+  refreshWorkbenchBtn,
+  leadReviewBody,
+  importReviewedLeadsBtn,
   piChatForm,
   piChatInput,
   piChatStopBtn,
@@ -119,6 +129,8 @@ const {
   contactsPageSizeSelect,
   contactsPrevBtn,
   contactsNextBtn,
+  contactsListViewBtn,
+  contactsOrgViewBtn,
   contactsSelectAll,
   contactsBody,
   bulkApplyStatusBtn,
@@ -154,6 +166,7 @@ const {
 registerDeps({
   switchView,
   loadContacts,
+  loadWorkbench,
   switchPiThread,
   fetchActivePiThreadHistory,
   restorePiChatUi,
@@ -235,6 +248,12 @@ retryDiscoverBtn.addEventListener("click", () => {
   runLeadDiscovery();
 });
 importLeadsBtn.addEventListener("click", importAiLeads);
+refreshWorkbenchBtn?.addEventListener("click", () => loadWorkbench().catch(showApiError));
+leadReviewBody?.addEventListener("change", handleLeadReviewSelection);
+leadReviewBody?.addEventListener("click", handleLeadReviewAction);
+importReviewedLeadsBtn?.addEventListener("click", () => {
+  importSelectedLeadReviews().catch(showApiError);
+});
 roleFilter.addEventListener("change", renderRows);
 contactStatusFilter.addEventListener("change", () => loadContacts(true).catch(showApiError));
 contactFollowUpFilter.addEventListener("change", () => loadContacts(true).catch(showApiError));
@@ -260,6 +279,8 @@ contactsNextBtn.addEventListener("click", () => {
     loadContacts().catch(showApiError);
   }
 });
+contactsListViewBtn?.addEventListener("click", () => switchContactViewMode("list"));
+contactsOrgViewBtn?.addEventListener("click", () => switchContactViewMode("orgs"));
 contactsSelectAll.addEventListener("change", () => {
   for (const contact of state.contacts) {
     if (contactsSelectAll.checked) {
@@ -519,7 +540,7 @@ async function bootstrap() {
   startJobEventStream();
   await resumeBackgroundJobs().catch((error) => console.warn("Job resume failed:", error));
   document.body.classList.add("app-ready");
-  switchView("lookup");
+  switchView("workbench");
 }
 
 bootstrap().catch((error) => {

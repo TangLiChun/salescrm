@@ -86,6 +86,9 @@ export function setPiMobilePanel(panel) {
   piMobileTabThreadsBtn?.classList.toggle("active", threads);
   piMobileTabChatBtn?.setAttribute("aria-selected", threads ? "false" : "true");
   piMobileTabThreadsBtn?.setAttribute("aria-selected", threads ? "true" : "false");
+  if (!threads) {
+    settlePiChatAtBottom();
+  }
 }
 
 export function refreshPiToolLabelsInDom() {
@@ -625,6 +628,7 @@ export function restorePiChatUi() {
     mountPiEmptyState();
     renderPiThreadList();
     updatePiChatHistoryHint();
+    settlePiChatAtBottom();
     return;
   }
   for (const item of state.piChatHistory) {
@@ -636,6 +640,7 @@ export function restorePiChatUi() {
   }
   renderPiThreadList();
   updatePiChatHistoryHint();
+  settlePiChatAtBottom();
 }
 
 export function updatePiChatHistoryHint() {
@@ -904,6 +909,19 @@ export async function importPiChatLookup(toolEl) {
 export function scrollPiChatToBottom() {
   if (!piChatMessagesEl) return;
   piChatMessagesEl.scrollTo({ top: piChatMessagesEl.scrollHeight, behavior: "smooth" });
+}
+
+export function settlePiChatAtBottom() {
+  if (!piChatMessagesEl) return;
+  const scroll = () => {
+    piChatMessagesEl.scrollTo({ top: piChatMessagesEl.scrollHeight, behavior: "auto" });
+  };
+  scroll();
+  requestAnimationFrame(() => {
+    scroll();
+    requestAnimationFrame(scroll);
+  });
+  setTimeout(scroll, 120);
 }
 
 export function stopPiDiscoverTimer(toolEl) {

@@ -23,6 +23,11 @@ const {
   contactStatusFilter,
   contactFollowUpFilter,
   contactSearchInput,
+  contactsListViewBtn,
+  contactsOrgViewBtn,
+  contactsTableShell,
+  contactOrgsView,
+  contactOrgsList,
   contactEditModal,
   contactEditSubtitle,
   contactEditForm,
@@ -210,7 +215,7 @@ export function renderContacts() {
 
 export function updateContactsBulkBar() {
   const count = state.selectedContactIds.size;
-  contactsBulkBar.classList.toggle("hidden", count === 0);
+  contactsBulkBar.classList.toggle("hidden", count === 0 || state.contactViewMode !== "list");
   contactsSelectedCountEl.textContent = t("msg.contactsSelected", { count });
 }
 
@@ -223,6 +228,10 @@ export function syncContactsSelectAllCheckbox() {
 }
 
 export function renderContactsPagination() {
+  if (state.contactViewMode === "orgs") {
+    contactsPagination.classList.add("hidden");
+    return;
+  }
   if (state.contactsTotal === 0) {
     contactsPagination.classList.add("hidden");
     return;
@@ -256,6 +265,63 @@ export async function loadContacts(resetPage = false) {
   state.contactsPages = data.pages || 1;
   state.contactsPageSize = data.page_size || state.contactsPageSize;
   renderContacts();
+}
+
+export function orgCoverageLabel(org) {
+  const roles = org.roles || [];
+  if (!roles.length) return t("contacts.orgNoRoles");
+  return roles.slice(0, 5).map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`).join("");
+}
+
+export function renderContactOrganizations() {
+  if (!contactOrgsList) return;
+  if (!state.contactOrganizations.length) {
+    contactOrgsList.innerHTML = `<p class="stats">${t("contacts.orgsEmpty")}</p>`;
+    return;
+  }
+  contactOrgsList.innerHTML = state.contactOrganizations.map((org) => {
+    const contacts = (org.contacts || []).map((contact) => `
+      <div class="org-contact-row">
+        <span>${escapeHtml(contact.name || contact.email || "—")}</span>
+        <a class="email-link" href="mailto:${encodeURIComponent(contact.email || "")}">${escapeHtml(contact.email || "—")}</a>
+        <span class="mono">${contact.asn ? `AS${escapeHtml(String(contact.asn))}` : "—"}</span>
+      </div>
+    `).join("");
+    return `
+      <article class="org-card">
+        <div class="org-card-head">
+          <div>
+            <h3>${escapeHtml(org.org || "—")}</h3>
+            <p class="stats">${org.asn ? `AS${escapeHtml(String(org.asn))}` : escapeHtml(org.domain || "ASN —")} · ${t("contacts.orgContactCount", { count: org.count || 0 })}</p>
+          </div>
+          <div class="org-card-metrics">
+            <span>${t("contacts.orgSent", { count: org.sent || 0 })}</span>
+            <span>${t("contacts.orgWarm", { count: org.warm || 0 })}</span>
+          </div>
+        </div>
+        <div class="org-role-coverage">${orgCoverageLabel(org)}</div>
+        <div class="org-contact-list">${contacts || `<p class="stats">${t("contacts.orgNoContacts")}</p>`}</div>
+      </article>`;
+  }).join("");
+}
+
+export async function loadContactOrganizations() {
+  const data = await api("/api/contact-orgs");
+  state.contactOrganizations = data.organizations || [];
+  renderContactOrganizations();
+}
+
+export function switchContactViewMode(mode) {
+  state.contactViewMode = mode === "orgs" ? "orgs" : "list";
+  contactsListViewBtn?.classList.toggle("active", state.contactViewMode === "list");
+  contactsOrgViewBtn?.classList.toggle("active", state.contactViewMode === "orgs");
+  contactsTableShell?.classList.toggle("hidden", state.contactViewMode !== "list");
+  contactOrgsView?.classList.toggle("hidden", state.contactViewMode !== "orgs");
+  contactsBulkBar?.classList.toggle("hidden", state.contactViewMode !== "list" || state.selectedContactIds.size === 0);
+  renderContactsPagination();
+  if (state.contactViewMode === "orgs") {
+    loadContactOrganizations().catch(showApiError);
+  }
 }
 
 export function getSelectedContactIds() {

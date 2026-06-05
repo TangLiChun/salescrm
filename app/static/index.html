@@ -21,7 +21,11 @@
       </div>
 
       <nav class="tabs app-nav">
-        <button type="button" class="tab nav-item active" data-view="lookup">
+        <button type="button" class="tab nav-item active" data-view="workbench">
+          <span class="nav-icon" aria-hidden="true">WB</span>
+          <span class="nav-label" data-i18n="nav.workbench">工作台</span>
+        </button>
+        <button type="button" class="tab nav-item" data-view="lookup">
           <span class="nav-icon" aria-hidden="true">RD</span>
           <span class="nav-label" data-i18n="nav.lookup">ASN 查询</span>
         </button>
@@ -66,7 +70,7 @@
     <div class="app-frame">
       <header class="app-header app-header-minimal">
         <div class="app-header-copy">
-          <h1 id="page-title">ASN 查询</h1>
+          <h1 id="page-title">今日工作台</h1>
         </div>
       </header>
 
@@ -86,7 +90,68 @@
       <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
       <div class="app-content">
-    <main id="lookup-view" class="layout">
+    <section id="workbench-view" class="workbench-view">
+      <section class="panel workbench-panel">
+        <div class="results-header">
+          <div>
+            <h2 data-i18n="workbench.title">今日工作台</h2>
+            <p id="workbench-stats" class="stats" data-i18n="common.loading">加载中…</p>
+          </div>
+          <div class="results-actions">
+            <button id="refresh-workbench-btn" type="button" class="secondary-btn" data-i18n="common.refresh">刷新</button>
+          </div>
+        </div>
+        <div id="workbench-metrics" class="stats-cards workbench-metrics"></div>
+      </section>
+
+      <section class="workbench-grid">
+        <div class="panel workbench-panel">
+          <div class="results-header compact">
+            <div>
+              <h2 data-i18n="workbench.reviewQueue">线索审核队列</h2>
+              <p id="lead-review-stats" class="stats">—</p>
+            </div>
+            <div class="results-actions">
+              <button id="import-reviewed-leads-btn" type="button" class="success-btn" disabled data-i18n="workbench.importSelected">导入选中</button>
+            </div>
+          </div>
+          <div class="table-wrap review-table-wrap">
+            <table class="review-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="col-select" data-i18n="lookup.colSelect">选</th>
+                  <th scope="col" data-i18n="aiLeads.colScore">分数</th>
+                  <th scope="col" data-i18n="lookup.colOrg">组织</th>
+                  <th scope="col" data-i18n="lookup.colEmail">邮箱</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">ASN</th>
+                  <th scope="col" data-i18n="aiLeads.colSource">来源</th>
+                  <th scope="col" data-i18n="contacts.colActions">操作</th>
+                </tr>
+              </thead>
+              <tbody id="lead-review-body">
+                <tr class="empty-row">
+                  <td colspan="8" data-i18n="workbench.noReviewLeads">暂无待审核线索</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="workbench-side">
+          <div class="panel workbench-panel">
+            <h2 data-i18n="workbench.followups">到期跟进</h2>
+            <div id="workbench-followups" class="action-list"></div>
+          </div>
+          <div class="panel workbench-panel">
+            <h2 data-i18n="workbench.newContacts">未发信新联系人</h2>
+            <div id="workbench-new-contacts" class="action-list"></div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <main id="lookup-view" class="layout hidden">
       <section class="panel input-panel">
         <label for="asn-input" class="label" data-i18n="lookup.asnList">ASN 列表</label>
         <textarea
@@ -140,7 +205,7 @@
 
         <div class="table-wrap">
           <table>
-            <th scope="col"ead>
+            <thead>
               <tr>
                 <th scope="col" class="col-select" data-i18n="lookup.colSelect">选</th>
                 <th scope="col">ASN</th>
@@ -213,7 +278,7 @@
         <div id="ai-leads-state" class="leads-state hidden"></div>
         <div class="table-wrap">
           <table>
-            <th scope="col"ead>
+            <thead>
               <tr>
                 <th scope="col" class="col-select" data-i18n="lookup.colSelect">选</th>
                 <th scope="col" data-i18n="aiLeads.colScore">分数</th>
@@ -358,7 +423,7 @@
 
       <div class="table-wrap schedule-table">
         <table>
-          <th scope="col"ead>
+          <thead>
             <tr>
               <th scope="col" data-i18n="schedules.colName">名称</th>
               <th scope="col" data-i18n="schedules.colInterval">间隔</th>
@@ -695,6 +760,10 @@
           </label>
         </div>
         <div class="contacts-toolbar-actions">
+          <div class="segmented-control contact-view-toggle" role="group" aria-label="联系人视图">
+            <button id="contacts-list-view-btn" type="button" class="segmented-btn active" data-contact-view="list" data-i18n="contacts.listView">列表</button>
+            <button id="contacts-org-view-btn" type="button" class="segmented-btn" data-contact-view="orgs" data-i18n="contacts.orgView">组织</button>
+          </div>
           <button id="export-contacts-btn" type="button" class="secondary-btn" data-i18n="contacts.exportCsv">导出 CSV</button>
           <button id="dedupe-contacts-btn" type="button" class="secondary-btn" data-i18n="contacts.dedupe">去重</button>
           <button id="refresh-contacts-btn" type="button" class="secondary-btn" data-i18n="common.refresh">刷新</button>
@@ -718,10 +787,14 @@
         <button id="bulk-delete-btn" type="button" class="secondary-btn" data-i18n="contacts.bulkDelete">删除选中</button>
       </div>
 
+      <div id="contact-orgs-view" class="contact-orgs-view hidden">
+        <div id="contact-orgs-list" class="contact-orgs-list"></div>
+      </div>
+
       <div class="contacts-table-shell">
       <div class="table-wrap contacts-table-wrap" tabindex="0" aria-label="Contacts table">
         <table class="contacts-table">
-          <th scope="col"ead>
+          <thead>
             <tr>
               <th scope="col" class="col-select"><input id="contacts-select-all" type="checkbox" data-i18n-title="contacts.selectAllPage" title="全选本页"></th>
               <th scope="col" class="col-status" data-i18n="lookup.colStatus">状态</th>
