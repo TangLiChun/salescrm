@@ -14,6 +14,9 @@ COPY app ./app
 COPY scripts ./scripts
 RUN mkdir -p /app/data
 
+# 构建阶段验证依赖与应用可导入，避免运行时才暴露 ModuleNotFoundError
+RUN python -c "from app.main import app; print('app import ok')"
+
 EXPOSE 8000
 
 CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}

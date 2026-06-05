@@ -114,23 +114,38 @@ ensure_repo() {
 deploy_compose() {
   log "构建并启动容器 (port ${APP_PORT})..."
   export APP_PORT
-  $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --build --remove-orphans
+  if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --build --remove-orphans; then
+    echo "ERROR: docker compose up 失败" >&2
+    show_failure_logs
+    exit 1
+  fi
   echo ""
   $SUDO docker compose ps
 }
 
+show_failure_logs() {
+  echo ""
+  echo "========== 部署失败 · 最近日志 =========="
+  (cd "${APP_DIR}" && $SUDO docker compose logs --tail 60) 2>/dev/null || true
+  echo "========================================="
+  echo "排查: cd ${APP_DIR} && ./scripts/check.sh"
+  echo "      cd ${APP_DIR} && docker compose logs -f"
+}
+
 wait_healthy() {
-  log "等待服务就绪..."
+  log "等待服务就绪并验证..."
   local i
-  for i in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1; then
+  for i in $(seq 1 45); do
+    if APP_PORT="${APP_PORT}" "${SCRIPT_DIR}/check.sh" --quiet 2>/dev/null; then
       log "健康检查通过"
       return 0
     fi
     sleep 2
   done
-  warn "健康检查超时，请查看日志: docker compose logs -f"
-  return 0
+  echo ""
+  echo "ERROR: 部署完成但服务未正常运行（超时 ${i}×2s）" >&2
+  APP_PORT="${APP_PORT}" "${SCRIPT_DIR}/check.sh" || true
+  exit 1
 }
 
 print_summary() {
@@ -138,13 +153,14 @@ print_summary() {
   ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
   echo ""
   echo "=========================================="
-  echo " Sales CRM 部署完成"
+  echo " Sales CRM 部署成功"
   echo "=========================================="
   echo " 访问:    http://${ip}:${APP_PORT}/"
   echo " 健康:    http://${ip}:${APP_PORT}/health"
   echo " 账号:    admin / admin123  (登录后请在系统设置修改)"
   echo " 目录:    ${APP_DIR}"
   echo " 更新:    cd ${APP_DIR} && sudo ./scripts/deploy.sh"
+  echo " 状态:    cd ${APP_DIR} && ./scripts/check.sh"
   echo " 日志:    cd ${APP_DIR} && docker compose logs -f"
   echo " 重启:    cd ${APP_DIR} && docker compose restart"
   echo " 停止:    cd ${APP_DIR} && docker compose down"
