@@ -147,8 +147,6 @@ def chat_completion_with_tools_stream(
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
     if tool_calls:
         message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
-    elif tools and content_parts:
-        yield {"type": "content_delta", "text": "".join(content_parts)}
     yield {"type": "message", "message": message}
 
 

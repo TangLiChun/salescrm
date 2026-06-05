@@ -2249,13 +2249,36 @@ function renderMarkdown(text) {
   return out.join("");
 }
 
+function sanitizePiAssistantDisplay(text) {
+  const raw = String(text || "");
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  const markers = [
+    "[工具",
+    "[tool",
+    "tool_calls",
+    "tool_call",
+    "dsml",
+    "<|",
+    "```json",
+    '{"query',
+    '{"queries',
+  ];
+  let cutAt = raw.length;
+  for (const marker of markers) {
+    const idx = lower.indexOf(marker.toLowerCase());
+    if (idx >= 0) cutAt = Math.min(cutAt, idx);
+  }
+  return raw.slice(0, cutAt).trim();
+}
+
 function appendPiChatBubble(role, text) {
   clearPiChatEmpty();
   const el = document.createElement("div");
   el.className = `pi-chat-bubble ${role}`;
   if (role === "assistant") {
     el.classList.add("markdown");
-    el.innerHTML = renderMarkdown(text || "");
+    el.innerHTML = renderMarkdown(sanitizePiAssistantDisplay(text || ""));
   } else {
     el.textContent = text;
   }
@@ -2271,7 +2294,7 @@ function updatePiChatAssistantBubble(el, text, streaming = false) {
   el.classList.toggle("streaming", streaming);
   if (piChatStreamRaf) cancelAnimationFrame(piChatStreamRaf);
   piChatStreamRaf = requestAnimationFrame(() => {
-    el.innerHTML = renderMarkdown(text || "");
+    el.innerHTML = renderMarkdown(sanitizePiAssistantDisplay(text || ""));
     piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
     piChatStreamRaf = null;
   });
@@ -2467,7 +2490,7 @@ async function sendPiChatMessage(message) {
           assistantStreamText += payload.text || "";
           updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, true);
         } else if (payload.type === "assistant_done") {
-          assistantStreamText = payload.text || assistantStreamText;
+          assistantStreamText = sanitizePiAssistantDisplay(payload.text || assistantStreamText);
           updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, false);
           if (!activeAssistantEl && assistantStreamText) {
             activeAssistantEl = appendPiChatBubble("assistant", assistantStreamText);

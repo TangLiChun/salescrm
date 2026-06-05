@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -39,6 +41,24 @@ MAX_TOOL_ROUNDS = 8
 MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
 MAX_WEB_SEARCH_QUERIES = 4
 TOOL_HEARTBEAT_SECONDS = 12
+KNOWN_TOOL_NAMES = {
+    "list_contacts",
+    "import_leads",
+    "get_contact",
+    "update_contact",
+    "mark_contact_sent",
+    "delete_contacts",
+    "add_contact_note",
+    "dedupe_contacts",
+    "get_import_filters",
+    "update_import_filters",
+    "list_schedules",
+    "get_search_config",
+    "web_search",
+    "lookup_asns",
+    "discover_leads",
+    "enrich_contact",
+}
 
 AGENT_TOOLS: list[dict[str, Any]] = [
     {
@@ -438,7 +458,10 @@ def _assistant_intro_before_tools(content: str) -> str:
     cut_at = len(text)
     for marker in (
         "[工具",
+        "[tool",
         "tool_calls",
+        "tool_call",
+        "dsml",
         "<|",
         "```json",
         '{"query',
@@ -449,6 +472,86 @@ def _assistant_intro_before_tools(content: str) -> str:
         if idx >= 0:
             cut_at = min(cut_at, idx)
     return text[:cut_at].strip()
+
+
+def _content_looks_like_tool_call(content: str) -> bool:
+    lower = (content or "").lower()
+    return any(
+        marker in lower
+        for marker in (
+            "[工具",
+            "[tool",
+            "tool_calls",
+            "tool_call",
+            "dsml",
+            "<|",
+            '{"query',
+            '{"queries',
+        )
+    )
+
+
+def _extract_json_args(text: str) -> dict[str, Any]:
+    start = text.find("{")
+    if start < 0:
+        return {}
+    blob = text[start:]
+    blob = re.sub(r"<\|[^|>]*\|>", "", blob, flags=re.I)
+    blob = re.sub(r"<\s*/?\s*\|\s*\|[^>]*>", "", blob, flags=re.I)
+    blob = blob.strip()
+    for end in range(len(blob), 0, -1):
+        if blob[end - 1] != "}":
+            continue
+        try:
+            parsed = json.loads(blob[:end])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _infer_tool_name(name: str, args: dict[str, Any]) -> str:
+    cleaned = (name or "").strip().lower()
+    if cleaned in KNOWN_TOOL_NAMES:
+        return cleaned
+    if "queries" in args or "query" in args or "max_results" in args:
+        return "web_search"
+    if "text" in args or "asns" in args:
+        return "lookup_asns"
+    if "contact_id" in args:
+        return "enrich_contact"
+    if "rows" in args:
+        return "import_leads"
+    if "q" in args and "limit" in args:
+        return "list_contacts"
+    return cleaned or "unknown"
+
+
+def _parse_inline_tool_calls(content: str) -> tuple[str, list[dict[str, Any]]]:
+    text = (content or "").strip()
+    if not text or not _content_looks_like_tool_call(text):
+        return text, []
+
+    intro = _assistant_intro_before_tools(text)
+    name = "unknown"
+    name_match = re.search(r"\[(?:工具|tool)[:\s]*([a-zA-Z0-9_]+)\]", text, re.I)
+    if name_match:
+        name = name_match.group(1)
+    args = _extract_json_args(text)
+    name = _infer_tool_name(name, args)
+    if name == "unknown" and not args:
+        return text, []
+
+    tool_call = {
+        "id": f"inline-{uuid.uuid4().hex[:8]}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(args, ensure_ascii=False),
+        },
+    }
+    return intro, [tool_call]
 
 
 async def _discover_leads_tool(
@@ -794,6 +897,13 @@ async def agent_chat_stream(
 
         tool_calls = assistant.get("tool_calls") or []
         content = (assistant.get("content") or content_buffer or "").strip()
+
+        if not tool_calls and content:
+            intro, inline_calls = _parse_inline_tool_calls(content)
+            if inline_calls:
+                tool_calls = inline_calls
+                content = intro
+                assistant = {**assistant, "tool_calls": tool_calls, "content": intro or None}
 
         if content and not tool_calls:
             yield {"type": "assistant_start"}
