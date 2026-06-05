@@ -34,6 +34,8 @@
       <button type="button" class="tab" data-view="stats" data-i18n="nav.stats">统计概览</button>
     </nav>
 
+    <div id="background-jobs-bar" class="background-jobs-bar hidden" aria-live="polite"></div>
+
     <main id="lookup-view" class="layout">
       <section class="panel input-panel">
         <label for="asn-input" class="label" data-i18n="lookup.asnList">ASN 列表</label>
@@ -49,6 +51,10 @@
           <label class="field">
             <span data-i18n="lookup.delay">请求间隔（秒）</span>
             <input id="delay" type="number" min="0" max="5" step="0.5" value="1">
+          </label>
+          <label class="field checkbox-field">
+            <input id="lookup-background" type="checkbox">
+            <span data-i18n="jobs.runInBackground">后台运行（可关闭页面）</span>
           </label>
           <button id="lookup-btn" type="button" data-i18n="lookup.start">开始查询</button>
         </div>
@@ -127,6 +133,10 @@
           <label class="field checkbox-field">
             <input id="auto-import" type="checkbox">
             <span data-i18n="aiLeads.autoImport">自动导入联系人</span>
+          </label>
+          <label class="field checkbox-field">
+            <input id="discover-background" type="checkbox">
+            <span data-i18n="jobs.runInBackground">后台运行（可关闭页面）</span>
           </label>
           <button id="discover-via-pi-btn" type="button" data-i18n="aiLeads.discoverViaPi">在 Pi 助手中找线索</button>
           <button id="discover-btn" type="button" class="secondary-btn" data-i18n="aiLeads.discoverDirect">直接运行（表格视图）</button>
@@ -516,21 +526,21 @@
         <button id="bulk-delete-btn" type="button" class="secondary-btn" data-i18n="contacts.bulkDelete">删除选中</button>
       </div>
 
-      <div class="table-wrap">
-        <table>
+      <div class="table-wrap contacts-table-wrap">
+        <table class="contacts-table">
           <thead>
             <tr>
               <th class="col-select"><input id="contacts-select-all" type="checkbox" data-i18n-title="contacts.selectAllPage" title="全选本页"></th>
-              <th data-i18n="lookup.colStatus">状态</th>
-              <th data-i18n="lookup.colOrg">组织</th>
-              <th data-i18n="lookup.colName">名称</th>
-              <th data-i18n="lookup.colEmail">邮箱</th>
-              <th>Role</th>
-              <th>ASN</th>
-              <th data-i18n="aiLeads.colSource">来源</th>
-              <th data-i18n="contacts.colNotes">备注</th>
-              <th data-i18n="contacts.colImportedAt">导入时间</th>
-              <th data-i18n="contacts.colActions">操作</th>
+              <th class="col-status" data-i18n="lookup.colStatus">状态</th>
+              <th class="col-org" data-i18n="lookup.colOrg">组织</th>
+              <th class="col-name" data-i18n="lookup.colName">名称</th>
+              <th class="col-email" data-i18n="lookup.colEmail">邮箱</th>
+              <th class="col-role">Role</th>
+              <th class="col-asn">ASN</th>
+              <th class="col-source" data-i18n="aiLeads.colSource">来源</th>
+              <th class="col-notes" data-i18n="contacts.colNotes">备注</th>
+              <th class="col-imported" data-i18n="contacts.colImportedAt">导入时间</th>
+              <th class="col-actions" data-i18n="contacts.colActions">操作</th>
             </tr>
           </thead>
           <tbody id="contacts-body">

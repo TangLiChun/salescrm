@@ -77,6 +77,7 @@ REQUIRED_TABLES = (
     "users",
     "contacts",
     "scheduled_jobs",
+    "background_jobs",
     "app_settings",
     "contact_notes",
     "job_runs",
@@ -202,6 +203,24 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC);
             CREATE INDEX IF NOT EXISTS idx_email_templates_user ON email_templates(user_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS background_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                params_json TEXT NOT NULL DEFAULT '{}',
+                progress_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT,
+                message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_background_jobs_user_status
+                ON background_jobs(user_id, status, updated_at DESC);
             """
         )
 
@@ -1090,3 +1109,100 @@ def contacts_to_csv(contacts: list[dict]) -> str:
         ]
         lines.append(",".join(_csv_cell(v) for v in row))
     return "\n".join(lines) + "\n"
+
+
+def create_background_job(user_id: int, job_type: str, params: dict) -> dict:
+    import json as _json
+
+    now = utc_now()
+    with get_conn() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO background_jobs (
+                user_id, job_type, status, params_json, progress_json, created_at, updated_at
+            ) VALUES (?, ?, 'pending', ?, '{}', ?, ?)
+            """,
+            (user_id, job_type, _json.dumps(params, ensure_ascii=False), now, now),
+        )
+        job_id = cursor.lastrowid
+    job = get_background_job(job_id, user_id=user_id)
+    assert job is not None
+    return job
+
+
+def get_background_job(job_id: int, *, user_id: int | None = None) -> dict | None:
+    with get_conn() as conn:
+        if user_id is None:
+            row = conn.execute(
+                "SELECT * FROM background_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM background_jobs WHERE id = ? AND user_id = ?",
+                (job_id, user_id),
+            ).fetchone()
+    return dict(row) if row else None
+
+
+def list_background_jobs(user_id: int, *, active_only: bool = False) -> list[dict]:
+    query = "SELECT * FROM background_jobs WHERE user_id = ?"
+    params: list[object] = [user_id]
+    if active_only:
+        query += " AND status IN ('pending', 'running')"
+    query += " ORDER BY updated_at DESC LIMIT 50"
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_background_job(
+    job_id: int,
+    *,
+    status: str | None = None,
+    message: str | None = None,
+    progress: dict | None = None,
+    result: dict | None = None,
+    finished_at: bool = False,
+) -> None:
+    import json as _json
+
+    fields: list[str] = ["updated_at = ?"]
+    values: list[object] = [utc_now()]
+    if status is not None:
+        fields.append("status = ?")
+        values.append(status)
+    if message is not None:
+        fields.append("message = ?")
+        values.append(message[:500])
+    if progress is not None:
+        fields.append("progress_json = ?")
+        values.append(_json.dumps(progress, ensure_ascii=False))
+    if result is not None:
+        fields.append("result_json = ?")
+        values.append(_json.dumps(result, ensure_ascii=False))
+    if finished_at:
+        fields.append("finished_at = ?")
+        values.append(utc_now())
+    values.append(job_id)
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE background_jobs SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+
+
+def mark_interrupted_background_jobs() -> None:
+    now = utc_now()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE background_jobs
+            SET status = 'error',
+                message = '服务重启，任务中断',
+                updated_at = ?,
+                finished_at = ?
+            WHERE status IN ('pending', 'running')
+            """,
+            (now, now),
+        )

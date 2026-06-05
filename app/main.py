@@ -55,6 +55,12 @@ from app.database import (
     update_scheduled_job,
     update_user_password,
 )
+from app.background_jobs import (
+    get_job_for_user,
+    list_jobs_for_user,
+    recover_background_jobs_on_startup,
+    spawn_background_job,
+)
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.scheduler import run_scheduled_job, start_scheduler, stop_scheduler
@@ -77,6 +83,7 @@ init_db()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    recover_background_jobs_on_startup()
     await start_scheduler()
     yield
     await stop_scheduler()
@@ -671,6 +678,55 @@ async def lookup_stream(body: LookupRequest, _: CurrentUser) -> StreamingRespons
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/jobs/lookup")
+async def create_lookup_job(body: LookupRequest, user: CurrentUser) -> dict:
+    asns = parse_asns_from_text(body.text)
+    if not asns:
+        raise HTTPException(status_code=400, detail="No valid ASNs found.")
+    if len(asns) > MAX_ASNS:
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_ASNS} ASNs per request.")
+    job = spawn_background_job(
+        user["id"],
+        "lookup",
+        {"text": body.text, "delay": body.delay, "timeout": body.timeout},
+    )
+    return {"job": job}
+
+
+@app.post("/api/jobs/leads/discover")
+async def create_lead_discover_job(body: LeadDiscoverRequest, user: CurrentUser) -> dict:
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 LLM API Key，请在系统设置中填写",
+        )
+    job = spawn_background_job(
+        user["id"],
+        "lead_discover",
+        {
+            "query": body.query,
+            "min_score": body.min_score,
+            "delay": body.delay,
+            "auto_import": body.auto_import,
+        },
+    )
+    return {"job": job}
+
+
+@app.get("/api/jobs")
+def list_background_jobs_route(user: CurrentUser, active: bool = False) -> dict:
+    jobs = list_jobs_for_user(user["id"], active_only=active)
+    return {"jobs": jobs}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_background_job_route(job_id: int, user: CurrentUser) -> dict:
+    job = get_job_for_user(user["id"], job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"job": job}
 
 
 @app.post("/api/leads/discover/stream")

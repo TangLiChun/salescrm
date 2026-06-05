@@ -112,7 +112,12 @@ const retryDiscoverBtn = document.getElementById("retry-discover-btn");
 const leadDetailModal = document.getElementById("lead-detail-modal");
 const leadDetailBody = document.getElementById("lead-detail-body");
 const leadDetailImport = document.getElementById("lead-detail-import");
+const lookupBackgroundInput = document.getElementById("lookup-background");
+const discoverBackgroundInput = document.getElementById("discover-background");
+const backgroundJobsBar = document.getElementById("background-jobs-bar");
 let detailLeadIndex = null;
+
+const backgroundJobTrackers = new Map();
 
 let allRows = [];
 let csvContent = "";
@@ -329,14 +334,14 @@ function renderContacts() {
     tr.innerHTML = `
       <td class="col-select"><input type="checkbox" class="contact-select" data-id="${contact.id}" ${checked}></td>
       <td>${statusBadge}</td>
-      <td>${escapeHtml(contact.org || "—")}</td>
-      <td>${escapeHtml(contact.name || "—")}</td>
-      <td><a class="email-link" href="mailto:${contact.email}">${escapeHtml(contact.email)}</a></td>
-      <td>${roles || "—"}</td>
-      <td class="mono">${contact.asn ? `AS${contact.asn}` : "—"}</td>
-      <td>${escapeHtml(contact.source || "arin")}</td>
-      <td>${escapeHtml(contact.notes || "—")}</td>
-      <td class="mono">${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
+      <td class="col-org">${escapeHtml(contact.org || "—")}</td>
+      <td class="col-name">${escapeHtml(contact.name || "—")}</td>
+      <td class="col-email"><a class="email-link" href="mailto:${contact.email}">${escapeHtml(contact.email)}</a></td>
+      <td class="col-role">${roles || "—"}</td>
+      <td class="col-asn mono">${contact.asn ? `AS${contact.asn}` : "—"}</td>
+      <td class="col-source">${escapeHtml(contact.source || "arin")}</td>
+      <td class="col-notes">${escapeHtml(contact.notes || "—")}</td>
+      <td class="col-imported mono">${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
         <button type="button" class="link-btn action-enrich-pi" data-id="${contact.id}">${t("contacts.actionEnrich")}</button>
         <button type="button" class="link-btn action-edit" data-id="${contact.id}">${t("contacts.actionEdit")}</button>
@@ -443,6 +448,21 @@ async function runLookup() {
   const text = asnInput.value.trim();
   if (!text) {
     alert(t("msg.enterAsnList"));
+    return;
+  }
+
+  if (lookupBackgroundInput?.checked) {
+    try {
+      const delay = Number(delayInput.value) || 0;
+      const data = await api("/api/jobs/lookup", {
+        method: "POST",
+        body: JSON.stringify({ text, delay, timeout: 20 }),
+      });
+      trackBackgroundJob(data.job);
+      alert(t("msg.jobStartedBackground"));
+    } catch (error) {
+      alert(errorMessage(error, t("msg.lookupFailed")));
+    }
     return;
   }
 
@@ -2248,6 +2268,25 @@ async function runLeadDiscovery() {
     return;
   }
 
+  if (discoverBackgroundInput?.checked) {
+    try {
+      const data = await api("/api/jobs/leads/discover", {
+        method: "POST",
+        body: JSON.stringify({
+          query,
+          min_score: Number(minScoreInput.value) || 60,
+          delay: 0.5,
+          auto_import: autoImportInput.checked,
+        }),
+      });
+      trackBackgroundJob(data.job);
+      alert(t("msg.jobStartedBackground"));
+    } catch (error) {
+      alert(errorMessage(error, t("msg.leadsError", { message: error.message })));
+    }
+    return;
+  }
+
   aiLeads = [];
   renderAiLeads();
   aiPlanEl.classList.add("hidden");
@@ -2431,6 +2470,130 @@ async function bootstrap() {
   scheduleQueryInput.value = leadQueryInput.value;
   await loadContacts();
   await loadSchedules();
+  await resumeBackgroundJobs();
+}
+
+function backgroundJobLabel(job) {
+  const progress = job.progress || {};
+  if (job.job_type === "lookup") {
+    if (progress.type === "progress") {
+      return t("jobs.lookupRunning", { current: progress.index, total: progress.total });
+    }
+    return t("jobs.lookupStarting");
+  }
+  if (progress.message) {
+    return t("jobs.leadsProgress", { message: progress.message });
+  }
+  return t("jobs.leadsRunning");
+}
+
+function renderBackgroundJobsBar() {
+  if (!backgroundJobsBar) return;
+  const active = [...backgroundJobTrackers.values()]
+    .map((entry) => entry.job)
+    .filter((job) => job && (job.status === "pending" || job.status === "running"));
+  if (!active.length) {
+    backgroundJobsBar.classList.add("hidden");
+    backgroundJobsBar.innerHTML = "";
+    return;
+  }
+  backgroundJobsBar.classList.remove("hidden");
+  backgroundJobsBar.innerHTML = active
+    .map(
+      (job) =>
+        `<span class="background-job-chip">${escapeHtml(backgroundJobLabel(job))}</span>`,
+    )
+    .join("");
+}
+
+function applyLookupJobResult(job) {
+  const result = job.result || {};
+  if (Array.isArray(result.rows)) {
+    allRows = result.rows;
+    for (const row of allRows) ensureRowSelected(row);
+    csvContent = result.csv || "";
+    renderRows();
+    exportBtn.disabled = allRows.length === 0;
+    importBtn.disabled = getSelectedImportableRows().length === 0;
+    progressEl.classList.remove("hidden");
+    progressFill.style.width = "100%";
+    progressText.textContent = t("msg.lookupDone");
+  }
+  const activeView = document.querySelector(".tab.active")?.dataset.view;
+  if (activeView !== "lookup") {
+    alert(t("jobs.lookupDone", { emails: result.emails || 0 }));
+  }
+}
+
+function applyLeadDiscoverJobResult(job) {
+  const result = job.result || {};
+  if (Array.isArray(result.leads)) {
+    aiLeads = result.leads.map((lead) => {
+      ensureLeadSelected(lead);
+      return lead;
+    });
+    renderAiLeads();
+    hideLeadsState();
+    aiProgressEl.classList.add("hidden");
+    if (result.import) {
+      loadContacts().catch(() => {});
+    }
+  }
+  const activeView = document.querySelector(".tab.active")?.dataset.view;
+  if (activeView !== "ai-leads") {
+    alert(t("jobs.leadsDone", { count: (result.leads || []).length }));
+  }
+}
+
+function finishBackgroundJob(job) {
+  if (job.status === "done") {
+    if (job.job_type === "lookup") applyLookupJobResult(job);
+    else if (job.job_type === "lead_discover") applyLeadDiscoverJobResult(job);
+  } else if (job.status === "error") {
+    alert(`${t("jobs.failed")}: ${job.message || ""}`);
+  }
+  backgroundJobTrackers.delete(job.id);
+  renderBackgroundJobsBar();
+}
+
+async function pollBackgroundJob(jobId) {
+  try {
+    const data = await api(`/api/jobs/${jobId}`);
+    const job = data.job;
+    if (!job) return;
+    const entry = backgroundJobTrackers.get(jobId);
+    if (entry) entry.job = job;
+    renderBackgroundJobsBar();
+    if (job.status === "done" || job.status === "error") {
+      if (entry?.timer) clearInterval(entry.timer);
+      finishBackgroundJob(job);
+    }
+  } catch {
+    // keep polling on transient errors
+  }
+}
+
+function trackBackgroundJob(job) {
+  if (!job?.id) return;
+  const existing = backgroundJobTrackers.get(job.id);
+  if (existing?.timer) clearInterval(existing.timer);
+  const entry = { job, timer: setInterval(() => pollBackgroundJob(job.id), 2000) };
+  backgroundJobTrackers.set(job.id, entry);
+  renderBackgroundJobsBar();
+  if (job.status === "done" || job.status === "error") {
+    finishBackgroundJob(job);
+  } else {
+    pollBackgroundJob(job.id).catch(() => {});
+  }
+}
+
+async function resumeBackgroundJobs() {
+  try {
+    const data = await api("/api/jobs?active=true");
+    for (const job of data.jobs || []) trackBackgroundJob(job);
+  } catch {
+    // ignore
+  }
 }
 
 lookupBtn.addEventListener("click", runLookup);
@@ -2717,6 +2880,7 @@ function refreshUiOnLanguageChange() {
   } else {
     updatePiAgentStatus();
   }
+  renderBackgroundJobsBar();
 }
 
 window.addEventListener("languagechange", refreshUiOnLanguageChange);
