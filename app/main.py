@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.agent_routes import router as agent_router
 from app.auth import (
     SESSION_USER_KEY,
     CurrentUser,
@@ -57,7 +58,13 @@ from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.scheduler import run_scheduled_job, start_scheduler, stop_scheduler
 from app.security import verify_password
-from app.settings_store import get_public_settings, get_settings_for_edit, get_setting, update_settings
+from app.settings_store import (
+    get_public_settings,
+    get_settings_for_edit,
+    get_setting,
+    regenerate_agent_api_token,
+    update_settings,
+)
 from app.sources import list_channels
 from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
 
@@ -81,6 +88,7 @@ app.add_middleware(
     https_only=get_setting("session_https_only", "0") == "1",
 )
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+app.include_router(agent_router)
 
 
 class LookupRequest(BaseModel):
@@ -237,6 +245,12 @@ def get_settings(_: CurrentUser) -> dict:
 def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
     updates = body.model_dump(exclude_none=True)
     return update_settings(updates)
+
+
+@app.post("/api/settings/agent-token/regenerate")
+def regenerate_agent_token(_: CurrentUser) -> dict:
+    token = regenerate_agent_api_token()
+    return {"agent_api_token": token, "agent_api_url": "http://127.0.0.1:8000"}
 
 
 @app.get("/api/me")

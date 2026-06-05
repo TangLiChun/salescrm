@@ -341,6 +341,19 @@
                 <label class="field"><span>检查间隔（秒）</span>
                   <input id="setting-scheduler-poll-seconds" type="number" min="30" max="3600"></label>
               </fieldset>
+              <fieldset>
+                <legend>Pi Agent API</legend>
+                <p class="settings-desc">在同一台 VPS 上运行 <a href="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent" target="_blank" rel="noopener">Pi Coding Agent</a> 时，用下方 Token 调用 CRM。Base URL：<code>http://127.0.0.1:8000</code></p>
+                <label class="field"><span>Agent Token</span>
+                  <div class="controls">
+                    <input id="setting-agent-api-token" type="text" readonly placeholder="点击「重新生成」获取 Token" class="token-field">
+                    <button id="copy-agent-token-btn" type="button" class="secondary-btn">复制</button>
+                    <button id="regenerate-agent-token-btn" type="button" class="secondary-btn">重新生成</button>
+                  </div>
+                </label>
+                <p id="agent-token-status" class="stats"></p>
+                <p class="hint">安装 Pi 扩展见仓库 <code>integrations/pi/README.md</code></p>
+              </fieldset>
             </div>
 
             <!-- 邮件模板 -->

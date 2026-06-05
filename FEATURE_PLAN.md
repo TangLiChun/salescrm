@@ -38,7 +38,7 @@
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | 19 | 更多搜索渠道 | pending | 在 app/sources 下新增渠道（如 RIPE/APNIC RDAP、行业目录） |
-| 20 | 外部 agent 集成 | pending | 可选接入外部线索 agent（"pi agent"）：定义渠道插件接口后接入 |
+| 20 | 外部 agent 集成 | done | Pi Agent API + integrations/pi 扩展包 |
 
 ## Loop 指令
 

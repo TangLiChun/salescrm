@@ -12,6 +12,7 @@ SECRET_KEYS = {
     "bing_search_key",
     "session_secret",
     "default_admin_password",
+    "agent_api_token",
 }
 
 DEFAULTS: dict[str, str] = {
@@ -29,6 +30,7 @@ DEFAULTS: dict[str, str] = {
     "scheduler_poll_seconds": "60",
     "import_blocklist": "",
     "import_allowlist": "",
+    "agent_api_token": "",
 }
 
 
@@ -50,6 +52,13 @@ def init_settings(conn) -> None:
             (secrets.token_hex(32), now),
         )
 
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'agent_api_token'").fetchone()
+    if row and not (row["value"] or "").strip():
+        conn.execute(
+            "UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'agent_api_token'",
+            (secrets.token_urlsafe(32), now),
+        )
+
 
 def get_setting(key: str, default: str = "") -> str:
     with get_conn() as conn:
@@ -58,6 +67,30 @@ def get_setting(key: str, default: str = "") -> str:
         return DEFAULTS.get(key, default)
     value = row["value"]
     return value if value is not None else DEFAULTS.get(key, default)
+
+
+def get_agent_api_token() -> str:
+    import os
+
+    env = os.getenv("AGENT_API_TOKEN", "").strip()
+    if env:
+        return env
+    return get_setting("agent_api_token", "").strip()
+
+
+def regenerate_agent_api_token() -> str:
+    token = secrets.token_urlsafe(32)
+    now = utc_now()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            ("agent_api_token", token, now),
+        )
+    return token
 
 
 def get_settings() -> dict[str, str]:

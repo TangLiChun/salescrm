@@ -330,6 +330,11 @@ select:focus {
 
 .ai-controls { flex-wrap: wrap; }
 
+.controls .token-field {
+  flex: 1 1 16rem;
+  min-width: 12rem;
+}
+
 .checkbox-field {
   flex-direction: row;
   align-items: center;

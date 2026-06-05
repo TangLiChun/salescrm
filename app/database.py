@@ -234,6 +234,18 @@ def get_user_by_username(username: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def get_agent_owner_user_id() -> int | None:
+    from app.settings_store import get_setting
+
+    username = get_setting("default_admin_user", "admin")
+    row = get_user_by_username(username)
+    if row:
+        return int(row["id"])
+    with get_conn() as conn:
+        first = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+    return int(first["id"]) if first else None
+
+
 def get_user_by_id(user_id: int) -> sqlite3.Row | None:
     with get_conn() as conn:
         return conn.execute(

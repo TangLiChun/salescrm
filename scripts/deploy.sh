@@ -181,6 +181,7 @@ print_summary() {
   echo " 目录:    ${APP_DIR}"
   echo " 更新:    cd ${APP_DIR} && sudo ./scripts/deploy.sh"
   echo " 状态:    cd ${APP_DIR} && ./scripts/check.sh"
+  echo " Pi Agent: 见 integrations/pi/README.md"
   echo " 日志:    cd ${APP_DIR} && docker compose logs -f"
   echo " 重启:    cd ${APP_DIR} && docker compose restart"
   echo " 停止:    cd ${APP_DIR} && docker compose down"

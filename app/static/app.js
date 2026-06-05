@@ -923,8 +923,31 @@ function updateSettingsRailDots(data) {
 
   const autoDot = document.getElementById("rail-dot-automation");
   const autoOn = data.scheduler_enabled === "1";
-  autoDot.classList.toggle("on", autoOn);
-  autoDot.title = autoOn ? "定时任务已启用" : "定时任务未启用";
+  autoDot.classList.toggle("on", autoOn || Boolean(data.agent_api_token_configured));
+  const parts = [];
+  parts.push(autoOn ? "定时任务已启用" : "定时任务未启用");
+  if (data.agent_api_token_configured) parts.push("Pi Agent 已配置");
+  autoDot.title = parts.join(" · ");
+}
+
+async function regenerateAgentToken() {
+  const data = await api("/api/settings/agent-token/regenerate", { method: "POST" });
+  const el = document.getElementById("setting-agent-api-token");
+  el.value = data.agent_api_token;
+  el.dataset.revealed = "1";
+  document.getElementById("agent-token-status").textContent =
+    "Token 已重新生成，请复制到 Pi 环境变量 SALESCRM_TOKEN";
+}
+
+async function copyAgentToken() {
+  const el = document.getElementById("setting-agent-api-token");
+  const value = el.value.trim();
+  if (!value) {
+    alert("请先生成 Token");
+    return;
+  }
+  await navigator.clipboard.writeText(value);
+  document.getElementById("agent-token-status").textContent = "已复制到剪贴板";
 }
 
 async function loadSettingsForm() {
@@ -934,6 +957,14 @@ async function loadSettingsForm() {
   setInputValue("setting-llm-model", data.llm_model);
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
+
+  const agentTokenEl = document.getElementById("setting-agent-api-token");
+  if (agentTokenEl && !agentTokenEl.dataset.revealed) {
+    agentTokenEl.value = "";
+    agentTokenEl.placeholder = data.agent_api_token_configured
+      ? `已配置 ${data.agent_api_token}，点「重新生成」获取新 Token`
+      : "点击「重新生成」获取 Token";
+  }
 
   const secretFields = [
     ["setting-default-admin-password", data.default_admin_password, data.default_admin_password_configured],
@@ -1683,6 +1714,13 @@ emailTemplatesListEl.addEventListener("click", (event) => {
 });
 document.getElementById("change-password-btn").addEventListener("click", () => {
   changePassword().catch((error) => alert(error.message));
+});
+document.getElementById("regenerate-agent-token-btn")?.addEventListener("click", () => {
+  if (!confirm("重新生成后旧 Token 将立即失效，Pi Agent 需更新 SALESCRM_TOKEN。继续？")) return;
+  regenerateAgentToken().catch((error) => alert(error.message));
+});
+document.getElementById("copy-agent-token-btn")?.addEventListener("click", () => {
+  copyAgentToken().catch((error) => alert(error.message));
 });
 
 async function changePassword() {
