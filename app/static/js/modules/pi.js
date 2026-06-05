@@ -111,10 +111,15 @@ export function refreshPiAgentChrome() {
 
 export function initPiAgentUi() {
   updatePiInputHint();
+  resizePiChatInput();
   piLlmSetupEl?.classList.toggle("hidden", state.llmConfigured);
   if (piChatMessagesEl && !piChatMessagesEl.children.length) {
     mountPiEmptyState();
   }
+  piChatInput?.addEventListener("input", () => {
+    resizePiChatInput();
+    updatePiAgentStatus();
+  });
   piGotoLlmSettingsBtn?.addEventListener("click", () => {
     deps.switchView?.("settings");
     switchSettingsCat("ai");
@@ -125,6 +130,8 @@ export function initPiAgentUi() {
     const chip = event.target.closest(".pi-example-chip");
     if (!chip || !piChatInput || state.piChatBusy || !state.llmConfigured) return;
     piChatInput.value = chip.dataset.piExample || chip.textContent || "";
+    resizePiChatInput();
+    updatePiAgentStatus();
     piChatInput.focus();
     setPiMobilePanel("chat");
   });
@@ -1060,9 +1067,7 @@ export function handlePiDiscoverProgress(toolEl, message) {
 
 export function finalizePiDiscoverTool(toolEl, event) {
   if (!toolEl) return;
-  stopPiDiscoverTimer(toolEl);
-  toolEl.classList.remove("pi-chat-tool-running");
-  toolEl.querySelector(".pi-chat-tool-head")?.classList.add("done");
+  markPiChatToolDone(toolEl);
   if (toolEl._piChannelState) {
     for (const def of CHANNEL_DEFS) {
       const state = toolEl._piChannelState[def.key];
@@ -1259,10 +1264,30 @@ export async function importPiChatLeads(toolEl) {
   }
 }
 
+export function piChatInputText() {
+  return String(piChatInput?.value || "").trim();
+}
+
+export function resizePiChatInput() {
+  if (!piChatInput) return;
+  piChatInput.style.height = "auto";
+  const minHeight = 72;
+  const maxHeight = 192;
+  const nextHeight = Math.min(maxHeight, Math.max(minHeight, piChatInput.scrollHeight || minHeight));
+  piChatInput.style.height = `${nextHeight}px`;
+  piChatInput.style.overflowY = nextHeight >= maxHeight ? "auto" : "hidden";
+}
+
 export function updatePiAgentStatus() {
   const enabled = state.llmConfigured;
-  piChatInput.disabled = !enabled || state.piChatBusy;
-  piChatSendBtn.disabled = !enabled || state.piChatBusy;
+  const canType = enabled && !state.piChatBusy;
+  const canSend = canType && Boolean(piChatInputText());
+  piChatInput.disabled = !canType;
+  piChatSendBtn.disabled = !canSend;
+  if (piChatBackgroundInput) {
+    piChatBackgroundInput.disabled = !enabled || state.piChatBusy;
+  }
+  resizePiChatInput();
   piLlmSetupEl?.classList.toggle("hidden", enabled);
   if (
     enabled &&
@@ -1428,6 +1453,38 @@ export function appendPiChatTool(name) {
   return el;
 }
 
+export function markPiChatToolDone(toolEl) {
+  if (!toolEl) return;
+  stopPiDiscoverTimer(toolEl);
+  toolEl.classList.remove("pi-chat-tool-running", "pi-chat-tool-failed");
+  toolEl.querySelector(".pi-chat-tool-head")?.classList.remove("failed");
+  toolEl.querySelector(".pi-chat-tool-head")?.classList.add("done");
+}
+
+export function markPiChatToolFailed(toolEl, message) {
+  if (!toolEl) return;
+  stopPiDiscoverTimer(toolEl);
+  toolEl.classList.remove("pi-chat-tool-running");
+  toolEl.classList.add("pi-chat-tool-failed");
+  const head = toolEl.querySelector(".pi-chat-tool-head");
+  head?.classList.add("done", "failed");
+  const progressEl = toolEl.querySelector(".pi-chat-tool-progress");
+  if (progressEl && message) {
+    progressEl.textContent = message;
+  }
+  if (toolEl._piChannelState) {
+    for (const def of CHANNEL_DEFS) {
+      const state = toolEl._piChannelState[def.key];
+      if (state?.state === "active") {
+        setPiDiscoverChannel(toolEl, def.key, { state: "failed" });
+      }
+    }
+  }
+  if (message) {
+    pushPiDiscoverTicker(toolEl, message);
+  }
+}
+
 export function setPiChatBusy(busy) {
   state.piChatBusy = busy;
   piChatStopBtn.classList.toggle("hidden", !busy);
@@ -1444,6 +1501,8 @@ export async function sendPiChatMessage(message) {
   if (!text || state.piChatBusy || !state.llmConfigured) return;
 
   piChatInput.value = "";
+  resizePiChatInput();
+  updatePiAgentStatus();
   appendPiChatBubble("user", text);
   state.piChatHistory.push({ role: "user", content: text });
   const thread = getActivePiThread();
@@ -1492,6 +1551,12 @@ export async function sendPiChatMessage(message) {
     }
     activeAssistantEl = null;
     assistantStreamText = "";
+  };
+
+  const failActiveTool = (message) => {
+    if (!activeToolEl) return;
+    markPiChatToolFailed(activeToolEl, message);
+    activeToolEl = null;
   };
 
   try {
@@ -1590,41 +1655,46 @@ export async function sendPiChatMessage(message) {
             toolEntry.preview = (payload.result?.rows || payload.result?.preview || []).slice(0, 25);
           }
           if (activeToolEl) {
-            if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
-              finalizePiDiscoverTool(activeToolEl, {
+            const toolEl = activeToolEl;
+            const toolFailed = Boolean(payload.result?.error);
+            if (toolFailed) {
+              markPiChatToolFailed(toolEl, summary || String(payload.result?.error || t("msg.errorGeneric")));
+            } else if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
+              finalizePiDiscoverTool(toolEl, {
                 message: summary || payload.result?.message,
               });
+            } else {
+              markPiChatToolDone(toolEl);
             }
-            activeToolEl.querySelector(".pi-chat-tool-head").classList.add("done");
-            const pre = activeToolEl.querySelector(".pi-chat-tool-result");
+            const pre = toolEl.querySelector(".pi-chat-tool-result");
             if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
               pre.classList.add("hidden");
               if (summary) {
-                activeToolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
+                toolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
               }
-              const importBtn = activeToolEl.querySelector(".pi-chat-import-leads");
+              const importBtn = toolEl.querySelector(".pi-chat-import-leads");
               if (importBtn && !importBtn.dataset.bound) {
                 importBtn.dataset.bound = "1";
                 importBtn.addEventListener("click", () => {
-                  importPiChatLeads(activeToolEl).catch((error) => showApiError(error, t("msg.importFailed")));
+                  importPiChatLeads(toolEl).catch((error) => showApiError(error, t("msg.importFailed")));
                 });
               }
               if (payload.result?.import) {
-                activeToolEl.querySelector(".pi-chat-leads-actions")?.classList.add("hidden");
+                toolEl.querySelector(".pi-chat-leads-actions")?.classList.add("hidden");
               }
             } else if (payload.name === "lookup_asns") {
               pre.classList.add("hidden");
               if (summary) {
-                activeToolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
+                toolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
               }
               for (const row of payload.result?.rows || payload.result?.preview || []) {
-                appendPiChatLookupRow(activeToolEl, row);
+                appendPiChatLookupRow(toolEl, row);
               }
-              const importBtn = activeToolEl.querySelector(".pi-chat-import-lookup");
+              const importBtn = toolEl.querySelector(".pi-chat-import-lookup");
               if (importBtn && !importBtn.dataset.bound) {
                 importBtn.dataset.bound = "1";
                 importBtn.addEventListener("click", () => {
-                  importPiChatLookup(activeToolEl).catch((error) => showApiError(error, t("msg.importFailed")));
+                  importPiChatLookup(toolEl).catch((error) => showApiError(error, t("msg.importFailed")));
                 });
               }
             } else if (summary) {
@@ -1678,6 +1748,7 @@ export async function sendPiChatMessage(message) {
           }
         } else if (payload.type === "error") {
           settlePendingAssistantBubble();
+          failActiveTool(payload.message || t("msg.errorGeneric"));
           appendPiChatStatus(payload.message || t("msg.errorGeneric"));
         } else if (payload.type === "done") {
           piChatProgressText.textContent = t("pi.done");
@@ -1692,15 +1763,21 @@ export async function sendPiChatMessage(message) {
           const payload = JSON.parse(trailing.slice(6));
           if (payload.type === "error") {
             settlePendingAssistantBubble();
+            failActiveTool(payload.message || t("msg.errorGeneric"));
             appendPiChatStatus(payload.message || t("msg.errorGeneric"));
           }
         } catch {
           settlePendingAssistantBubble();
+          failActiveTool(t("pi.streamInterrupted"));
           appendPiChatStatus(t("pi.streamInterrupted"));
         }
       }
     }
 
+    if (activeToolEl) {
+      failActiveTool(t("pi.streamInterrupted"));
+      appendPiChatStatus(t("pi.streamInterrupted"));
+    }
     if (piChatProgressText.textContent === t("pi.processingShort") && !assistantStreamText) {
       settlePendingAssistantBubble();
       appendPiChatStatus(t("pi.streamInterrupted"));
@@ -1708,8 +1785,10 @@ export async function sendPiChatMessage(message) {
   } catch (error) {
     settlePendingAssistantBubble();
     if (error.name !== "AbortError") {
+      failActiveTool(errorMessage(error, t("pi.requestFailed")));
       appendPiChatStatus(errorMessage(error, t("pi.requestFailed")));
     } else {
+      failActiveTool(t("pi.stopped"));
       appendPiChatStatus(t("pi.stopped"));
     }
   } finally {

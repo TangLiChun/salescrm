@@ -2813,6 +2813,16 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   background: var(--positive);
 }
 
+.pi-chat-tool-head.failed .dot {
+  animation: none;
+  background: var(--danger);
+}
+
+.pi-chat-tool-failed {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
 .pi-chat-tool-discover {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 1px var(--accent-tint);
@@ -3050,7 +3060,9 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .pi-chat-form textarea {
   min-height: 4.5rem;
-  resize: vertical;
+  max-height: 12rem;
+  resize: none;
+  overflow-y: hidden;
 }
 
 @keyframes pulse {
