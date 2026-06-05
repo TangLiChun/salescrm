@@ -115,8 +115,9 @@ check_health_http() {
 
 check_smoke() {
   local smoke_cmd="env PYTHONPATH=/app python /app/scripts/smoke_check.py"
+  local max_attempts="${SMOKE_RETRIES:-3}"
   local attempt output
-  for attempt in 1 2 3; do
+  for attempt in $(seq 1 "${max_attempts}"); do
     if $DOCKER exec "${CONTAINER}" sh -c "${smoke_cmd}" >/dev/null 2>&1; then
       say "冒烟: scripts/smoke_check.py — ok"
       return 0

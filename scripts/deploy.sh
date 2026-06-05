@@ -22,6 +22,8 @@
 #   DEPLOY_WAIT_CONTAINER_SEC  等待容器 running（默认 90）
 #   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health（默认 120）
 #   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 20）
+#   DEPLOY_FINAL_GRACE_SEC       全部重试失败后的最终缓冲秒数（默认 90）
+#   DEPLOY_REEXEC=1              内部用：git pull 后重新执行脚本，勿手动设置
 #
 # 部署验证（失败则 exit 1 并打印日志）：
 #   1. docker build 阶段导入 app（Dockerfile）— 捕获启动语法/路由错误
@@ -40,6 +42,7 @@ SKIP_PI="${SKIP_PI:-0}"
 DEPLOY_WAIT_CONTAINER_SEC="${DEPLOY_WAIT_CONTAINER_SEC:-90}"
 DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-120}"
 DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-20}"
+DEPLOY_FINAL_GRACE_SEC="${DEPLOY_FINAL_GRACE_SEC:-90}"
 PI_ENV_FILE=""
 PI_SETUP_OK=0
 
@@ -104,9 +107,20 @@ ensure_repo() {
     if [[ -d .git ]]; then
       if [[ "${SKIP_PULL}" != "1" ]]; then
         log "拉取最新代码 (${GIT_BRANCH})..."
+        local before_head=""
+        before_head="$(git rev-parse HEAD 2>/dev/null || true)"
         git fetch origin "${GIT_BRANCH}"
         git checkout "${GIT_BRANCH}" 2>/dev/null || git checkout -b "${GIT_BRANCH}" "origin/${GIT_BRANCH}"
         git pull --ff-only origin "${GIT_BRANCH}"
+        local after_head=""
+        after_head="$(git rev-parse HEAD 2>/dev/null || true)"
+        if [[ -n "${before_head}" && "${before_head}" != "${after_head}" && "${DEPLOY_REEXEC:-0}" != "1" ]]; then
+          if git diff --name-only "${before_head}" "${after_head}" | grep -qE '^scripts/(deploy|check)\.sh$'; then
+            log "部署/检查脚本已更新，使用新版本重新执行..."
+            export DEPLOY_REEXEC=1
+            exec bash "${SCRIPT_DIR}/deploy.sh"
+          fi
+        fi
       else
         log "跳过 git pull (SKIP_PULL=1)"
       fi
@@ -204,7 +218,7 @@ wait_for_http() {
 }
 
 run_full_check() {
-  APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet
+  SMOKE_RETRIES="${DEPLOY_SMOKE_RETRIES:-8}" APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet
 }
 
 wait_healthy() {
@@ -212,8 +226,8 @@ wait_healthy() {
   # 给 uvicorn / init_db 一点缓冲
   sleep 2
   wait_for_http
-  # HTTP 已通，再等应用完全就绪后跑冒烟
-  sleep 3
+  # HTTP 已通，再等应用完全就绪后跑冒烟（慢 VPS 上 import / 首次 DB 查询较慢）
+  sleep 8
 
   log "运行完整检查（最多重试 ${DEPLOY_FULL_RETRIES} 次）..."
   local retry last_phase="full"
@@ -226,15 +240,31 @@ wait_healthy() {
     sleep 2
   done
 
-  # 完整检查失败时，若 HTTP 仍正常，给出更明确的提示（常见于慢 VPS / 冒烟瞬时失败）
+  log "完整检查未在重试窗口内通过，进入最终缓冲（${DEPLOY_FINAL_GRACE_SEC}s）..."
+  local grace
+  for grace in $(seq 1 "${DEPLOY_FINAL_GRACE_SEC}"); do
+    if run_full_check; then
+      warn "健康检查在最终缓冲 ${grace}s 时通过（慢启动，部署成功）"
+      return 0
+    fi
+    sleep 1
+  done
+
+  # 最后一次完整检查：若此时已通过，不应误报失败（旧脚本常见误报）
+  log "最后尝试完整检查..."
+  if SMOKE_RETRIES="${DEPLOY_SMOKE_RETRIES:-8}" APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet; then
+    warn "健康检查在最终尝试时通过（先前重试可能因慢启动超时，部署成功）"
+    return 0
+  fi
+
   if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
     warn "HTTP /health 正常，但完整检查（含 API 冒烟）未通过"
   fi
 
   echo ""
   echo "ERROR: 部署完成但服务未通过完整健康检查（${last_phase}）" >&2
-  echo "提示: 若浏览器可访问且 ./scripts/check.sh 已通过，可忽略此次超时并手动确认" >&2
-  APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" || true
+  echo "提示: 若 ./scripts/check.sh 已通过，服务通常已正常，可手动确认后忽略" >&2
+  SMOKE_RETRIES="${DEPLOY_SMOKE_RETRIES:-8}" APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" || true
   show_failure_logs
   exit 1
 }
