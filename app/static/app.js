@@ -91,6 +91,7 @@ const aiProgressFill = document.getElementById("ai-progress-fill");
 const aiProgressText = document.getElementById("ai-progress-text");
 const aiStatsEl = document.getElementById("ai-stats");
 const aiLeadsBody = document.getElementById("ai-leads-body");
+const aiLeadsStateEl = document.getElementById("ai-leads-state");
 const aiChannelsEl = document.getElementById("ai-channels");
 const importLeadsBtn = document.getElementById("import-leads-btn");
 const retryDiscoverBtn = document.getElementById("retry-discover-btn");
@@ -1179,8 +1180,47 @@ function updateAiLeadsStats() {
   importLeadsBtn.disabled = selected === 0;
 }
 
+function hideLeadsState() {
+  aiLeadsStateEl.classList.add("hidden");
+  aiLeadsStateEl.innerHTML = "";
+}
+
+function showLeadsState(html, isError = false) {
+  aiLeadsStateEl.className = `leads-state${isError ? " error" : ""}`;
+  aiLeadsStateEl.innerHTML = html;
+}
+
+function showLeadsError(message) {
+  showLeadsState(`<p>线索发现出错：${escapeHtml(message)}</p>`, true);
+  retryDiscoverBtn.classList.remove("hidden");
+}
+
+function showLeadsEmpty() {
+  showLeadsState(
+    `<p>没有找到符合条件的线索。</p>
+     <p class="hint">建议：调低「最低匹配分」，或用更宽泛的关键词描述目标客户。</p>`
+  );
+  retryDiscoverBtn.classList.remove("hidden");
+}
+
+function showLeadsNeedLlm() {
+  showLeadsState(
+    `<p>AI 线索发现需要先配置 LLM。</p>
+     <p class="hint">前往「系统设置 → AI 与搜索」填写 API Key。</p>
+     <button type="button" class="primary-btn" id="leads-state-goto-settings">去系统设置</button>`
+  );
+  const btn = document.getElementById("leads-state-goto-settings");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      switchView("settings");
+      switchSettingsCat("ai");
+    });
+  }
+}
+
 function renderAiLeads() {
   aiLeadsBody.innerHTML = "";
+  if (aiLeads.length > 0) hideLeadsState();
 
   if (aiLeads.length === 0) {
     const tr = document.createElement("tr");
@@ -1316,10 +1356,12 @@ async function loadLlmStatus() {
       const web = (config.search_channels?.web_search || []).join(", ") || "duckduckgo";
       llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）· 搜索渠道：${web} + PeeringDB + ARIN`;
       discoverBtn.disabled = false;
+      hideLeadsState();
     } else {
       llmStatusEl.className = "llm-status warn";
       llmStatusEl.textContent = "LLM 未配置：请在「系统设置」填写 API Key。搜索引擎默认 DuckDuckGo";
       discoverBtn.disabled = true;
+      showLeadsNeedLlm();
     }
   } catch {
     llmStatusEl.className = "llm-status warn";
@@ -1361,6 +1403,7 @@ async function runLeadDiscovery() {
   aiPlanEl.classList.add("hidden");
   aiSourcesEl.classList.add("hidden");
   resetChannelPanel();
+  hideLeadsState();
   aiProgressEl.classList.remove("hidden");
   aiProgressFill.style.width = "0%";
   aiProgressText.textContent = "AI 正在分析需求…";
@@ -1469,6 +1512,9 @@ async function runLeadDiscovery() {
           if (payload.import) {
             alert(formatImportResult(payload.import));
             await loadContacts();
+          }
+          if ((payload.leads || aiLeads).length === 0) {
+            showLeadsEmpty();
           }
         }
       }

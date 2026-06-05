@@ -1170,3 +1170,23 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .lead-detail-row > .v { color: var(--ink); line-height: 1.55; word-break: break-word; }
 .lead-detail-row > .v.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .lead-detail-import { margin-top: var(--space-2); }
+
+.danger-btn {
+  background: var(--danger);
+  color: var(--on-accent);
+  border-color: transparent;
+}
+.danger-btn:hover { filter: brightness(0.94); }
+
+.leads-state {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  padding: var(--space-5);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+.leads-state.error { border-color: var(--danger); color: var(--danger); }
+.leads-state .hint { color: var(--ink-muted); font-size: var(--text-sm); }
