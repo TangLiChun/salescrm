@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     create_background_job,
     get_background_job,
@@ -13,7 +14,7 @@ from app.database import (
     update_background_job,
 )
 from app.lead_discovery import discover_leads_stream
-from arin_lookup import RoleContact, lookup_asn, parse_asns_from_text, rows_to_csv
+from arin_lookup import RoleContact, lookup_asns_batch, parse_asns_from_text, rows_to_csv
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,31 @@ def _public_job(job: dict | None) -> dict | None:
             out[key.replace("_json", "")] = {}
         out.pop(key, None)
     return out
+
+
+def _slim_progress(event: dict[str, Any]) -> dict[str, Any]:
+    """Store lightweight progress snapshots; full payloads belong in result_json."""
+    event_type = event.get("type") or "status"
+    if event_type == "progress":
+        asn = event.get("asn")
+        message = event.get("message") or (f"AS{asn}" if asn else "")
+        return {
+            "type": "progress",
+            "index": event.get("index"),
+            "total": event.get("total"),
+            "asn": asn,
+            "message": message,
+        }
+    slim: dict[str, Any] = {"type": event_type}
+    message = event.get("message")
+    if message:
+        slim["message"] = str(message)
+    if event_type == "source_result":
+        slim["source"] = event.get("source")
+        slim["count"] = event.get("count")
+    if event_type == "parsed":
+        slim["total"] = event.get("total")
+    return slim
 
 
 async def _run_lookup_job(job_id: int) -> None:
@@ -66,30 +92,35 @@ async def _run_lookup_job(job_id: int) -> None:
         return
 
     update_background_job(job_id, status="running", message="lookup running")
-    all_rows: list[dict[str, Any]] = []
     total = len(asns)
 
     try:
         update_background_job(
             job_id,
-            progress={"type": "parsed", "asns": asns, "total": total},
+            progress={"type": "parsed", "total": total, "message": f"parsed {total} ASNs"},
         )
-        for index, asn in enumerate(asns):
-            rows = await asyncio.to_thread(lookup_asn, asn, timeout)
-            row_dicts = [row.to_dict() for row in rows]
-            all_rows.extend(row_dicts)
+
+        async def on_progress(index: int, total: int, asn: int, rows) -> None:
             update_background_job(
                 job_id,
-                progress={
-                    "type": "progress",
-                    "index": index + 1,
-                    "total": total,
-                    "asn": asn,
-                    "rows": row_dicts,
-                },
+                progress=_slim_progress(
+                    {
+                        "type": "progress",
+                        "index": index,
+                        "total": total,
+                        "asn": asn,
+                        "message": f"AS{asn}",
+                    }
+                ),
             )
-            if index + 1 < total and delay:
-                await asyncio.sleep(delay)
+
+        batch_rows = await lookup_asns_batch(
+            asns,
+            timeout,
+            delay=delay,
+            on_progress=on_progress,
+        )
+        all_rows = [row.to_dict() for row in batch_rows]
 
         emails = sum(1 for row in all_rows if row.get("email"))
         errors = sum(1 for row in all_rows if row.get("error"))
@@ -163,7 +194,7 @@ async def _run_lead_discover_job(job_id: int) -> None:
                     job_id,
                     status="error",
                     message=str(event.get("message") or "lead discovery failed"),
-                    progress=event,
+                    progress=_slim_progress(event),
                     finished_at=True,
                 )
                 return
@@ -175,7 +206,7 @@ async def _run_lead_discover_job(job_id: int) -> None:
                 last_import = event.get("import")
                 if event.get("leads"):
                     leads = list(event.get("leads") or [])
-            update_background_job(job_id, progress=event)
+            update_background_job(job_id, progress=_slim_progress(event))
 
         update_background_job(
             job_id,
@@ -187,6 +218,81 @@ async def _run_lead_discover_job(job_id: int) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("lead discover job %s failed", job_id)
+        update_background_job(
+            job_id,
+            status="error",
+            message=str(exc),
+            finished_at=True,
+        )
+
+
+async def _run_enrich_contact_job(job_id: int) -> None:
+    job = get_background_job(job_id)
+    if not job:
+        return
+    params = json.loads(job.get("params_json") or "{}")
+    contact_id = int(params.get("contact_id") or 0)
+    min_score = int(params.get("min_score") or 50)
+    auto_import = bool(params.get("auto_import", True))
+    user_id = int(job["user_id"])
+
+    if contact_id <= 0:
+        update_background_job(
+            job_id,
+            status="error",
+            message="contact_id invalid",
+            finished_at=True,
+        )
+        return
+
+    update_background_job(job_id, status="running", message="contact enrich running")
+    leads: list[dict[str, Any]] = []
+    last_import: dict[str, Any] | None = None
+    done_message = ""
+
+    try:
+        async for event in enrich_contact_stream(
+            user_id,
+            contact_id,
+            min_score=min_score,
+            auto_import=auto_import,
+        ):
+            event_type = event.get("type")
+            if event_type == "error":
+                update_background_job(
+                    job_id,
+                    status="error",
+                    message=str(event.get("message") or "contact enrich failed"),
+                    progress=_slim_progress(event),
+                    finished_at=True,
+                )
+                return
+            if event_type == "lead":
+                lead = event.get("lead")
+                if lead:
+                    leads.append(lead)
+            if event_type == "done":
+                last_import = event.get("import")
+                done_message = str(event.get("message") or "")
+                if event.get("leads"):
+                    leads = list(event.get("leads") or [])
+            update_background_job(job_id, progress=_slim_progress(event))
+
+        update_background_job(
+            job_id,
+            status="done",
+            message=done_message or f"enriched contact #{contact_id}: {len(leads)} leads",
+            progress={"type": "done"},
+            result={
+                "leads": leads,
+                "import": last_import,
+                "contact_id": contact_id,
+                "message": done_message,
+            },
+            finished_at=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("enrich contact job %s failed", job_id)
         update_background_job(
             job_id,
             status="error",
@@ -208,6 +314,8 @@ async def _execute_job(job_id: int) -> None:
             await _run_lookup_job(job_id)
         elif job_type == "lead_discover":
             await _run_lead_discover_job(job_id)
+        elif job_type == "enrich_contact":
+            await _run_enrich_contact_job(job_id)
         else:
             update_background_job(
                 job_id,

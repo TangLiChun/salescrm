@@ -23,13 +23,18 @@
 #   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health 秒数（默认 300，慢 VPS 可加大）
 #   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 20）
 #   DEPLOY_FINAL_GRACE_SEC       全部重试失败后的最终缓冲秒数（默认 90）
+#   DEPLOY_STRICT_SMOKE=0|1      默认 0：HTTP /health 通过后冒烟失败仅 WARNING、部署成功；
+#                                1 时冒烟失败仍 exit 1（旧行为）
+#   SMOKE_USER                   API 冒烟登录用户名（默认 admin，传给 check.sh / smoke_check.py）
+#   SMOKE_PASSWORD               API 冒烟登录密码（默认 admin123）
 #   DEPLOY_REEXEC=1              内部用：git pull 后重新执行脚本，勿手动设置
 #
-# 部署验证（失败则 exit 1 并打印日志）：
+# 部署验证：
 #   1. docker build 阶段导入 app（Dockerfile）— 捕获启动语法/路由错误
-#   2. 容器 running，非 crash loop
-#   3. GET /health — db + schema（缺表会失败）
+#   2. 容器 running，非 crash loop — 失败则 exit 1
+#   3. GET /health — db + schema（缺表会失败）— 失败则 exit 1
 #   4. 容器内 smoke_check.py — 登录并探测 email-templates 等 API
+#      DEPLOY_STRICT_SMOKE=0 时冒烟失败仅 WARNING；=1 时失败则 exit 1
 
 set -euo pipefail
 
@@ -43,6 +48,7 @@ DEPLOY_WAIT_CONTAINER_SEC="${DEPLOY_WAIT_CONTAINER_SEC:-90}"
 DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-300}"
 DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-20}"
 DEPLOY_FINAL_GRACE_SEC="${DEPLOY_FINAL_GRACE_SEC:-90}"
+DEPLOY_STRICT_SMOKE="${DEPLOY_STRICT_SMOKE:-0}"
 PI_ENV_FILE=""
 PI_SETUP_OK=0
 
@@ -218,6 +224,16 @@ probe_health_http() {
   return 1
 }
 
+run_check() {
+  local env_args=(
+    "SMOKE_RETRIES=${DEPLOY_SMOKE_RETRIES:-8}"
+    "APP_PORT=${APP_PORT}"
+  )
+  [[ -n "${SMOKE_USER:-}" ]] && env_args+=("SMOKE_USER=${SMOKE_USER}")
+  [[ -n "${SMOKE_PASSWORD:-}" ]] && env_args+=("SMOKE_PASSWORD=${SMOKE_PASSWORD}")
+  env "${env_args[@]}" bash "${SCRIPT_DIR}/check.sh" "$@"
+}
+
 wait_for_http() {
   log "等待 HTTP /health（最多 ${DEPLOY_WAIT_HTTP_SEC}s，含容器内探测）..."
   local i
@@ -233,19 +249,19 @@ wait_for_http() {
   done
 
   log "最后尝试 HTTP 检查..."
-  if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
+  if run_check --quick --quiet; then
     warn "HTTP 在最终尝试时通过（应用慢启动，继续部署）"
     return 0
   fi
 
   echo "ERROR: HTTP 健康检查超时（${DEPLOY_WAIT_HTTP_SEC}s）" >&2
-  APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick || true
+  run_check --quick || true
   show_failure_logs
   exit 1
 }
 
 run_full_check() {
-  SMOKE_RETRIES="${DEPLOY_SMOKE_RETRIES:-8}" APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet
+  run_check --quiet
 }
 
 wait_healthy() {
@@ -279,19 +295,25 @@ wait_healthy() {
 
   # 最后一次完整检查：若此时已通过，不应误报失败（旧脚本常见误报）
   log "最后尝试完整检查..."
-  if SMOKE_RETRIES="${DEPLOY_SMOKE_RETRIES:-8}" APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet; then
+  if run_check --quiet; then
     warn "健康检查在最终尝试时通过（先前重试可能因慢启动超时，部署成功）"
     return 0
   fi
 
-  if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
-    warn "HTTP /health 正常，但完整检查（含 API 冒烟）未通过"
+  if run_check --quick --quiet; then
+    if [[ "${DEPLOY_STRICT_SMOKE}" == "1" ]]; then
+      warn "HTTP /health 正常，但完整检查（含 API 冒烟）未通过"
+    else
+      warn "HTTP /health 正常，但 API 冒烟未通过（DEPLOY_STRICT_SMOKE=0，部署视为成功）"
+      run_check || warn "冒烟详情见上方输出；可稍后运行: cd ${APP_DIR} && ./scripts/check.sh"
+      return 0
+    fi
   fi
 
   echo ""
   echo "ERROR: 部署完成但服务未通过完整健康检查（${last_phase}）" >&2
   echo "提示: 若 ./scripts/check.sh 已通过，服务通常已正常，可手动确认后忽略" >&2
-  SMOKE_RETRIES="${DEPLOY_SMOKE_RETRIES:-8}" APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" || true
+  run_check || true
   show_failure_logs
   exit 1
 }

@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from io import StringIO
 from typing import Iterable
+
+DEFAULT_LOOKUP_WORKERS = 6
 
 ARIN_BOOTSTRAP = "https://rdap.arin.net/registry/autnum/{asn}"
 RIR_RDAP = {
@@ -270,6 +275,76 @@ def lookup_asn(asn: int, timeout: float = 20.0) -> list[RoleContact]:
         return [RoleContact(asn=asn, org=bootstrap.get("name"), rir=label, error=str(exc.reason))]
 
     return parse_rdap_response(data, asn, port43=port43)
+
+
+def lookup_workers() -> int:
+    try:
+        return max(1, min(16, int(os.getenv("ASN_LOOKUP_WORKERS", str(DEFAULT_LOOKUP_WORKERS)))))
+    except ValueError:
+        return DEFAULT_LOOKUP_WORKERS
+
+
+def _role_contact_from_dict(payload: dict) -> RoleContact:
+    roles = payload.get("roles")
+    return RoleContact(
+        asn=int(payload.get("asn") or 0),
+        org=payload.get("org") or None,
+        roles=roles if isinstance(roles, list) else [],
+        name=payload.get("name") or None,
+        email=payload.get("email") or None,
+        handle=payload.get("handle") or None,
+        rir=payload.get("rir") or None,
+        error=payload.get("error") or None,
+    )
+
+
+def lookup_asn_cached(asn: int, timeout: float = 20.0) -> list[RoleContact]:
+    from app.asn_cache import get_cached_rows, set_cached_rows
+
+    cached = get_cached_rows(asn)
+    if cached is not None:
+        return [_role_contact_from_dict(row) for row in cached]
+
+    rows = lookup_asn(asn, timeout)
+    set_cached_rows(asn, [row.to_dict() for row in rows])
+    return rows
+
+
+ProgressCallback = Callable[[int, int, int, list[RoleContact]], Awaitable[None] | None]
+
+
+async def lookup_asns_batch(
+    asns: list[int],
+    timeout: float = 20.0,
+    *,
+    delay: float = 0,
+    workers: int | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> list[RoleContact]:
+    """Lookup many ASNs with bounded concurrency and optional delay between batches."""
+    if not asns:
+        return []
+
+    batch_workers = workers if workers is not None else lookup_workers()
+    all_rows: list[RoleContact] = []
+    total = len(asns)
+
+    for batch_start in range(0, total, batch_workers):
+        batch = asns[batch_start : batch_start + batch_workers]
+        results = await asyncio.gather(
+            *(asyncio.to_thread(lookup_asn_cached, asn, timeout) for asn in batch)
+        )
+        for offset, (asn, rows) in enumerate(zip(batch, results)):
+            index = batch_start + offset + 1
+            all_rows.extend(rows)
+            if on_progress is not None:
+                maybe = on_progress(index, total, asn, rows)
+                if maybe is not None:
+                    await maybe
+        if delay and batch_start + batch_workers < total:
+            await asyncio.sleep(delay)
+
+    return all_rows
 
 
 def dedupe_rows(rows: Iterable[RoleContact]) -> list[RoleContact]:

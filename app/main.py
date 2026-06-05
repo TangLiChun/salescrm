@@ -38,6 +38,7 @@ from app.database import (
     delete_email_template,
     delete_scheduled_job,
     FOLLOW_UP_STATUSES,
+    get_contact,
     get_contact_stats,
     get_scheduled_job,
     get_user_auth_by_id,
@@ -73,7 +74,7 @@ from app.settings_store import (
     update_settings,
 )
 from app.sources import list_channels
-from arin_lookup import lookup_asn, parse_asns_from_text, rows_to_csv
+from arin_lookup import lookup_asns_batch, parse_asns_from_text, rows_to_csv
 
 APP_DIR = Path(__file__).resolve().parent
 MAX_ASNS = 200
@@ -119,6 +120,12 @@ class LeadDiscoverRequest(BaseModel):
     min_score: int = Field(default=60, ge=0, le=100)
     delay: float = Field(default=0.5, ge=0, le=5)
     auto_import: bool = False
+
+
+class EnrichContactJobRequest(BaseModel):
+    contact_id: int = Field(gt=0)
+    min_score: int = Field(default=50, ge=0, le=100)
+    auto_import: bool = True
 
 
 class ScheduleRequest(BaseModel):
@@ -622,18 +629,18 @@ def lookup_parse(body: LookupRequest, _: CurrentUser) -> dict:
 
 
 @app.post("/api/lookup")
-def lookup_batch(body: LookupRequest, _: CurrentUser) -> dict:
+async def lookup_batch(body: LookupRequest, _: CurrentUser) -> dict:
     asns = parse_asns_from_text(body.text)
     if not asns:
         raise HTTPException(status_code=400, detail="No valid ASNs found.")
     if len(asns) > MAX_ASNS:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_ASNS} ASNs per request.")
 
-    all_rows = []
-    for index, asn in enumerate(asns):
-        all_rows.extend(lookup_asn(asn, body.timeout))
-        if index + 1 < len(asns) and body.delay:
-            time.sleep(body.delay)
+    all_rows = await lookup_asns_batch(
+        asns,
+        body.timeout,
+        delay=body.delay,
+    )
 
     rows = [row.to_dict() for row in all_rows]
     emails = sum(1 for row in all_rows if row.email)
@@ -658,18 +665,36 @@ async def lookup_stream(body: LookupRequest, _: CurrentUser) -> StreamingRespons
     async def event_generator():
         total = len(asns)
         yield f"data: {json.dumps({'type': 'parsed', 'asns': asns, 'total': total}, ensure_ascii=False)}\n\n"
-        for index, asn in enumerate(asns):
-            rows = await asyncio.to_thread(lookup_asn, asn, body.timeout)
-            payload = {
-                "type": "progress",
-                "index": index + 1,
-                "total": total,
-                "asn": asn,
-                "rows": [row.to_dict() for row in rows],
-            }
-            yield f"data: {json.dumps(payload)}\n\n"
-            if index + 1 < total and body.delay:
-                await asyncio.sleep(body.delay)
+
+        progress_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def on_progress(index: int, total: int, asn: int, rows) -> None:
+            await progress_queue.put(
+                {
+                    "type": "progress",
+                    "index": index,
+                    "total": total,
+                    "asn": asn,
+                    "rows": [row.to_dict() for row in rows],
+                }
+            )
+
+        async def run_batch() -> None:
+            await lookup_asns_batch(
+                asns,
+                body.timeout,
+                delay=body.delay,
+                on_progress=on_progress,
+            )
+            await progress_queue.put(None)
+
+        batch_task = asyncio.create_task(run_batch())
+        while True:
+            payload = await progress_queue.get()
+            if payload is None:
+                break
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        await batch_task
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -709,6 +734,30 @@ async def create_lead_discover_job(body: LeadDiscoverRequest, user: CurrentUser)
             "query": body.query,
             "min_score": body.min_score,
             "delay": body.delay,
+            "auto_import": body.auto_import,
+        },
+    )
+    return {"job": job}
+
+
+@app.post("/api/jobs/enrich")
+async def create_enrich_contact_job(body: EnrichContactJobRequest, user: CurrentUser) -> dict:
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 LLM API Key，请在系统设置中填写",
+        )
+    contact = get_contact(user["id"], body.contact_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="联系人不存在")
+    if not (contact.get("email") or "").strip():
+        raise HTTPException(status_code=400, detail="该联系人没有邮箱，无法作为扩展锚点")
+    job = spawn_background_job(
+        user["id"],
+        "enrich_contact",
+        {
+            "contact_id": body.contact_id,
+            "min_score": body.min_score,
             "auto_import": body.auto_import,
         },
     )

@@ -5,6 +5,12 @@
 #   ./scripts/check.sh --quiet  仅 exit code，无输出
 #   ./scripts/check.sh --quick    仅容器 + HTTP（deploy 等待用）
 #   ./scripts/check.sh --quick --quiet
+#
+# 环境变量：
+#   APP_PORT        对外端口（默认 8000）
+#   SMOKE_RETRIES   冒烟重试次数（默认 3）
+#   SMOKE_USER      冒烟登录用户名（默认 admin，见 smoke_check.py）
+#   SMOKE_PASSWORD  冒烟登录密码（默认 admin123）
 
 set -euo pipefail
 
@@ -128,18 +134,20 @@ check_health_http() {
 }
 
 check_smoke() {
-  local smoke_cmd="env PYTHONPATH=/app python /app/scripts/smoke_check.py"
+  local -a smoke_exec_env=(-e PYTHONPATH=/app)
+  [[ -n "${SMOKE_USER:-}" ]] && smoke_exec_env+=(-e "SMOKE_USER=${SMOKE_USER}")
+  [[ -n "${SMOKE_PASSWORD:-}" ]] && smoke_exec_env+=(-e "SMOKE_PASSWORD=${SMOKE_PASSWORD}")
   local max_attempts="${SMOKE_RETRIES:-3}"
   local attempt output
   for attempt in $(seq 1 "${max_attempts}"); do
-    if $DOCKER exec "${CONTAINER}" sh -c "${smoke_cmd}" >/dev/null 2>&1; then
+    if $DOCKER exec "${smoke_exec_env[@]}" "${CONTAINER}" python /app/scripts/smoke_check.py >/dev/null 2>&1; then
       say "冒烟: scripts/smoke_check.py — ok"
       return 0
     fi
     sleep 2
   done
   say "API 冒烟测试失败："
-  output="$($DOCKER exec "${CONTAINER}" sh -c "${smoke_cmd}" 2>&1 || true)"
+  output="$($DOCKER exec "${smoke_exec_env[@]}" "${CONTAINER}" python /app/scripts/smoke_check.py 2>&1 || true)"
   [[ -n "${output}" ]] && echo "${output}"
   show_logs
   fail "关键 API / 数据库查询异常（如缺表导致 500）"

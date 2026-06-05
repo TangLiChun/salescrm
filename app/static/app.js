@@ -302,6 +302,45 @@ function followUpStatusBadge(status) {
   return `<span class="status-badge follow-up-${escapeHtml(key)}">${escapeHtml(label)}</span>`;
 }
 
+function closeAllContactActionMenus() {
+  document.querySelectorAll(".contact-action-menu .action-menu-panel").forEach((panel) => {
+    panel.classList.add("hidden");
+  });
+  document.querySelectorAll(".contact-action-menu .action-menu-toggle").forEach((toggle) => {
+    toggle.setAttribute("aria-expanded", "false");
+  });
+}
+
+function contactActionsHtml(contact) {
+  const id = contact.id;
+  const status = escapeHtml(contact.follow_up_status || "new");
+  const sent = contact.email_sent ? "0" : "1";
+  const markLabel = contact.email_sent ? t("contacts.actionUnmark") : t("contacts.actionMarkSent");
+  const menuItem = (className, label, extra = "") =>
+    `<button type="button" class="action-menu-item link-btn ${className}" role="menuitem" data-id="${id}"${extra}>${label}</button>`;
+
+  return `
+    <div class="contact-actions">
+      <div class="contact-actions-primary">
+        <button type="button" class="link-btn action-edit" data-id="${id}">${t("contacts.actionEdit")}</button>
+        <button type="button" class="link-btn action-mail" data-id="${id}">${t("contacts.actionMail")}</button>
+      </div>
+      <div class="contact-action-menu">
+        <button type="button" class="action-menu-toggle" aria-label="${t("contacts.moreActions")}" aria-expanded="false" aria-haspopup="menu">⋯</button>
+        <div class="action-menu-panel hidden" role="menu">
+          ${menuItem("action-enrich-pi", t("contacts.actionEnrich"))}
+          ${menuItem("action-edit", t("contacts.actionEdit"))}
+          ${menuItem("action-notes", t("contacts.actionTimeline"))}
+          ${menuItem("action-mail", t("contacts.actionMail"))}
+          ${menuItem("action-status", t("contacts.actionStatus"), ` data-status="${status}"`)}
+          ${menuItem("action-mark", markLabel, ` data-sent="${sent}"`)}
+          ${menuItem("action-delete", t("contacts.actionDelete"))}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderContacts() {
   contactsBody.innerHTML = "";
   updateContactsBulkBar();
@@ -330,6 +369,10 @@ function renderContacts() {
       .join("");
     const statusBadge = followUpStatusBadge(contact.follow_up_status);
     const checked = selectedContactIds.has(contact.id) ? "checked" : "";
+    const notesText = contact.notes || "";
+    const notesCell = notesText
+      ? `<span class="notes-truncate" title="${escapeHtml(notesText)}">${escapeHtml(notesText)}</span>`
+      : "—";
 
     tr.innerHTML = `
       <td class="col-select"><input type="checkbox" class="contact-select" data-id="${contact.id}" ${checked}></td>
@@ -340,17 +383,9 @@ function renderContacts() {
       <td class="col-role">${roles || "—"}</td>
       <td class="col-asn mono">${contact.asn ? `AS${contact.asn}` : "—"}</td>
       <td class="col-source">${escapeHtml(contact.source || "arin")}</td>
-      <td class="col-notes">${escapeHtml(contact.notes || "—")}</td>
+      <td class="col-notes">${notesCell}</td>
       <td class="col-imported mono">${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
-      <td class="action-cell">
-        <button type="button" class="link-btn action-enrich-pi" data-id="${contact.id}">${t("contacts.actionEnrich")}</button>
-        <button type="button" class="link-btn action-edit" data-id="${contact.id}">${t("contacts.actionEdit")}</button>
-        <button type="button" class="link-btn action-notes" data-id="${contact.id}">${t("contacts.actionTimeline")}</button>
-        <button type="button" class="link-btn action-mail" data-id="${contact.id}">${t("contacts.actionMail")}</button>
-        <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">${t("contacts.actionStatus")}</button>
-        <button type="button" class="link-btn action-mark" data-id="${contact.id}" data-sent="${contact.email_sent ? "0" : "1"}">${contact.email_sent ? t("contacts.actionUnmark") : t("contacts.actionMarkSent")}</button>
-        <button type="button" class="link-btn action-delete" data-id="${contact.id}">${t("contacts.actionDelete")}</button>
-      </td>
+      <td class="action-cell col-actions">${contactActionsHtml(contact)}</td>
     `;
     contactsBody.appendChild(tr);
   }
@@ -1396,6 +1431,28 @@ async function openPiEnrichContact(contact) {
     .join("\n");
   switchView("pi-agent");
   await sendPiChatMessage(message);
+}
+
+async function enrichContactViaBackground(contact) {
+  if (!contact?.id) return;
+  if (!llmConfigured) {
+    alert(t("msg.piNotAvailable"));
+    return;
+  }
+  try {
+    const data = await api("/api/jobs/enrich", {
+      method: "POST",
+      body: JSON.stringify({
+        contact_id: contact.id,
+        min_score: 50,
+        auto_import: true,
+      }),
+    });
+    trackBackgroundJob(data.job);
+    alert(t("msg.jobStartedBackground"));
+  } catch (error) {
+    alert(errorMessage(error, t("msg.enrichFailed")));
+  }
 }
 
 function formatPiToolSummary(name, result) {
@@ -2481,6 +2538,19 @@ function backgroundJobLabel(job) {
     }
     return t("jobs.lookupStarting");
   }
+  if (job.job_type === "enrich_contact") {
+    if (progress.type === "progress") {
+      return t("jobs.enrichProgress", {
+        current: progress.index,
+        total: progress.total,
+        asn: progress.asn ? `AS${progress.asn}` : "",
+      });
+    }
+    if (progress.message) {
+      return t("jobs.enrichRunning", { message: progress.message });
+    }
+    return t("jobs.enrichStarting");
+  }
   if (progress.message) {
     return t("jobs.leadsProgress", { message: progress.message });
   }
@@ -2545,10 +2615,27 @@ function applyLeadDiscoverJobResult(job) {
   }
 }
 
+function applyEnrichContactJobResult(job) {
+  const result = job.result || {};
+  if (result.import) {
+    loadContacts().catch(() => {});
+  }
+  const count = Array.isArray(result.leads) ? result.leads.length : 0;
+  const contactId = result.contact_id || "";
+  alert(
+    t("jobs.enrichDone", {
+      count,
+      contactId,
+      message: result.message || job.message || "",
+    }),
+  );
+}
+
 function finishBackgroundJob(job) {
   if (job.status === "done") {
     if (job.job_type === "lookup") applyLookupJobResult(job);
     else if (job.job_type === "lead_discover") applyLeadDiscoverJobResult(job);
+    else if (job.job_type === "enrich_contact") applyEnrichContactJobResult(job);
   } else if (job.status === "error") {
     alert(`${t("jobs.failed")}: ${job.message || ""}`);
   }
@@ -2773,24 +2860,48 @@ contactNotesModal.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".contact-action-menu")) {
+    closeAllContactActionMenus();
+  }
+});
+
 contactsBody.addEventListener("click", (event) => {
+  const menuToggle = event.target.closest(".action-menu-toggle");
+  if (menuToggle) {
+    event.stopPropagation();
+    const menu = menuToggle.closest(".contact-action-menu");
+    const panel = menu?.querySelector(".action-menu-panel");
+    const wasOpen = panel && !panel.classList.contains("hidden");
+    closeAllContactActionMenus();
+    if (!wasOpen && panel) {
+      panel.classList.remove("hidden");
+      menuToggle.setAttribute("aria-expanded", "true");
+    }
+    return;
+  }
+
   const editBtn = event.target.closest(".action-edit");
   if (editBtn) {
+    closeAllContactActionMenus();
     openContactEdit(editBtn.dataset.id);
     return;
   }
   const notesBtn = event.target.closest(".action-notes");
   if (notesBtn) {
+    closeAllContactActionMenus();
     openContactNotes(notesBtn.dataset.id).catch((error) => alert(error.message));
     return;
   }
   const mailBtn = event.target.closest(".action-mail");
   if (mailBtn) {
+    closeAllContactActionMenus();
     openMailClient(mailBtn.dataset.id);
     return;
   }
   const statusBtn = event.target.closest(".action-status");
   if (statusBtn) {
+    closeAllContactActionMenus();
     changeContactFollowUpStatus(statusBtn.dataset.id, statusBtn.dataset.status).catch((error) =>
       alert(error.message)
     );
@@ -2798,17 +2909,20 @@ contactsBody.addEventListener("click", (event) => {
   }
   const markBtn = event.target.closest(".action-mark");
   if (markBtn) {
+    closeAllContactActionMenus();
     markContactSent(markBtn.dataset.id, markBtn.dataset.sent === "1").catch((error) => alert(error.message));
     return;
   }
   const enrichBtn = event.target.closest(".action-enrich-pi");
   if (enrichBtn) {
+    closeAllContactActionMenus();
     const contact = contacts.find((item) => String(item.id) === String(enrichBtn.dataset.id));
-    openPiEnrichContact(contact).catch((error) => alert(errorMessage(error, "Pi 扩展失败")));
+    enrichContactViaBackground(contact).catch((error) => alert(errorMessage(error, t("msg.enrichFailed"))));
     return;
   }
   const deleteBtn = event.target.closest(".action-delete");
   if (deleteBtn) {
+    closeAllContactActionMenus();
     deleteContact(deleteBtn.dataset.id).catch((error) => alert(error.message));
   }
 });

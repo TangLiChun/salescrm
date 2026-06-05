@@ -569,10 +569,13 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 }
 .email-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 
-.contacts-table-wrap { overflow-x: auto; }
+.contacts-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 .contacts-table {
-  min-width: 1080px;
+  min-width: 1000px;
 }
 
 .contacts-table .col-org {
@@ -599,7 +602,14 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .contacts-table .col-notes {
   min-width: 8rem;
   max-width: 18rem;
-  word-break: break-word;
+}
+
+.contacts-table .col-notes .notes-truncate {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 18rem;
 }
 
 .contacts-table .col-source,
@@ -609,6 +619,113 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .contacts-table .col-imported {
   white-space: nowrap;
+}
+
+.contacts-table .col-actions,
+.contacts-table .action-cell {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--surface);
+  box-shadow: -6px 0 10px -8px oklch(0 0 0 / 0.18);
+}
+
+.contacts-table thead .col-actions {
+  z-index: 3;
+  background: var(--surface-sunk);
+}
+
+.contacts-table tbody tr:hover .action-cell {
+  background: var(--surface-hover);
+}
+
+.contacts-table tbody tr.row-sent .action-cell {
+  background: var(--positive-tint);
+}
+
+.contacts-table tbody tr.row-sent:hover .action-cell {
+  background: oklch(0.945 0.035 155);
+}
+
+.contacts-table .contact-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.contacts-table .contact-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.contacts-table .contact-action-menu {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.contacts-table .action-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.contacts-table .action-menu-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.contacts-table .action-menu-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.contacts-table .action-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  min-width: 10.5rem;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  z-index: 10;
+}
+
+.contacts-table .action-menu-panel.hidden {
+  display: none;
+}
+
+.contacts-table .action-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+}
+
+.contacts-table .action-menu-item:hover {
+  background: var(--surface-hover);
+  text-decoration: none;
+}
+
+.contacts-table .action-cell .link-btn {
+  margin-right: 0;
 }
 
 .background-jobs-bar {
