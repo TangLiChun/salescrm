@@ -1137,6 +1137,7 @@ async function loadSettingsForm() {
   setInputValue("setting-default-admin-user", data.default_admin_user);
   setInputValue("setting-llm-base-url", data.llm_base_url);
   setInputValue("setting-llm-model", data.llm_model);
+  setInputValue("setting-zhipu-search-engine", data.zhipu_search_engine || "search_pro");
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
 
@@ -1155,6 +1156,7 @@ async function loadSettingsForm() {
     ["setting-tavily-api-key", data.tavily_api_key, data.tavily_api_key_configured],
     ["setting-serpapi-key", data.serpapi_key, data.serpapi_key_configured],
     ["setting-brave-search-key", data.brave_search_key, data.brave_search_key_configured],
+    ["setting-zhipu-api-key", data.zhipu_api_key, data.zhipu_api_key_configured],
   ];
   for (const [id, masked, configured] of secretFields) {
     const el = document.getElementById(id);
@@ -1171,6 +1173,7 @@ async function saveSettings(event) {
     default_admin_user: document.getElementById("setting-default-admin-user").value.trim(),
     llm_base_url: document.getElementById("setting-llm-base-url").value.trim(),
     llm_model: document.getElementById("setting-llm-model").value.trim(),
+    zhipu_search_engine: document.getElementById("setting-zhipu-search-engine").value.trim(),
     scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
   };
@@ -1182,6 +1185,7 @@ async function saveSettings(event) {
     ["tavily_api_key", "setting-tavily-api-key"],
     ["serpapi_key", "setting-serpapi-key"],
     ["brave_search_key", "setting-brave-search-key"],
+    ["zhipu_api_key", "setting-zhipu-api-key"],
   ];
   for (const [key, id] of secrets) {
     const value = document.getElementById(id).value.trim();

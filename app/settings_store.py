@@ -10,6 +10,7 @@ SECRET_KEYS = {
     "tavily_api_key",
     "serpapi_key",
     "brave_search_key",
+    "zhipu_api_key",
     "session_secret",
     "default_admin_password",
     "agent_api_token",
@@ -26,6 +27,8 @@ DEFAULTS: dict[str, str] = {
     "tavily_api_key": "",
     "serpapi_key": "",
     "brave_search_key": "",
+    "zhipu_api_key": "",
+    "zhipu_search_engine": "search_pro",
     "scheduler_enabled": "1",
     "scheduler_poll_seconds": "60",
     "import_blocklist": "",
@@ -139,6 +142,13 @@ def get_public_settings() -> dict[str, Any]:
         "scheduler_enabled": values.get("scheduler_enabled", "1") != "0",
         "scheduler_poll_seconds": int(values.get("scheduler_poll_seconds", "60") or 60),
         "search_keys": {
+            "zhipu": bool(
+                get_setting("zhipu_api_key", "").strip()
+                or (
+                    "bigmodel.cn" in get_setting("llm_base_url", "").lower()
+                    and get_setting("llm_api_key", "").strip()
+                )
+            ),
             "tavily": bool(values.get("tavily_api_key", "").strip()),
             "serpapi": bool(values.get("serpapi_key", "").strip()),
             "brave": bool(values.get("brave_search_key", "").strip()),

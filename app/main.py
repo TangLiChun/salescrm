@@ -186,6 +186,8 @@ class SettingsUpdateRequest(BaseModel):
     session_https_only: str | None = None
     import_blocklist: str | None = None
     import_allowlist: str | None = None
+    zhipu_api_key: str | None = None
+    zhipu_search_engine: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):

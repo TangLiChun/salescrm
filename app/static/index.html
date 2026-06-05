@@ -365,7 +365,20 @@
                   <input id="setting-llm-model" type="text"></label>
               </fieldset>
               <fieldset>
-                <legend data-i18n="settings.searchApiOptional">搜索引擎 API（可选）</legend>
+                <legend data-i18n="settings.zhipuWebSearch">智谱联网搜索（推荐）</legend>
+                <p class="stats" data-i18n="settings.zhipuWebSearchHint">使用智谱 Web Search API。若 LLM Base URL 为 open.bigmodel.cn，可留空 API Key 并复用上方 LLM Key。</p>
+                <label class="field"><span data-i18n="settings.zhipuApiKey">智谱 API Key</span>
+                  <input id="setting-zhipu-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
+                <label class="field"><span data-i18n="settings.zhipuSearchEngine">搜索引擎</span>
+                  <select id="setting-zhipu-search-engine">
+                    <option value="search_pro">search_pro（高级，推荐）</option>
+                    <option value="search_std">search_std（基础）</option>
+                    <option value="search_pro_sogou">search_pro_sogou（搜狗）</option>
+                    <option value="search_pro_quark">search_pro_quark（夸克）</option>
+                  </select></label>
+              </fieldset>
+              <fieldset>
+                <legend data-i18n="settings.searchApiOptional">其他搜索引擎 API（可选）</legend>
                 <label class="field"><span>Tavily API Key</span>
                   <input id="setting-tavily-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span>SerpAPI Key</span>
