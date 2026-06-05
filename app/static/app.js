@@ -125,23 +125,17 @@ const selectedContactIds = new Set();
 let editingContactId = null;
 let notesContactId = null;
 
-const FOLLOW_UP_STATUS_LABELS = {
-  new: "新客户",
-  contacted: "已联系",
-  replied: "已回复",
-  invalid: "无效",
-  interested: "有意向",
-};
+const FOLLOW_UP_STATUS_KEYS = ["new", "contacted", "replied", "invalid", "interested"];
 let schedules = [];
 let scheduleRuns = {};
 let aiLeads = [];
 const CHANNEL_DEFS = [
-  { key: "peeringdb", name: "PeeringDB" },
-  { key: "web_search", name: "搜索引擎" },
-  { key: "web_regex", name: "网页解析" },
-  { key: "llm_extract", name: "LLM 提取" },
-  { key: "arin", name: "全球 RDAP" },
-  { key: "scoring", name: "LLM 评分" },
+  { key: "peeringdb", nameKey: "channel.peeringdb" },
+  { key: "web_search", nameKey: "channel.webSearch" },
+  { key: "web_regex", nameKey: "channel.webRegex" },
+  { key: "llm_extract", nameKey: "channel.llmExtract" },
+  { key: "arin", nameKey: "channel.arin" },
+  { key: "scoring", nameKey: "channel.scoring" },
 ];
 let channelState = {};
 let discoverController = null;
@@ -153,6 +147,7 @@ const PI_CHAT_MAX_STORED = 40;
 let piChatHistory = [];
 let piChatController = null;
 let piChatBusy = false;
+const PI_LEAD_STREAM_TOOLS = new Set(["discover_leads", "enrich_contact"]);
 let emailTemplates = [];
 let editingTemplateId = null;
 let contactSearchTimer = null;
@@ -169,11 +164,11 @@ async function api(url, options = {}) {
 
   if (response.status === 401) {
     window.location.href = "/login";
-    throw new Error("请先登录");
+    throw new Error(t("msg.loginRequired"));
   }
 
   if (!response.ok) {
-    let detail = "请求失败";
+    let detail = t("msg.requestFailed");
     try {
       const error = await response.json();
       detail = formatApiDetail(error.detail) || detail;
@@ -239,8 +234,8 @@ function updateStats() {
   const errors = visibleRows.filter((row) => row.error).length;
   const importable = getImportableRows().length;
   const selected = getSelectedImportableRows().length;
-  const selection = importable > 0 ? ` · 已选 ${selected} / 共 ${importable}` : "";
-  statsEl.textContent = `${uniqueAsns} 个 ASN · ${emails} 条邮箱 · ${errors} 条异常${selection}`;
+  const selection = importable > 0 ? t("msg.lookupStatsSelectionFull", { selected, importable }) : "";
+  statsEl.textContent = t("msg.lookupStats", { asns: uniqueAsns, emails, errors, selection });
 }
 
 function getVisibleRows() {
@@ -256,7 +251,7 @@ function renderRows() {
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="9">${allRows.length ? "当前筛选无结果" : "输入 ASN 列表后点击「开始查询」"}</td>`;
+    tr.innerHTML = `<td colspan="9">${allRows.length ? t("msg.filterNoResults") : t("lookup.emptyHint")}</td>`;
     resultsBody.appendChild(tr);
     updateStats();
     importBtn.disabled = getSelectedImportableRows().length === 0;
@@ -271,7 +266,7 @@ function renderRows() {
       ? `<a class="email-link" href="mailto:${row.email}">${row.email}</a>`
       : "—";
     const statusClass = row.error ? "status-error" : row.email ? "status-ok" : "status-warn";
-    const statusText = row.error || (row.email ? "OK" : "无邮箱");
+    const statusText = row.error || (row.email ? "OK" : t("msg.noEmail"));
     const importable = Boolean(row.email && !row.error);
     ensureRowSelected(row);
     const selectCell = importable
@@ -298,7 +293,7 @@ function renderRows() {
 
 function followUpStatusBadge(status) {
   const key = status || "new";
-  const label = FOLLOW_UP_STATUS_LABELS[key] || key;
+  const label = followUpLabel(key);
   return `<span class="status-badge follow-up-${escapeHtml(key)}">${escapeHtml(label)}</span>`;
 }
 
@@ -309,9 +304,11 @@ function renderContacts() {
   if (contacts.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="11">暂无联系人，查询 ASN 或 AI 发现后可导入</td>`;
+    tr.innerHTML = `<td colspan="11">${t("msg.contactsEmptyImportHint")}</td>`;
     contactsBody.appendChild(tr);
-    contactsStatsEl.textContent = contactsTotal ? `共 ${contactsTotal} 位 · 本页 0 条` : "共 0 位联系人";
+    contactsStatsEl.textContent = contactsTotal
+      ? t("msg.contactsStatsEmptyPage", { total: contactsTotal })
+      : t("msg.contactsEmpty");
     renderContactsPagination();
     return;
   }
@@ -341,18 +338,25 @@ function renderContacts() {
       <td>${escapeHtml(contact.notes || "—")}</td>
       <td class="mono">${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
-        <button type="button" class="link-btn action-edit" data-id="${contact.id}">编辑</button>
-        <button type="button" class="link-btn action-notes" data-id="${contact.id}">时间线</button>
-        <button type="button" class="link-btn action-mail" data-id="${contact.id}">发邮件</button>
-        <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">改状态</button>
-        <button type="button" class="link-btn action-mark" data-id="${contact.id}" data-sent="${contact.email_sent ? "0" : "1"}">${contact.email_sent ? "取消标记" : "标记已发"}</button>
-        <button type="button" class="link-btn action-delete" data-id="${contact.id}">删除</button>
+        <button type="button" class="link-btn action-enrich-pi" data-id="${contact.id}">${t("contacts.actionEnrich")}</button>
+        <button type="button" class="link-btn action-edit" data-id="${contact.id}">${t("contacts.actionEdit")}</button>
+        <button type="button" class="link-btn action-notes" data-id="${contact.id}">${t("contacts.actionTimeline")}</button>
+        <button type="button" class="link-btn action-mail" data-id="${contact.id}">${t("contacts.actionMail")}</button>
+        <button type="button" class="link-btn action-status" data-id="${contact.id}" data-status="${escapeHtml(contact.follow_up_status || "new")}">${t("contacts.actionStatus")}</button>
+        <button type="button" class="link-btn action-mark" data-id="${contact.id}" data-sent="${contact.email_sent ? "0" : "1"}">${contact.email_sent ? t("contacts.actionUnmark") : t("contacts.actionMarkSent")}</button>
+        <button type="button" class="link-btn action-delete" data-id="${contact.id}">${t("contacts.actionDelete")}</button>
       </td>
     `;
     contactsBody.appendChild(tr);
   }
 
-  contactsStatsEl.textContent = `共 ${contactsTotal} 位 · 本页 ${contacts.length} 位（已发 ${sentCount}）· 第 ${contactsPage}/${contactsPages} 页`;
+  contactsStatsEl.textContent = t("msg.contactsStats", {
+    total: contactsTotal,
+    pageCount: contacts.length,
+    sent: sentCount,
+    page: contactsPage,
+    pages: contactsPages,
+  });
   renderContactsPagination();
   syncContactsSelectAllCheckbox();
 }
@@ -360,7 +364,7 @@ function renderContacts() {
 function updateContactsBulkBar() {
   const count = selectedContactIds.size;
   contactsBulkBar.classList.toggle("hidden", count === 0);
-  contactsSelectedCountEl.textContent = `已选 ${count} 位`;
+  contactsSelectedCountEl.textContent = t("msg.contactsSelected", { count });
 }
 
 function syncContactsSelectAllCheckbox() {
@@ -377,7 +381,11 @@ function renderContactsPagination() {
     return;
   }
   contactsPagination.classList.remove("hidden");
-  contactsPageInfo.textContent = `第 ${contactsPage} / ${contactsPages} 页（共 ${contactsTotal} 条）`;
+  contactsPageInfo.textContent = t("msg.contactsPage", {
+    page: contactsPage,
+    pages: contactsPages,
+    total: contactsTotal,
+  });
   contactsPrevBtn.disabled = contactsPage <= 1;
   contactsNextBtn.disabled = contactsPage >= contactsPages;
 }
@@ -434,7 +442,7 @@ function downloadCsv() {
 async function runLookup() {
   const text = asnInput.value.trim();
   if (!text) {
-    alert("请先输入 ASN 列表");
+    alert(t("msg.enterAsnList"));
     return;
   }
 
@@ -444,7 +452,7 @@ async function runLookup() {
   setLoading(true);
   progressEl.classList.remove("hidden");
   progressFill.style.width = "0%";
-  progressText.textContent = "开始查询…";
+  progressText.textContent = t("msg.lookupStarting");
 
   const delay = Number(delayInput.value) || 0;
 
@@ -463,7 +471,7 @@ async function runLookup() {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(formatApiDetail(error.detail) || "查询失败");
+      throw new Error(formatApiDetail(error.detail) || t("msg.lookupFailedShort"));
     }
 
     const reader = response.body.getReader();
@@ -484,7 +492,7 @@ async function runLookup() {
         const payload = JSON.parse(line.slice(6));
 
         if (payload.type === "parsed") {
-          progressText.textContent = `已去重，共 ${payload.total} 个 ASN，开始查询…`;
+          progressText.textContent = t("msg.lookupDeduped", { total: payload.total });
           renderAsnPreview({
             asns: payload.asns,
             total: payload.total,
@@ -501,12 +509,16 @@ async function runLookup() {
           renderRows();
           const percent = Math.round((payload.index / payload.total) * 100);
           progressFill.style.width = `${percent}%`;
-          progressText.textContent = `正在查询 AS${payload.asn}（${payload.index}/${payload.total}）`;
+          progressText.textContent = t("msg.lookupProgress", {
+            asn: payload.asn,
+            index: payload.index,
+            total: payload.total,
+          });
         }
 
         if (payload.type === "done") {
           progressFill.style.width = "100%";
-          progressText.textContent = "查询完成";
+          progressText.textContent = t("msg.lookupDone");
           csvContent = rowsToCsv(allRows);
           exportBtn.disabled = allRows.length === 0;
           importBtn.disabled = getSelectedImportableRows().length === 0;
@@ -514,23 +526,41 @@ async function runLookup() {
       }
     }
   } catch (error) {
-    alert(errorMessage(error, "查询失败，请稍后重试"));
-    progressText.textContent = "查询失败";
+    alert(errorMessage(error, t("msg.lookupFailed")));
+    progressText.textContent = t("msg.lookupFailedShort");
   } finally {
     setLoading(false);
   }
 }
 
 function formatImportResult(result) {
-  const parts = [
-    `新增 ${result.imported} 条`,
-    `重复 ${result.duplicates} 条`,
-    `跳过 ${result.skipped} 条`,
-  ];
-  if (result.filtered) {
-    parts.push(`过滤 ${result.filtered} 条`);
-  }
-  return `导入完成：${parts.join("，")}`;
+  const filtered = result.filtered ? t("msg.importFiltered", { filtered: result.filtered }) : "";
+  return t("msg.importDone", {
+    imported: result.imported,
+    duplicates: result.duplicates,
+    skipped: result.skipped,
+    filtered,
+  });
+}
+
+function normalizeImportRow(row) {
+  if (!row || typeof row !== "object") return row;
+  const roles = row.roles;
+  return {
+    asn: row.asn ?? null,
+    org: String(row.org || row.organization || row.company || row.network_name || "").trim(),
+    name: String(row.name || row.contact_name || row.contact || row.fn || "").trim(),
+    email: String(row.email || "").trim(),
+    roles: Array.isArray(roles) ? roles : String(roles || "").split(",").map((part) => part.trim()).filter(Boolean),
+    handle: row.handle || "",
+    rir: row.rir || "",
+    source: row.source || "",
+    notes: row.notes || "",
+  };
+}
+
+function normalizeImportRows(rows) {
+  return (rows || []).map((row) => normalizeImportRow(row));
 }
 
 let asnParseTimer = null;
@@ -538,13 +568,18 @@ let asnParseTimer = null;
 function renderAsnPreview(data) {
   if (!asnParsePreviewEl) return;
   if (!data || !data.total) {
-    asnParsePreviewEl.textContent = data ? "未识别到有效 ASN" : "";
+    asnParsePreviewEl.textContent = data ? t("msg.noValidAsn") : "";
     return;
   }
   const sample = (data.asns || []).slice(0, 8).map((asn) => `AS${asn}`).join(", ");
-  const suffix = data.total > 8 ? ` … 共 ${data.total} 个` : "";
-  const limitNote = data.over_limit ? `（超过上限 ${data.max}，查询时将截断）` : "";
-  asnParsePreviewEl.textContent = `已识别 ${data.total} 个 ASN（去重后）：${sample}${suffix}${limitNote}`;
+  const suffix = data.total > 8 ? t("msg.asnPreviewSuffix", { total: data.total }) : "";
+  const limitNote = data.over_limit ? t("msg.asnOverLimit", { max: data.max }) : "";
+  asnParsePreviewEl.textContent = t("msg.asnPreview", {
+    total: data.total,
+    sample,
+    suffix,
+    limitNote,
+  });
 }
 
 async function refreshAsnPreview() {
@@ -567,7 +602,7 @@ async function refreshAsnPreview() {
 async function importResults() {
   const rows = getSelectedImportableRows();
   if (rows.length === 0) {
-    alert("请先勾选要导入的邮箱记录");
+    alert(t("msg.selectEmailsToImport"));
     return;
   }
 
@@ -575,13 +610,13 @@ async function importResults() {
   try {
     const result = await api("/api/contacts/import", {
       method: "POST",
-      body: JSON.stringify({ rows }),
+      body: JSON.stringify({ rows: normalizeImportRows(rows) }),
     });
     alert(formatImportResult(result));
     await loadContacts();
     switchView("contacts");
   } catch (error) {
-    alert(error.message || "导入失败");
+    alert(error.message || t("msg.importFailed"));
   } finally {
     importBtn.disabled = getSelectedImportableRows().length === 0;
   }
@@ -615,7 +650,7 @@ function getSelectedContactIds() {
 async function bulkContactsAction(action, extra = {}) {
   const ids = getSelectedContactIds();
   if (ids.length === 0) {
-    alert("请先勾选联系人");
+    alert(t("msg.selectContacts"));
     return;
   }
   const payload = { ids, action, ...extra };
@@ -669,7 +704,7 @@ async function downloadBackup() {
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || "备份下载失败");
+    throw new Error(error.detail || t("msg.backupFailed"));
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -698,7 +733,7 @@ async function exportContactsCsv() {
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || "导出失败");
+    throw new Error(error.detail || t("msg.exportFailed"));
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -711,7 +746,7 @@ async function exportContactsCsv() {
 
 async function dedupeContacts() {
   const result = await api("/api/contacts/dedupe", { method: "POST" });
-  alert(`去重完成：删除 ${result.removed} 条重复联系人，剩余 ${result.total} 条`);
+  alert(t("msg.dedupeDone", { removed: result.removed, total: result.total }));
   await loadContacts();
 }
 
@@ -724,14 +759,14 @@ async function markContactSent(contactId, sent) {
 }
 
 async function changeContactFollowUpStatus(contactId, currentStatus) {
-  const options = Object.keys(FOLLOW_UP_STATUS_LABELS);
-  const currentLabel = FOLLOW_UP_STATUS_LABELS[currentStatus] || currentStatus;
-  const lines = options.map((opt, index) => `${index + 1}. ${FOLLOW_UP_STATUS_LABELS[opt]}`).join("\n");
-  const input = prompt(`当前：${currentLabel}\n\n${lines}\n\n输入序号 1-${options.length}：`);
+  const options = followUpOptions();
+  const currentLabel = followUpLabel(currentStatus);
+  const lines = options.map((opt, index) => `${index + 1}. ${followUpLabel(opt)}`).join("\n");
+  const input = prompt(`${t("msg.changeStatusCurrent", { label: currentLabel })}\n\n${lines}\n\n${t("msg.changeStatusInput", { max: options.length })}`);
   if (input === null) return;
   const index = Number(input.trim()) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= options.length) {
-    alert("无效序号");
+    alert(t("msg.invalidIndex"));
     return;
   }
   const follow_up_status = options[index];
@@ -769,14 +804,14 @@ function openMailClient(contactId) {
     if (query) url += `?${query}`;
   }
   window.location.href = url;
-  if (!contact.email_sent && confirm("是否同时标记为已发邮件？")) {
+  if (!contact.email_sent && confirm(t("msg.confirmMarkSent"))) {
     markContactSent(contactId, true).catch((error) => alert(error.message));
   }
 }
 
 function renderMailTemplateSelect() {
   const current = mailTemplateSelect.value;
-  mailTemplateSelect.innerHTML = `<option value="">无模板</option>`;
+  mailTemplateSelect.innerHTML = `<option value="">${t("contacts.noTemplate")}</option>`;
   for (const template of emailTemplates) {
     const option = document.createElement("option");
     option.value = String(template.id);
@@ -791,7 +826,7 @@ function renderMailTemplateSelect() {
 function renderEmailTemplatesList() {
   emailTemplatesListEl.innerHTML = "";
   if (emailTemplates.length === 0) {
-    emailTemplatesListEl.innerHTML = `<p class="stats">暂无模板，可在下方创建</p>`;
+    emailTemplatesListEl.innerHTML = `<p class="stats">${t("msg.noTemplates")}</p>`;
     return;
   }
 
@@ -802,11 +837,11 @@ function renderEmailTemplatesList() {
       <div class="template-item-head">
         <strong>${escapeHtml(template.name)}</strong>
         <span class="template-item-actions">
-          <button type="button" class="link-btn template-edit" data-id="${template.id}">编辑</button>
-          <button type="button" class="link-btn template-delete" data-id="${template.id}">删除</button>
+          <button type="button" class="link-btn template-edit" data-id="${template.id}">${t("templates.edit")}</button>
+          <button type="button" class="link-btn template-delete" data-id="${template.id}">${t("templates.delete")}</button>
         </span>
       </div>
-      <p class="stats">${escapeHtml(template.subject || "（无主题）")}</p>
+      <p class="stats">${escapeHtml(template.subject || t("msg.noSubject"))}</p>
     `;
     emailTemplatesListEl.appendChild(item);
   }
@@ -824,14 +859,14 @@ function resetTemplateForm() {
   templateNameInput.value = "";
   templateSubjectInput.value = "";
   templateBodyInput.value = "";
-  saveTemplateBtn.textContent = "保存模板";
+  saveTemplateBtn.textContent = t("settings.saveTemplate");
   templateStatusEl.textContent = "";
 }
 
 async function saveEmailTemplate() {
   const name = templateNameInput.value.trim();
   if (!name) {
-    alert("请填写模板名称");
+    alert(t("msg.templateNameRequired"));
     return;
   }
   const payload = {
@@ -844,10 +879,10 @@ async function saveEmailTemplate() {
       method: "PUT",
       body: JSON.stringify(payload),
     });
-    templateStatusEl.textContent = "模板已更新";
+    templateStatusEl.textContent = t("msg.templateUpdated");
   } else {
     await api("/api/email-templates", { method: "POST", body: JSON.stringify(payload) });
-    templateStatusEl.textContent = "模板已创建";
+    templateStatusEl.textContent = t("msg.templateCreated");
   }
   resetTemplateForm();
   await loadEmailTemplates();
@@ -860,12 +895,12 @@ async function editEmailTemplate(templateId) {
   templateNameInput.value = template.name || "";
   templateSubjectInput.value = template.subject || "";
   templateBodyInput.value = template.body || "";
-  saveTemplateBtn.textContent = "更新模板";
-  templateStatusEl.textContent = `正在编辑：${template.name}`;
+  saveTemplateBtn.textContent = t("msg.updateTemplate");
+  templateStatusEl.textContent = t("msg.editingTemplate", { name: template.name });
 }
 
 async function deleteEmailTemplate(templateId) {
-  if (!confirm("确定删除该模板？")) return;
+  if (!confirm(t("msg.confirmDeleteTemplate"))) return;
   await api(`/api/email-templates/${templateId}`, { method: "DELETE" });
   if (String(editingTemplateId) === String(templateId)) {
     resetTemplateForm();
@@ -873,10 +908,10 @@ async function deleteEmailTemplate(templateId) {
   await loadEmailTemplates();
 }
 function formatJobRunLine(run) {
-  const statusLabel = run.status === "ok" ? "成功" : "失败";
+  const statusLabel = run.status === "ok" ? t("msg.scheduleRunOk") : t("msg.scheduleRunFail");
   const detail =
     run.status === "ok"
-      ? `${run.leads_found} 线索 / ${run.imported} 导入`
+      ? t("msg.scheduleRunDetail", { leads: run.leads_found, imported: run.imported })
       : escapeHtml(run.message || statusLabel);
   return `<li><span class="run-time">${escapeHtml(formatTime(run.ran_at))}</span> <span class="run-status run-${escapeHtml(run.status)}">${statusLabel}</span> ${detail}</li>`;
 }
@@ -886,28 +921,28 @@ function renderSchedules() {
   if (schedules.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="7">暂无定时任务</td>`;
+    tr.innerHTML = `<td colspan="7">${t("schedules.empty")}</td>`;
     schedulesBody.appendChild(tr);
-    schedulesStatsEl.textContent = "暂无定时任务";
+    schedulesStatsEl.textContent = t("msg.noSchedules");
     return;
   }
 
   for (const job of schedules) {
     const tr = document.createElement("tr");
     const enabledBadge = job.enabled
-      ? `<span class="status-badge sent">启用</span>`
-      : `<span class="status-badge unsent">停用</span>`;
+      ? `<span class="status-badge sent">${t("msg.scheduleEnabled")}</span>`
+      : `<span class="status-badge unsent">${t("msg.scheduleDisabled")}</span>`;
     tr.innerHTML = `
       <td>${escapeHtml(job.name)}</td>
-      <td class="mono">${job.interval_hours} 小时</td>
+      <td class="mono">${t("msg.scheduleHours", { hours: job.interval_hours })}</td>
       <td>${enabledBadge}</td>
       <td class="mono">${escapeHtml(formatTime(job.last_run_at))}</td>
       <td class="mono">${escapeHtml(formatTime(job.next_run_at))}</td>
       <td>${escapeHtml(job.last_run_message || job.last_run_status || "—")}</td>
       <td class="action-cell">
-        <button type="button" class="link-btn schedule-run" data-id="${job.id}">立即运行</button>
-        <button type="button" class="link-btn schedule-toggle" data-id="${job.id}" data-enabled="${job.enabled ? "0" : "1"}">${job.enabled ? "停用" : "启用"}</button>
-        <button type="button" class="link-btn schedule-delete" data-id="${job.id}">删除</button>
+        <button type="button" class="link-btn schedule-run" data-id="${job.id}">${t("msg.scheduleRunNow")}</button>
+        <button type="button" class="link-btn schedule-toggle" data-id="${job.id}" data-enabled="${job.enabled ? "0" : "1"}">${job.enabled ? t("msg.scheduleToggleOff") : t("msg.scheduleToggleOn")}</button>
+        <button type="button" class="link-btn schedule-delete" data-id="${job.id}">${t("contacts.actionDelete")}</button>
       </td>
     `;
     schedulesBody.appendChild(tr);
@@ -920,7 +955,7 @@ function renderSchedules() {
       schedulesBody.appendChild(runsTr);
     }
   }
-  schedulesStatsEl.textContent = `共 ${schedules.length} 个定时任务`;
+  schedulesStatsEl.textContent = t("msg.schedulesCount", { count: schedules.length });
 }
 
 async function loadSchedules() {
@@ -965,18 +1000,18 @@ async function toggleSchedule(jobId, enabled) {
 }
 
 async function deleteSchedule(jobId) {
-  if (!confirm("确定删除该定时任务？")) return;
+  if (!confirm(t("msg.confirmDeleteSchedule"))) return;
   await api(`/api/schedules/${jobId}`, { method: "DELETE" });
   await loadSchedules();
 }
 
 async function runScheduleNow(jobId) {
-  if (!confirm("立即运行该定时任务？可能需要几分钟。")) return;
+  if (!confirm(t("msg.confirmRunSchedule"))) return;
   const result = await api(`/api/schedules/${jobId}/run`, { method: "POST" });
   if (result.ok) {
-    alert(result.message || "运行完成");
+    alert(result.message || t("msg.runDone"));
   } else {
-    alert(result.message || "运行失败");
+    alert(result.message || t("msg.runFailed"));
   }
   await loadSchedules();
   await loadContacts();
@@ -1006,14 +1041,14 @@ function updateSettingsRailDots(data) {
   const aiDot = document.getElementById("rail-dot-ai");
   const aiOn = Boolean(data.llm_api_key_configured);
   aiDot.classList.toggle("on", aiOn);
-  aiDot.title = aiOn ? "LLM 已配置" : "LLM 未配置";
+  aiDot.title = aiOn ? t("msg.llmConfigured") : t("settings.llmNotConfigured");
 
   const autoDot = document.getElementById("rail-dot-automation");
   const autoOn = data.scheduler_enabled === "1";
   autoDot.classList.toggle("on", autoOn || Boolean(data.agent_api_token_configured));
   const parts = [];
-  parts.push(autoOn ? "定时任务已启用" : "定时任务未启用");
-  if (data.agent_api_token_configured) parts.push("Pi Agent 已配置");
+  parts.push(autoOn ? t("msg.automationStatus") : t("msg.automationStatusOff"));
+  if (data.agent_api_token_configured) parts.push(t("msg.piAgentConfigured"));
   autoDot.title = parts.join(" · ");
 }
 
@@ -1022,19 +1057,18 @@ async function regenerateAgentToken() {
   const el = document.getElementById("setting-agent-api-token");
   el.value = data.agent_api_token;
   el.dataset.revealed = "1";
-  document.getElementById("agent-token-status").textContent =
-    "Token 已重新生成，请复制到 Pi 环境变量 SALESCRM_TOKEN";
+  document.getElementById("agent-token-status").textContent = t("msg.tokenRegenerated");
 }
 
 async function copyAgentToken() {
   const el = document.getElementById("setting-agent-api-token");
   const value = el.value.trim();
   if (!value) {
-    alert("请先生成 Token");
+    alert(t("msg.generateTokenFirst"));
     return;
   }
   await navigator.clipboard.writeText(value);
-  document.getElementById("agent-token-status").textContent = "已复制到剪贴板";
+  document.getElementById("agent-token-status").textContent = t("msg.tokenCopied");
 }
 
 async function loadSettingsForm() {
@@ -1049,8 +1083,8 @@ async function loadSettingsForm() {
   if (agentTokenEl && !agentTokenEl.dataset.revealed) {
     agentTokenEl.value = "";
     agentTokenEl.placeholder = data.agent_api_token_configured
-      ? `已配置 ${data.agent_api_token}，点「重新生成」获取新 Token`
-      : "点击「重新生成」获取 Token";
+      ? t("msg.agentTokenConfigured", { token: data.agent_api_token })
+      : t("settings.agentTokenPlaceholder");
   }
 
   const secretFields = [
@@ -1064,7 +1098,7 @@ async function loadSettingsForm() {
   for (const [id, masked, configured] of secretFields) {
     const el = document.getElementById(id);
     el.value = "";
-    el.placeholder = configured ? `已配置 ${masked}，留空则不修改` : "未配置";
+    el.placeholder = configured ? t("msg.apiKeyConfigured", { masked }) : t("msg.apiKeyNotConfigured");
   }
   settingsStatusEl.textContent = "";
   updateSettingsRailDots(data);
@@ -1094,13 +1128,13 @@ async function saveSettings(event) {
   }
 
   await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
-  settingsStatusEl.textContent = "设置已保存";
+  settingsStatusEl.textContent = t("msg.settingsSaved");
   await loadLlmStatus();
   await loadSettingsForm();
 }
 
 async function deleteContact(contactId) {
-  if (!confirm("确定删除该联系人？")) return;
+  if (!confirm(t("msg.confirmDeleteContact"))) return;
   await api(`/api/contacts/${contactId}`, { method: "DELETE" });
   selectedContactIds.delete(Number(contactId));
   if (String(notesContactId) === String(contactId)) {
@@ -1117,7 +1151,7 @@ function renderContactNotesList(notes) {
   if (!notes.length) {
     const li = document.createElement("li");
     li.className = "empty-note";
-    li.textContent = "暂无备注，在下方添加第一条。";
+    li.textContent = t("msg.noNotesYet");
     contactNotesList.appendChild(li);
     return;
   }
@@ -1127,7 +1161,7 @@ function renderContactNotesList(notes) {
     li.innerHTML = `
       <div class="note-item-meta">
         <span>${escapeHtml(formatTime(note.created_at))}</span>
-        <button type="button" class="link-btn note-delete" data-note-id="${note.id}">删除</button>
+        <button type="button" class="link-btn note-delete" data-note-id="${note.id}">${t("notes.delete")}</button>
       </div>
       <p class="note-item-body">${escapeHtml(note.body)}</p>
     `;
@@ -1150,7 +1184,7 @@ async function openContactNotes(contactId) {
   const contact = contacts.find((item) => String(item.id) === String(contactId));
   if (!contact) return;
   notesContactId = contact.id;
-  contactNotesTitle.textContent = "备注时间线";
+  contactNotesTitle.textContent = t("contacts.notesTimeline");
   contactNotesSubtitle.textContent = `${contact.name || "—"} · ${contact.email}`;
   contactNoteBody.value = "";
   contactNotesModal.classList.remove("hidden");
@@ -1172,7 +1206,7 @@ async function addContactNote(event) {
 
 async function deleteContactNote(noteId) {
   if (!notesContactId) return;
-  if (!confirm("确定删除这条备注？")) return;
+  if (!confirm(t("msg.confirmDeleteNote"))) return;
   await api(`/api/contacts/${notesContactId}/notes/${noteId}`, { method: "DELETE" });
   await loadContactNotes(notesContactId);
 }
@@ -1180,7 +1214,7 @@ async function deleteContactNote(noteId) {
 function renderBarChart(container, items, { getLabel = (k) => k, colors } = {}) {
   container.innerHTML = "";
   if (!items.length) {
-    container.innerHTML = `<p class="stats">暂无数据</p>`;
+    container.innerHTML = `<p class="stats">${t("msg.noData")}</p>`;
     return;
   }
   const max = Math.max(...items.map((item) => item.count), 1);
@@ -1199,17 +1233,21 @@ function renderBarChart(container, items, { getLabel = (k) => k, colors } = {}) 
 }
 
 function renderDashboard(data) {
-  dashboardStatsEl.textContent = `共 ${data.total} 位联系人 · 已发 ${data.sent} · 未发 ${data.unsent}`;
+  dashboardStatsEl.textContent = t("msg.dashboardStats", {
+    total: data.total,
+    sent: data.sent,
+    unsent: data.unsent,
+  });
   statsSummaryEl.innerHTML = `
-    <div class="stat-card"><strong>${data.total}</strong><span>联系人总数</span></div>
-    <div class="stat-card"><strong>${data.sent}</strong><span>已发邮件</span></div>
-    <div class="stat-card"><strong>${data.unsent}</strong><span>未发邮件</span></div>
-    <div class="stat-card"><strong>${data.by_follow_up_status.interested || 0}</strong><span>有意向</span></div>
+    <div class="stat-card"><strong>${data.total}</strong><span>${t("stats.totalContacts")}</span></div>
+    <div class="stat-card"><strong>${data.sent}</strong><span>${t("stats.sentEmails")}</span></div>
+    <div class="stat-card"><strong>${data.unsent}</strong><span>${t("stats.unsentEmails")}</span></div>
+    <div class="stat-card"><strong>${data.by_follow_up_status.interested || 0}</strong><span>${t("followUp.interested")}</span></div>
   `;
   renderBarChart(
     chartFollowUpEl,
     Object.entries(data.by_follow_up_status || {}).map(([key, count]) => ({ key, count })),
-    { getLabel: (key) => FOLLOW_UP_STATUS_LABELS[key] || key },
+    { getLabel: (key) => followUpLabel(key) },
   );
   renderBarChart(
     chartSentEl,
@@ -1217,7 +1255,7 @@ function renderDashboard(data) {
       { key: "sent", count: data.sent },
       { key: "unsent", count: data.unsent },
     ],
-    { getLabel: (key) => (key === "sent" ? "已发" : "未发"), colors: ["var(--chart-pos)", "var(--chart-neutral)"] },
+    { getLabel: (key) => (key === "sent" ? t("stats.sentShort") : t("stats.unsentShort")), colors: ["var(--chart-pos)", "var(--chart-neutral)"] },
   );
   renderBarChart(
     chartSourceEl,
@@ -1232,7 +1270,7 @@ function renderDashboard(data) {
 }
 
 async function loadStats() {
-  dashboardStatsEl.textContent = "加载中…";
+  dashboardStatsEl.textContent = t("common.loading");
   renderDashboard(await api("/api/stats"));
 }
 
@@ -1275,8 +1313,7 @@ function loadPiChatHistoryFromStorage(userId) {
 function restorePiChatUi() {
   piChatMessagesEl.innerHTML = "";
   if (!piChatHistory.length) {
-    piChatMessagesEl.innerHTML =
-      '<div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「找美国 ISP 的 peering 联系人」或「查 AS15169 并导入 CRM」</div>';
+    piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHintAlt")}</div>`;
     updatePiChatHistoryHint();
     return;
   }
@@ -1292,10 +1329,10 @@ function updatePiChatHistoryHint() {
   if (!piChatHistoryHintEl) return;
   const count = piChatHistory.length;
   if (!count) {
-    piChatHistoryHintEl.textContent = "对话保存在本浏览器";
+    piChatHistoryHintEl.textContent = t("msg.piHistoryLocal");
     return;
   }
-  piChatHistoryHintEl.textContent = `已保存 ${count} 条消息 · 本浏览器`;
+  piChatHistoryHintEl.textContent = t("msg.piHistorySaved", { count });
 }
 
 function buildPiLeadMessage() {
@@ -1304,7 +1341,7 @@ function buildPiLeadMessage() {
   const minScore = Number(minScoreInput.value) || 60;
   const lines = [`请帮我找销售线索：${query}`, `最低匹配分 ${minScore}`];
   if (autoImportInput.checked) {
-    lines.push("找到合适的线索后自动导入 CRM");
+    lines.push(t("pi.autoImportHint"));
   }
   return lines.join("\n");
 }
@@ -1312,13 +1349,31 @@ function buildPiLeadMessage() {
 async function openPiAgentForLeads() {
   const message = buildPiLeadMessage();
   if (!message) {
-    alert("请先描述你要找的销售线索");
+    alert(t("msg.describeLeads"));
     return;
   }
   if (!llmConfigured) {
-    alert("LLM 未配置，无法使用 Pi 助手");
+    alert(t("msg.piNotAvailable"));
     return;
   }
+  switchView("pi-agent");
+  await sendPiChatMessage(message);
+}
+
+async function openPiEnrichContact(contact) {
+  if (!contact?.id) return;
+  if (!llmConfigured) {
+    alert(t("msg.piNotAvailable"));
+    return;
+  }
+  const label = contact.org || contact.email || `#${contact.id}`;
+  const message = [
+    `请为联系人 #${contact.id}（${label}，${contact.email}）查找同一组织/ASN 的其他 role 联系方式。`,
+    contact.asn ? `ASN: AS${contact.asn}` : "",
+    t("pi.enrichPromptSuffix"),
+  ]
+    .filter(Boolean)
+    .join("\n");
   switchView("pi-agent");
   await sendPiChatMessage(message);
 }
@@ -1326,8 +1381,11 @@ async function openPiAgentForLeads() {
 function formatPiToolSummary(name, result) {
   if (!result || typeof result !== "object") return "";
   if (result.error) return String(result.error);
-  if (name === "discover_leads") {
+  if (name === "discover_leads" || name === "enrich_contact") {
     const parts = [`共 ${result.lead_count ?? 0} 条线索`];
+    if (result.contact_id) {
+      parts.unshift(`联系人 #${result.contact_id}`);
+    }
     if (result.import) {
       parts.push(formatImportResult(result.import));
     } else if (result.message) {
@@ -1341,17 +1399,25 @@ function formatPiToolSummary(name, result) {
   if (name === "list_contacts") {
     return `返回 ${result.contacts?.length ?? 0} 条（总计 ${result.total ?? 0}）`;
   }
+  if (name === "get_contact") {
+    return result.contact ? `#${result.contact.id} ${result.contact.email || ""}` : "";
+  }
   if (name === "update_contact") {
     return result.contact ? `已更新 #${result.contact.id} ${result.contact.email || ""}` : "";
   }
   if (name === "mark_contact_sent") {
-    return result.ok ? `联系人 #${result.contact_id} ${result.sent ? "已标记已发" : "已取消已发"}` : "";
+    return result.ok
+      ? t("pi.contactMarked", {
+          id: result.contact_id,
+          status: result.sent ? t("pi.markedSent") : t("pi.unmarkedSent"),
+        })
+      : "";
   }
   if (name === "delete_contacts") {
     return `已删除 ${result.deleted ?? 0} / ${result.requested ?? 0} 条`;
   }
   if (name === "add_contact_note") {
-    return result.ok ? "备注已添加" : "";
+    return result.ok ? t("pi.noteAdded") : "";
   }
   if (name === "dedupe_contacts") {
     return `去重完成：删除 ${result.removed ?? 0} 条，剩余 ${result.total_contacts ?? result.total ?? 0} 条`;
@@ -1386,7 +1452,7 @@ function appendPiChatLookupTool(name) {
   `;
   const actionsEl = document.createElement("div");
   actionsEl.className = "pi-chat-leads-actions hidden";
-  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-lookup">导入选中邮箱</button>`;
+  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-lookup">${t("pi.importSelectedEmails")}</button>`;
   el.appendChild(lookupWrap);
   el.appendChild(actionsEl);
   el._piLookupRows = [];
@@ -1413,7 +1479,7 @@ function appendPiChatLookupRow(toolEl, row) {
   `;
   tr.dataset.index = String(index);
   tr.classList.add("selected");
-  tr.title = "点击切换选中";
+  tr.title = t("pi.toggleSelectTitle");
   tr.addEventListener("click", () => tr.classList.toggle("selected"));
   body.appendChild(tr);
   toolEl.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
@@ -1426,13 +1492,14 @@ async function importPiChatLookup(toolEl) {
     selectedRows.length > 0
       ? Array.from(selectedRows).map((row) => allRows[Number(row.dataset.index)])
       : allRows;
-  const payload = rows.filter((row) => row?.email).map((row) => ({
-    ...row,
-    source: row.source || "rdap",
-    roles: Array.isArray(row.roles) ? row.roles.join(",") : row.roles || "",
-  }));
+  const payload = normalizeImportRows(
+    rows.filter((row) => row?.email).map((row) => ({
+      ...row,
+      source: row.source || "rdap",
+    })),
+  );
   if (!payload.length) {
-    alert("没有可导入的邮箱");
+    alert(t("msg.noEmailsToImport"));
     return;
   }
   try {
@@ -1443,7 +1510,7 @@ async function importPiChatLookup(toolEl) {
     alert(formatImportResult(result));
     await loadContacts();
   } catch (error) {
-    alert(errorMessage(error, "导入失败"));
+    alert(errorMessage(error, t("msg.importFailed")));
   }
 }
 
@@ -1469,7 +1536,7 @@ function appendPiChatDiscoverTool(name) {
   `;
   const actionsEl = document.createElement("div");
   actionsEl.className = "pi-chat-leads-actions hidden";
-  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-leads">导入选中线索</button>`;
+  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-leads">${t("pi.importSelectedLeads")}</button>`;
   el.appendChild(planEl);
   el.appendChild(leadsWrap);
   el.appendChild(actionsEl);
@@ -1495,7 +1562,7 @@ function appendPiChatLeadRow(toolEl, lead) {
   `;
   tr.dataset.index = String(index);
   tr.classList.add("selected");
-  tr.title = "点击切换选中";
+  tr.title = t("pi.toggleSelectTitle");
   tr.addEventListener("click", () => {
     tr.classList.toggle("selected");
   });
@@ -1518,15 +1585,17 @@ async function importPiChatLeads(toolEl) {
     selectedRows.length > 0
       ? Array.from(selectedRows).map((row) => allLeads[Number(row.dataset.index)])
       : allLeads;
-  const payload = rows
-    .filter((lead) => lead?.email)
-    .map((lead) => ({
-      ...lead,
-      source: "ai-lead",
-      notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),
-    }));
+  const payload = normalizeImportRows(
+    rows
+      .filter((lead) => lead?.email)
+      .map((lead) => ({
+        ...lead,
+        source: "ai-lead",
+        notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),
+      })),
+  );
   if (!payload.length) {
-    alert("没有可导入的线索");
+    alert(t("msg.noLeadsToImport"));
     return;
   }
   try {
@@ -1537,7 +1606,7 @@ async function importPiChatLeads(toolEl) {
     alert(formatImportResult(result));
     await loadContacts();
   } catch (error) {
-    alert(errorMessage(error, "导入失败"));
+    alert(errorMessage(error, t("msg.importFailed")));
   }
 }
 
@@ -1548,10 +1617,10 @@ function updatePiAgentStatus() {
   piChatSendBtn.disabled = !enabled || piChatBusy;
   if (enabled) {
     piAgentStatusEl.className = "llm-status ok";
-    piAgentStatusEl.textContent = "Pi 助手已就绪（使用系统设置中的 LLM）";
+    piAgentStatusEl.textContent = t("msg.piReady");
   } else {
     piAgentStatusEl.className = "llm-status warn";
-    piAgentStatusEl.textContent = "请先在「系统设置 → AI 与搜索」配置 LLM API Key";
+    piAgentStatusEl.textContent = t("msg.piNotConfigured");
   }
 }
 
@@ -1637,13 +1706,26 @@ function appendPiChatBubble(role, text) {
   el.className = `pi-chat-bubble ${role}`;
   if (role === "assistant") {
     el.classList.add("markdown");
-    el.innerHTML = renderMarkdown(text);
+    el.innerHTML = renderMarkdown(text || "");
   } else {
     el.textContent = text;
   }
   piChatMessagesEl.appendChild(el);
   piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
   return el;
+}
+
+let piChatStreamRaf = null;
+
+function updatePiChatAssistantBubble(el, text, streaming = false) {
+  if (!el) return;
+  el.classList.toggle("streaming", streaming);
+  if (piChatStreamRaf) cancelAnimationFrame(piChatStreamRaf);
+  piChatStreamRaf = requestAnimationFrame(() => {
+    el.innerHTML = renderMarkdown(text || "");
+    piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+    piChatStreamRaf = null;
+  });
 }
 
 function appendPiChatStatus(text) {
@@ -1692,10 +1774,12 @@ async function sendPiChatMessage(message) {
 
   setPiChatBusy(true);
   piChatProgressFill.style.width = "12%";
-  piChatProgressText.textContent = "Pi 助手处理中…";
+  piChatProgressText.textContent = t("pi.processingShort");
   piChatController = new AbortController();
 
   let activeToolEl = null;
+  let activeAssistantEl = null;
+  let assistantStreamText = "";
 
   try {
     const response = await fetch("/api/agent/chat/stream", {
@@ -1712,7 +1796,7 @@ async function sendPiChatMessage(message) {
     }
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(formatApiDetail(error.detail) || "Pi 助手请求失败");
+      throw new Error(formatApiDetail(error.detail) || t("pi.requestFailed"));
     }
 
     const reader = response.body.getReader();
@@ -1732,15 +1816,15 @@ async function sendPiChatMessage(message) {
         const payload = JSON.parse(line.slice(6));
 
         if (payload.type === "status") {
-          piChatProgressText.textContent = payload.message || "处理中…";
+          piChatProgressText.textContent = payload.message || t("msg.piProcessingShort");
         } else if (payload.type === "tool_start") {
           activeToolEl =
-            payload.name === "discover_leads"
+            PI_LEAD_STREAM_TOOLS.has(payload.name)
               ? appendPiChatDiscoverTool(payload.name)
               : payload.name === "lookup_asns"
                 ? appendPiChatLookupTool(payload.name)
                 : appendPiChatTool(payload.name || "tool");
-          piChatProgressText.textContent = `调用 ${payload.name}…`;
+          piChatProgressText.textContent = t("msg.piCallingTool", { name: payload.name });
           piChatProgressFill.style.width = "35%";
         } else if (payload.type === "tool_progress") {
           if (activeToolEl) {
@@ -1750,7 +1834,7 @@ async function sendPiChatMessage(message) {
           piChatProgressFill.style.width = "65%";
         } else if (payload.type === "tool_event") {
           const event = payload.event || {};
-          if (payload.name === "discover_leads" && activeToolEl) {
+          if (PI_LEAD_STREAM_TOOLS.has(payload.name) && activeToolEl) {
             if (event.kind === "plan") {
               renderPiChatPlan(activeToolEl, event.plan);
             } else if (event.kind === "lead") {
@@ -1762,7 +1846,7 @@ async function sendPiChatMessage(message) {
             activeToolEl.querySelector(".pi-chat-tool-head").classList.add("done");
             const pre = activeToolEl.querySelector(".pi-chat-tool-result");
             const summary = formatPiToolSummary(payload.name, payload.result);
-            if (payload.name === "discover_leads") {
+            if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
               pre.classList.add("hidden");
               if (summary) {
                 activeToolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
@@ -1771,7 +1855,7 @@ async function sendPiChatMessage(message) {
               if (importBtn && !importBtn.dataset.bound) {
                 importBtn.dataset.bound = "1";
                 importBtn.addEventListener("click", () => {
-                  importPiChatLeads(activeToolEl).catch((error) => alert(errorMessage(error, "导入失败")));
+                  importPiChatLeads(activeToolEl).catch((error) => alert(errorMessage(error, t("msg.importFailed"))));
                 });
               }
               if (payload.result?.import) {
@@ -1789,7 +1873,7 @@ async function sendPiChatMessage(message) {
               if (importBtn && !importBtn.dataset.bound) {
                 importBtn.dataset.bound = "1";
                 importBtn.addEventListener("click", () => {
-                  importPiChatLookup(activeToolEl).catch((error) => alert(errorMessage(error, "导入失败")));
+                  importPiChatLookup(activeToolEl).catch((error) => alert(errorMessage(error, t("msg.importFailed"))));
                 });
               }
             } else if (summary) {
@@ -1802,23 +1886,42 @@ async function sendPiChatMessage(message) {
           }
           activeToolEl = null;
           piChatProgressFill.style.width = "85%";
+        } else if (payload.type === "assistant_start") {
+          activeAssistantEl = appendPiChatBubble("assistant", "");
+          activeAssistantEl.classList.add("streaming");
+          assistantStreamText = "";
+          piChatProgressFill.style.width = "90%";
+        } else if (payload.type === "assistant_delta") {
+          assistantStreamText += payload.text || "";
+          updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, true);
+        } else if (payload.type === "assistant_done") {
+          assistantStreamText = payload.text || assistantStreamText;
+          updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, false);
+          if (!activeAssistantEl && assistantStreamText) {
+            activeAssistantEl = appendPiChatBubble("assistant", assistantStreamText);
+          }
+          piChatHistory.push({ role: "assistant", content: assistantStreamText });
+          savePiChatHistory();
+          activeAssistantEl = null;
+          assistantStreamText = "";
+          piChatProgressFill.style.width = "100%";
         } else if (payload.type === "assistant") {
           appendPiChatBubble("assistant", payload.text || "");
           piChatHistory.push({ role: "assistant", content: payload.text || "" });
           savePiChatHistory();
           piChatProgressFill.style.width = "100%";
         } else if (payload.type === "error") {
-          appendPiChatStatus(payload.message || "发生错误");
+          appendPiChatStatus(payload.message || t("msg.errorGeneric"));
         } else if (payload.type === "done") {
-          piChatProgressText.textContent = "完成";
+          piChatProgressText.textContent = t("pi.done");
         }
       }
     }
   } catch (error) {
     if (error.name !== "AbortError") {
-      appendPiChatStatus(errorMessage(error, "Pi 助手请求失败"));
+      appendPiChatStatus(errorMessage(error, t("pi.requestFailed")));
     } else {
-      appendPiChatStatus("已停止");
+      appendPiChatStatus(t("pi.stopped"));
     }
   } finally {
     piChatController = null;
@@ -1839,15 +1942,14 @@ function stopPiChat() {
 }
 
 function clearPiChat() {
-  if (piChatHistory.length && !window.confirm("确定清空对话？本地保存的聊天历史也会被删除。")) {
+  if (piChatHistory.length && !window.confirm(t("pi.confirmClear"))) {
     return;
   }
   piChatHistory = [];
   if (currentUserId) {
     localStorage.removeItem(piChatStorageKey(currentUserId));
   }
-  piChatMessagesEl.innerHTML =
-    '<div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「找美国 ISP 的 peering 联系人」或「查 AS15169 并导入 CRM」</div>';
+  piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHintAlt")}</div>`;
   updatePiChatHistoryHint();
   updatePiAgentStatus();
 }
@@ -1866,32 +1968,32 @@ function switchView(view) {
   statsView.classList.toggle("hidden", view !== "stats");
 
   if (view === "lookup") {
-    pageTitle.textContent = "ASN Role 邮箱查询";
-    pageSubtitle.textContent = "批量查询全球 RIR（ARIN / RIPE / APNIC 等）ASN 的 role 邮箱";
+    pageTitle.textContent = t("page.lookup.title");
+    pageSubtitle.textContent = t("page.lookup.subtitle");
   } else if (view === "ai-leads") {
-    pageTitle.textContent = "AI 线索发现";
-    pageSubtitle.textContent = "AI 自动通过搜索引擎、PeeringDB、全球 RDAP 等多渠道搜索并评分筛选销售线索";
+    pageTitle.textContent = t("page.aiLeads.title");
+    pageSubtitle.textContent = t("page.aiLeads.subtitle");
   } else if (view === "pi-agent") {
-    pageTitle.textContent = "Pi 助手";
-    pageSubtitle.textContent = "对话式 CRM Agent：AI 找线索、查 ASN、导入联系人，与「AI 线索发现」共用引擎，历史保存在浏览器";
+    pageTitle.textContent = t("page.piAgent.title");
+    pageSubtitle.textContent = t("page.piAgent.subtitle");
     updatePiAgentStatus();
   } else if (view === "schedules") {
-    pageTitle.textContent = "定时任务";
-    pageSubtitle.textContent = "按设定间隔自动运行 AI 线索发现，并自动导入联系人（按邮箱去重）";
+    pageTitle.textContent = t("page.schedules.title");
+    pageSubtitle.textContent = t("page.schedules.subtitle");
     loadSchedules().catch((error) => alert(error.message));
   } else if (view === "settings") {
-    pageTitle.textContent = "系统设置";
-    pageSubtitle.textContent = "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理";
+    pageTitle.textContent = t("page.settings.title");
+    pageSubtitle.textContent = t("page.settings.subtitle");
     loadSettingsForm().catch((error) => alert(error.message));
     switchSettingsCat(activeSettingsCat);
     loadEmailTemplates().catch((error) => alert(error.message));
   } else if (view === "stats") {
-    pageTitle.textContent = "统计概览";
-    pageSubtitle.textContent = "联系人跟进状态、发信与来源分布，以及近期导入趋势";
+    pageTitle.textContent = t("page.stats.title");
+    pageSubtitle.textContent = t("page.stats.subtitle");
     loadStats().catch((error) => alert(error.message));
   } else {
-    pageTitle.textContent = "联系人列表";
-    pageSubtitle.textContent = "管理联系人状态：标记已发邮件、筛选未联系对象、一键去重";
+    pageTitle.textContent = t("page.contacts.title");
+    pageSubtitle.textContent = t("page.contacts.subtitle");
     loadContacts().catch((error) => alert(error.message));
     loadEmailTemplates().catch(() => {});
   }
@@ -1911,11 +2013,11 @@ function updateAiLeadsStats() {
   const total = aiLeads.length;
   const selected = getSelectedAiLeads().length;
   if (total === 0) {
-    aiStatsEl.textContent = "尚未开始";
+    aiStatsEl.textContent = t("common.notStarted");
     importLeadsBtn.disabled = true;
     return;
   }
-  aiStatsEl.textContent = `已选 ${selected} / 共 ${total}`;
+  aiStatsEl.textContent = t("msg.aiLeadsStats", { selected, total });
   importLeadsBtn.disabled = selected === 0;
 }
 
@@ -1930,23 +2032,23 @@ function showLeadsState(html, isError = false) {
 }
 
 function showLeadsError(message) {
-  showLeadsState(`<p>线索发现出错：${escapeHtml(message)}</p>`, true);
+  showLeadsState(`<p>${t("msg.leadsError", { message: escapeHtml(message) })}</p>`, true);
   retryDiscoverBtn.classList.remove("hidden");
 }
 
 function showLeadsEmpty() {
   showLeadsState(
-    `<p>没有找到符合条件的线索。</p>
-     <p class="hint">建议：调低「最低匹配分」，或用更宽泛的关键词描述目标客户。</p>`
+    `<p>${t("msg.leadsEmpty")}</p>
+     <p class="hint">${t("msg.leadsEmptyHint")}</p>`
   );
   retryDiscoverBtn.classList.remove("hidden");
 }
 
 function showLeadsNeedLlm() {
   showLeadsState(
-    `<p>AI 线索发现需要先配置 LLM。</p>
-     <p class="hint">前往「系统设置 → AI 与搜索」填写 API Key。</p>
-     <button type="button" class="primary-btn" id="leads-state-goto-settings">去系统设置</button>`
+    `<p>${t("msg.leadsNeedLlm")}</p>
+     <p class="hint">${t("msg.leadsNeedLlmHint")}</p>
+     <button type="button" class="primary-btn" id="leads-state-goto-settings">${t("msg.gotoSettings")}</button>`
   );
   const btn = document.getElementById("leads-state-goto-settings");
   if (btn) {
@@ -1985,7 +2087,7 @@ function renderAiLeads() {
       <td class="mono">${lead.asn ? `AS${lead.asn}` : "—"}</td>
       <td>
         ${escapeHtml(lead.lead_reason || lead.source_detail || "—")}
-        <button type="button" class="link-btn lead-detail-btn" data-index="${index}">详情</button>
+        <button type="button" class="link-btn lead-detail-btn" data-index="${index}">${t("common.detail")}</button>
       </td>
     `;
     aiLeadsBody.appendChild(tr);
@@ -1997,9 +2099,9 @@ function renderAiLeads() {
 function formatSource(lead) {
   const source = lead.source || "unknown";
   const map = {
-    "web-search": "搜索引擎",
-    "arin-rdap": "全球 RDAP",
-    peeringdb: "PeeringDB",
+    "web-search": t("source.webSearch"),
+    "arin-rdap": t("source.arinRdap"),
+    peeringdb: t("channel.peeringdb"),
     "ai-lead": "AI",
   };
   return map[source] || source;
@@ -2011,16 +2113,16 @@ function openLeadDetail(index) {
   detailLeadIndex = index;
   const roles = (lead.roles || []).map((r) => `<span class="role-tag">${escapeHtml(r)}</span>`).join(" ") || "—";
   const rows = [
-    ["组织", escapeHtml(lead.org || lead.network_name || "—"), false],
-    ["邮箱", `<a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a>`, true],
-    ["ASN", lead.asn ? `AS${lead.asn}` : "—", true],
-    ["Role", roles, false],
-    ["来源", escapeHtml(formatSource(lead)), false],
-    ["来源详情", escapeHtml(lead.source_detail || "—"), false],
-    ["网络名", escapeHtml(lead.network_name || "—"), false],
-    ["匹配关键词", escapeHtml(lead.matched_keyword || "—"), true],
-    ["AI 评分", `<span class="score-badge">${lead.lead_score || 0}</span>`, false],
-    ["AI 理由", escapeHtml(lead.lead_reason || "—"), false],
+    [t("leadDetail.org"), escapeHtml(lead.org || lead.network_name || "—"), false],
+    [t("leadDetail.email"), `<a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a>`, true],
+    [t("leadDetail.asn"), lead.asn ? `AS${lead.asn}` : "—", true],
+    [t("leadDetail.role"), roles, false],
+    [t("leadDetail.source"), escapeHtml(formatSource(lead)), false],
+    [t("leadDetail.sourceDetail"), escapeHtml(lead.source_detail || "—"), false],
+    [t("leadDetail.networkName"), escapeHtml(lead.network_name || "—"), false],
+    [t("leadDetail.matchedKeyword"), escapeHtml(lead.matched_keyword || "—"), true],
+    [t("leadDetail.aiScore"), `<span class="score-badge">${lead.lead_score || 0}</span>`, false],
+    [t("leadDetail.aiReason"), escapeHtml(lead.lead_reason || "—"), false],
   ];
   leadDetailBody.innerHTML = rows
     .map(([k, v, mono]) => `<div class="lead-detail-row"><span class="k">${k}</span><span class="v${mono ? " mono" : ""}">${v}</span></div>`)
@@ -2078,7 +2180,7 @@ function renderChannelPanel() {
     return `
       <div class="ai-channel-row state-${s.state}">
         <span class="ai-channel-icon">${CHANNEL_ICON[s.state]}</span>
-        <span class="ai-channel-name">${escapeHtml(def.name)}</span>
+        <span class="ai-channel-name">${escapeHtml(t(def.nameKey))}</span>
         <span class="ai-channel-count">${escapeHtml(String(s.count ?? ""))}</span>
         <span class="ai-channel-preview" title="${escapeHtml(s.preview || "")}">${escapeHtml(s.preview || "")}</span>
       </div>`;
@@ -2093,20 +2195,23 @@ async function loadLlmStatus() {
     if (llmConfigured) {
       llmStatusEl.className = "llm-status ok";
       const web = (config.search_channels?.web_search || []).join(", ") || "duckduckgo";
-      llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）· 搜索渠道：${web} + PeeringDB + RDAP`;
+      llmStatusEl.textContent = t("msg.llmConfiguredDetail", {
+        model: config.llm_model || "default",
+        web,
+      });
       discoverBtn.disabled = false;
       if (discoverViaPiBtn) discoverViaPiBtn.disabled = false;
       hideLeadsState();
     } else {
       llmStatusEl.className = "llm-status warn";
-      llmStatusEl.textContent = "LLM 未配置：请在「系统设置」填写 API Key。搜索引擎默认 DuckDuckGo";
+      llmStatusEl.textContent = t("msg.llmNotConfiguredDetail");
       discoverBtn.disabled = true;
       if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
       showLeadsNeedLlm();
     }
   } catch {
     llmStatusEl.className = "llm-status warn";
-    llmStatusEl.textContent = "无法读取 LLM 配置";
+    llmStatusEl.textContent = t("msg.llmReadFailed");
     discoverBtn.disabled = true;
     if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
   }
@@ -2115,13 +2220,13 @@ async function loadLlmStatus() {
 
 function setDiscoverRunning(running) {
   if (running) {
-    discoverBtn.textContent = "取消";
+    discoverBtn.textContent = t("msg.discoverCancel");
     discoverBtn.classList.add("danger-btn");
     discoverBtn.disabled = false;
     if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
     retryDiscoverBtn.classList.add("hidden");
   } else {
-    discoverBtn.textContent = "直接运行（表格视图）";
+    discoverBtn.textContent = t("aiLeads.discoverDirect");
     discoverBtn.classList.remove("danger-btn");
     discoverBtn.disabled = !llmConfigured;
     if (discoverViaPiBtn) discoverViaPiBtn.disabled = !llmConfigured;
@@ -2135,11 +2240,11 @@ async function runLeadDiscovery() {
   }
   const query = leadQueryInput.value.trim();
   if (!query) {
-    alert("请先描述你要找的销售线索");
+    alert(t("msg.describeLeads"));
     return;
   }
   if (!llmConfigured) {
-    alert("LLM 未配置，无法使用 AI 线索发现");
+    alert(t("msg.llmNotConfiguredLeads"));
     return;
   }
 
@@ -2151,7 +2256,7 @@ async function runLeadDiscovery() {
   hideLeadsState();
   aiProgressEl.classList.remove("hidden");
   aiProgressFill.style.width = "0%";
-  aiProgressText.textContent = "AI 正在分析需求…";
+  aiProgressText.textContent = t("msg.aiAnalyzing");
   lastDiscoverQuery = query;
   discoverController = new AbortController();
   setDiscoverRunning(true);
@@ -2245,7 +2350,7 @@ async function runLeadDiscovery() {
 
         if (payload.type === "done") {
           aiProgressFill.style.width = "100%";
-          aiProgressText.textContent = payload.message || "完成";
+          aiProgressText.textContent = payload.message || t("msg.discoverComplete");
           setChannel("scoring", { state: "done", count: (payload.leads || aiLeads).length });
           if (payload.leads) {
             aiLeads = payload.leads.map((lead) => {
@@ -2266,9 +2371,9 @@ async function runLeadDiscovery() {
     }
   } catch (error) {
     if (error.name === "AbortError") {
-      aiProgressText.textContent = "已取消";
+      aiProgressText.textContent = t("msg.discoverCancelled");
     } else {
-      aiProgressText.textContent = "失败";
+      aiProgressText.textContent = t("msg.discoverFailed");
       if (typeof showLeadsError === "function") {
         showLeadsError(error.message || "AI 线索发现失败");
       } else {
@@ -2284,26 +2389,28 @@ async function runLeadDiscovery() {
 async function importAiLeads() {
   const selected = getSelectedAiLeads();
   if (selected.length === 0) {
-    alert("请先勾选要导入的线索");
+    alert(t("msg.selectLeadsToImport"));
     return;
   }
 
-  const rows = selected.map((lead) => ({
-    ...lead,
-    source: "ai-lead",
-    notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),
-  }));
+  const rows = normalizeImportRows(
+    selected.map((lead) => ({
+      ...lead,
+      source: "ai-lead",
+      notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),
+    })),
+  );
 
   try {
     const result = await api("/api/contacts/import", {
       method: "POST",
-      body: JSON.stringify({ rows }),
+      body: JSON.stringify({ rows: normalizeImportRows(rows) }),
     });
     alert(formatImportResult(result));
     await loadContacts();
     switchView("contacts");
   } catch (error) {
-    alert(error.message || "导入失败");
+    alert(error.message || t("msg.importFailed"));
   }
 }
 
@@ -2320,7 +2427,7 @@ async function bootstrap() {
   }
 
   await loadLlmStatus();
-  leadQueryInput.value = "找美国大型 ISP 和有线电视运营商，优先 networking / peering 相关联系人";
+  leadQueryInput.value = t("bootstrap.leadQueryDefault");
   scheduleQueryInput.value = leadQueryInput.value;
   await loadContacts();
   await loadSchedules();
@@ -2342,7 +2449,7 @@ exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
 discoverViaPiBtn?.addEventListener("click", () => {
-  openPiAgentForLeads().catch((error) => alert(errorMessage(error, "Pi 助手启动失败")));
+  openPiAgentForLeads().catch((error) => alert(errorMessage(error, t("msg.piStartFailed"))));
 });
 retryDiscoverBtn.addEventListener("click", () => {
   if (lastDiscoverQuery) {
@@ -2400,18 +2507,18 @@ contactsBody.addEventListener("change", (event) => {
 });
 bulkApplyStatusBtn.addEventListener("click", () => {
   bulkContactsAction("status", { follow_up_status: bulkStatusSelect.value })
-    .then((result) => alert(`已更新 ${result.updated} 位联系人`))
+    .then((result) => alert(t("msg.bulkUpdated", { count: result.updated })))
     .catch((error) => alert(error.message));
 });
 bulkMarkSentBtn.addEventListener("click", () => {
   bulkContactsAction("mark_sent")
-    .then((result) => alert(`已标记 ${result.updated} 位联系人`))
+    .then((result) => alert(t("msg.bulkMarked", { count: result.updated })))
     .catch((error) => alert(error.message));
 });
 bulkDeleteBtn.addEventListener("click", () => {
-  if (!confirm("确定删除选中的联系人？")) return;
+  if (!confirm(t("msg.confirmBulkDeleteContacts"))) return;
   bulkContactsAction("delete")
-    .then((result) => alert(`已删除 ${result.deleted} 位联系人`))
+    .then((result) => alert(t("msg.bulkDeleted", { count: result.deleted })))
     .catch((error) => alert(error.message));
 });
 contactEditForm.addEventListener("submit", (event) => {
@@ -2446,7 +2553,7 @@ document.getElementById("change-password-btn").addEventListener("click", () => {
   changePassword().catch((error) => alert(error.message));
 });
 document.getElementById("regenerate-agent-token-btn")?.addEventListener("click", () => {
-  if (!confirm("重新生成后旧 Token 将立即失效，Pi Agent 需更新 SALESCRM_TOKEN。继续？")) return;
+  if (!confirm(t("msg.confirmRegenerateToken"))) return;
   regenerateAgentToken().catch((error) => alert(error.message));
 });
 document.getElementById("copy-agent-token-btn")?.addEventListener("click", () => {
@@ -2459,11 +2566,11 @@ async function changePassword() {
   const confirm = document.getElementById("pwd-confirm").value;
   const statusEl = document.getElementById("password-status");
   if (!current || !newPwd) {
-    alert("请填写当前密码和新密码");
+    alert(t("msg.passwordFieldsRequired"));
     return;
   }
   if (newPwd !== confirm) {
-    alert("两次输入的新密码不一致");
+    alert(t("msg.passwordMismatch"));
     return;
   }
   await api("/api/me/password", {
@@ -2473,7 +2580,7 @@ async function changePassword() {
   document.getElementById("pwd-current").value = "";
   document.getElementById("pwd-new").value = "";
   document.getElementById("pwd-confirm").value = "";
-  statusEl.textContent = "密码已更新";
+  statusEl.textContent = t("msg.passwordUpdated");
 }
 logoutBtn.addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" });
@@ -2531,6 +2638,12 @@ contactsBody.addEventListener("click", (event) => {
     markContactSent(markBtn.dataset.id, markBtn.dataset.sent === "1").catch((error) => alert(error.message));
     return;
   }
+  const enrichBtn = event.target.closest(".action-enrich-pi");
+  if (enrichBtn) {
+    const contact = contacts.find((item) => String(item.id) === String(enrichBtn.dataset.id));
+    openPiEnrichContact(contact).catch((error) => alert(errorMessage(error, "Pi 扩展失败")));
+    return;
+  }
   const deleteBtn = event.target.closest(".action-delete");
   if (deleteBtn) {
     deleteContact(deleteBtn.dataset.id).catch((error) => alert(error.message));
@@ -2581,5 +2694,31 @@ leadDetailImport.addEventListener("change", () => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !leadDetailModal.classList.contains("hidden")) closeLeadDetail();
 });
+
+function refreshUiOnLanguageChange() {
+  const activeView = document.querySelector(".tab.active")?.dataset.view || "lookup";
+  switchView(activeView);
+  renderRows();
+  renderContacts();
+  renderAiLeads();
+  renderSchedules();
+  renderMailTemplateSelect();
+  renderEmailTemplatesList();
+  updatePiChatHistoryHint();
+  updateAiLeadsStats();
+  if (allRows.length === 0 && statsEl) {
+    statsEl.textContent = t("common.notYetQueried");
+  } else {
+    updateStats();
+  }
+  refreshAsnPreview().catch(() => {});
+  if (llmConfigured) {
+    loadLlmStatus().catch(() => {});
+  } else {
+    updatePiAgentStatus();
+  }
+}
+
+window.addEventListener("languagechange", refreshUiOnLanguageChange);
 
 bootstrap();

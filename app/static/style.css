@@ -176,6 +176,44 @@ code {
   flex-shrink: 0;
 }
 
+.lang-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  gap: 2px;
+}
+
+.lang-switch-btn {
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.lang-switch-btn:hover {
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.lang-switch-btn.active {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.auth-lang-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3);
+}
+
 .user-badge {
   display: inline-flex;
   align-items: center;
@@ -1232,6 +1270,19 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .pi-chat-bubble.markdown strong {
   font-weight: 600;
+}
+
+.pi-chat-bubble.streaming::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent);
+  animation: pi-cursor-blink 1s step-end infinite;
+}
+
+@keyframes pi-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .pi-chat-tool {

@@ -46,11 +46,36 @@ def chat_completion_with_tools(
     temperature: float = 0.2,
     json_mode: bool = False,
 ) -> dict[str, Any]:
+    message = None
+    for event in chat_completion_with_tools_stream(
+        messages,
+        tools,
+        temperature=temperature,
+        json_mode=json_mode,
+    ):
+        if event.get("type") == "message":
+            message = event["message"]
+        elif event.get("type") == "error":
+            raise LLMError(event.get("message") or "LLM 请求失败")
+    if not message:
+        raise LLMError("LLM 返回空内容")
+    return message
+
+
+def chat_completion_with_tools_stream(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    temperature: float = 0.2,
+    json_mode: bool = False,
+):
+    """Yield content deltas while streaming, then the assembled assistant message."""
     api_key, base_url, model = _settings()
     payload: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
         "messages": messages,
+        "stream": True,
     }
     if tools:
         payload["tools"] = tools
@@ -68,19 +93,60 @@ def chat_completion_with_tools(
         method="POST",
     )
     timeout = AGENT_REQUEST_TIMEOUT if tools else REQUEST_TIMEOUT
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise LLMError(f"LLM 请求失败 ({exc.code}): {detail[:300]}") from exc
-    except urllib.error.URLError as exc:
-        raise LLMError(f"无法连接 LLM 服务: {exc.reason}") from exc
+
+    content_parts: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
 
     try:
-        return data["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError("LLM 返回格式异常") from exc
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+                piece = delta.get("content")
+                if piece:
+                    content_parts.append(piece)
+                    yield {"type": "content_delta", "text": piece}
+
+                for tool_delta in delta.get("tool_calls") or []:
+                    index = int(tool_delta.get("index") or 0)
+                    slot = tool_calls.setdefault(
+                        index,
+                        {
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        },
+                    )
+                    if tool_delta.get("id"):
+                        slot["id"] = tool_delta["id"]
+                    fn = tool_delta.get("function") or {}
+                    if fn.get("name"):
+                        slot["function"]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        slot["function"]["arguments"] += fn["arguments"]
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        yield {"type": "error", "message": f"LLM 请求失败 ({exc.code}): {detail[:300]}"}
+        return
+    except urllib.error.URLError as exc:
+        yield {"type": "error", "message": f"无法连接 LLM 服务: {exc.reason}"}
+        return
+
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
+    if tool_calls:
+        message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
+    yield {"type": "message", "message": message}
 
 
 def parse_json_response(raw: str) -> dict[str, Any]:

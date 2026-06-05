@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent_auth import AgentUser
-from app.database import check_db, check_schema, count_contacts, import_contacts, list_contacts
+from app.database import check_db, check_schema, count_contacts, import_contacts, list_contacts, normalize_import_row
 from app.lead_discovery import run_lead_discovery_batch
 from app.llm import llm_configured
 
@@ -39,7 +39,7 @@ def agent_health(user: AgentUser) -> dict:
 def agent_import_leads(body: AgentImportRequest, user: AgentUser) -> dict:
     payload: list[dict] = []
     for row in body.rows:
-        item = dict(row)
+        item = normalize_import_row(dict(row))
         item.setdefault("source", body.source)
         payload.append(item)
     result = import_contacts(user["id"], payload)

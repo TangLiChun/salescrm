@@ -36,12 +36,12 @@ form.addEventListener("submit", async (event) => {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.detail || "登录失败");
+      throw new Error(error.detail || t("login.failed"));
     }
 
     window.location.href = "/";
   } catch (error) {
-    errorEl.textContent = error.message || "登录失败";
+    errorEl.textContent = error.message || t("login.failed");
     errorEl.classList.remove("hidden");
   }
 });

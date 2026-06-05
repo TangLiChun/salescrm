@@ -2,25 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
 from arin_lookup import lookup_asn, parse_asns_from_text
+from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     bulk_delete_contacts,
     count_contacts,
     create_contact_note,
     dedupe_contacts,
     delete_contact,
+    get_contact,
     get_contact_stats,
     import_contacts,
     list_contacts,
     mark_contact_sent,
+    normalize_import_row,
     update_contact,
     update_contact_follow_up_status,
 )
 from app.lead_discovery import discover_leads_stream
-from app.llm import LLMError, chat_completion_with_tools
+from app.llm import LLMError, chat_completion_with_tools_stream
 
 MAX_TOOL_ROUNDS = 8
 MAX_HISTORY = 20
@@ -44,7 +48,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "import_leads",
-            "description": "将线索行导入 CRM，email 必填",
+            "description": "将线索行导入 CRM；每行需含 email，并尽量填写 org（公司/组织）和 name（联系人姓名）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -55,6 +59,36 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                     "source": {"type": "string", "description": "来源标记，默认 pi-agent"},
                 },
                 "required": ["rows"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_contact",
+            "description": "按 ID 获取单个联系人详情",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "integer"},
+                },
+                "required": ["contact_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "enrich_contact",
+            "description": "为已有联系人查找同一组织/ASN 的其他 role 邮箱（RDAP+搜索+PeeringDB），可选自动导入",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "integer", "description": "CRM 联系人 ID"},
+                    "min_score": {"type": "integer", "description": "最低相关度，默认 50"},
+                    "auto_import": {"type": "boolean", "description": "找到后自动导入 CRM"},
+                },
+                "required": ["contact_id"],
             },
         },
     },
@@ -178,52 +212,24 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 能力：
 - lookup_asns：全球 RIR（ARIN/RIPE/APNIC/LACNIC/AFRINIC）RDAP 查 ASN role 邮箱，非 ARIN 会自动查对应注册局
 - discover_leads：AI 多渠道找线索（与「AI 线索发现」相同）
-- list_contacts / import_leads：搜索、导入联系人
+- enrich_contact：为已有联系人扩展更多联系方式（RDAP/搜索/PeeringDB），可 auto_import
+- get_contact / list_contacts / import_leads：读取、搜索、导入联系人
 - update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理已有联系人
 - get_stats / dedupe_contacts：统计与去重
 
-规则：用简洁中文回复；导入前尽量 list_contacts 查重；查完 ASN 可用 import_leads 导入；不要编造数据。"""
+规则：用简洁中文回复；用户说「找更多联系方式」时用 enrich_contact；导入前查重；不要编造数据。"""
 
 
-class ToolEmitter:
-    def __init__(self, queue: asyncio.Queue[tuple[str, Any] | None]) -> None:
-        self._queue = queue
-
-    def progress(self, message: str) -> None:
-        self._queue.put_nowait(("progress", message))
-
-    def event(self, payload: dict[str, Any]) -> None:
-        self._queue.put_nowait(("event", payload))
-
-
-def _trim_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
-    cleaned: list[dict[str, str]] = []
-    for item in history[-MAX_HISTORY:]:
-        role = item.get("role")
-        content = (item.get("content") or "").strip()
-        if role in ("user", "assistant") and content:
-            cleaned.append({"role": role, "content": content})
-    return cleaned
-
-
-async def _discover_leads_tool(
-    user_id: int,
-    args: dict[str, Any],
+async def _stream_lead_events(
+    stream: AsyncIterator[dict[str, Any]],
     emit: ToolEmitter,
-) -> dict[str, Any]:
-    query = str(args.get("query") or "").strip()
-    min_score = int(args.get("min_score") or 60)
-    auto_import = bool(args.get("auto_import"))
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str, str | None]:
     leads: list[dict[str, Any]] = []
     import_result = None
     message = ""
+    error = None
 
-    async for event in discover_leads_stream(
-        query,
-        min_score=min_score,
-        auto_import=auto_import,
-        user_id=user_id,
-    ):
+    async for event in stream:
         event_type = event.get("type")
         if event_type == "status":
             emit.progress(str(event.get("message") or "搜索中…"))
@@ -262,12 +268,37 @@ async def _discover_leads_tool(
             leads.append(event["lead"])
             emit.event({"kind": "lead", "lead": event["lead"]})
         elif event_type == "error":
-            return {"error": event.get("message"), "leads": leads}
+            error = str(event.get("message") or "搜索失败")
+            break
         elif event_type == "done":
             leads = event.get("leads") or leads
             import_result = event.get("import")
             message = event.get("message") or ""
-            emit.event({"kind": "done", "message": message, "lead_count": len(leads), "import": import_result})
+            emit.event(
+                {
+                    "kind": "done",
+                    "message": message,
+                    "lead_count": len(leads),
+                    "import": import_result,
+                }
+            )
+
+    return leads, import_result, message, error
+
+
+def _leads_tool_result(
+    leads: list[dict[str, Any]],
+    *,
+    message: str,
+    import_result: dict[str, Any] | None,
+    error: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if error:
+        payload: dict[str, Any] = {"error": error, "leads": leads}
+        if extra:
+            payload.update(extra)
+        return payload
 
     preview = [
         {
@@ -278,13 +309,87 @@ async def _discover_leads_tool(
         }
         for lead in leads[:15]
     ]
-    return {
+    payload = {
         "message": message,
         "lead_count": len(leads),
         "leads": leads,
         "leads_preview": preview,
         "import": import_result,
     }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+class ToolEmitter:
+    def __init__(self, queue: asyncio.Queue[tuple[str, Any] | None]) -> None:
+        self._queue = queue
+
+    def progress(self, message: str) -> None:
+        self._queue.put_nowait(("progress", message))
+
+    def event(self, payload: dict[str, Any]) -> None:
+        self._queue.put_nowait(("event", payload))
+
+
+def _trim_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    for item in history[-MAX_HISTORY:]:
+        role = item.get("role")
+        content = (item.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            cleaned.append({"role": role, "content": content})
+    return cleaned
+
+
+async def _discover_leads_tool(
+    user_id: int,
+    args: dict[str, Any],
+    emit: ToolEmitter,
+) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    min_score = int(args.get("min_score") or 60)
+    auto_import = bool(args.get("auto_import"))
+
+    leads, import_result, message, error = await _stream_lead_events(
+        discover_leads_stream(
+            query,
+            min_score=min_score,
+            auto_import=auto_import,
+            user_id=user_id,
+        ),
+        emit,
+    )
+    return _leads_tool_result(leads, message=message, import_result=import_result, error=error)
+
+
+async def _enrich_contact_tool(
+    user_id: int,
+    args: dict[str, Any],
+    emit: ToolEmitter,
+) -> dict[str, Any]:
+    contact_id = int(args.get("contact_id") or 0)
+    if contact_id <= 0:
+        return {"error": "contact_id 无效"}
+    min_score = int(args.get("min_score") or 50)
+    auto_import = bool(args.get("auto_import"))
+
+    leads, import_result, message, error = await _stream_lead_events(
+        enrich_contact_stream(
+            user_id,
+            contact_id,
+            min_score=min_score,
+            auto_import=auto_import,
+        ),
+        emit,
+    )
+    return _leads_tool_result(
+        leads,
+        message=message,
+        import_result=import_result,
+        error=error,
+        extra={"contact_id": contact_id},
+    )
 
 
 async def _lookup_asns_tool(args: dict[str, Any], emit: ToolEmitter) -> dict[str, Any]:
@@ -322,20 +427,28 @@ async def _run_tool(
         contacts = list_contacts(user_id, q=q, limit=limit)
         return {"contacts": contacts, "total": count_contacts(user_id, q=q), "limit": limit}
 
+    if name == "get_contact":
+        contact_id = int(args.get("contact_id") or 0)
+        if contact_id <= 0:
+            return {"error": "contact_id 无效"}
+        contact = get_contact(user_id, contact_id)
+        if not contact:
+            return {"error": "联系人不存在"}
+        return {"contact": contact}
+
     if name == "import_leads":
         rows = args.get("rows") or []
         source = str(args.get("source") or "pi-agent")
-        payload = [
-            {**row, "source": row.get("source") or source}
-            for row in rows
-            if isinstance(row, dict)
-        ]
+        payload = [normalize_import_row({**row, "source": row.get("source") or source}) for row in rows if isinstance(row, dict)]
         result = import_contacts(user_id, payload)
         result["total_contacts"] = count_contacts(user_id)
         return result
 
     if name == "discover_leads":
         return await _discover_leads_tool(user_id, args, emit)
+
+    if name == "enrich_contact":
+        return await _enrich_contact_tool(user_id, args, emit)
 
     if name == "lookup_asns":
         return await _lookup_asns_tool(args, emit)
@@ -400,6 +513,32 @@ async def _run_tool(
     return {"error": f"未知工具: {name}"}
 
 
+async def _iter_llm_stream(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def worker() -> None:
+        try:
+            for event in chat_completion_with_tools_stream(messages, tools):
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+        except LLMError as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
+        except Exception as exc:  # noqa: BLE001 — surface unexpected LLM stream failures
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=worker, daemon=True).start()
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        yield item
+
+
 async def agent_chat_stream(
     user_id: int,
     message: str,
@@ -413,27 +552,50 @@ async def agent_chat_stream(
     yield {"type": "status", "message": "Pi 助手思考中…"}
 
     for round_index in range(MAX_TOOL_ROUNDS):
-        try:
-            assistant = await asyncio.to_thread(
-                chat_completion_with_tools,
-                messages,
-                AGENT_TOOLS,
-            )
-        except LLMError as exc:
-            yield {"type": "error", "message": str(exc)}
+        assistant: dict[str, Any] | None = None
+        streamed_reply = False
+        content_buffer = ""
+
+        async for event in _iter_llm_stream(messages, AGENT_TOOLS):
+            event_type = event.get("type")
+            if event_type == "error":
+                yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
+                return
+            if event_type == "content_delta":
+                piece = str(event.get("text") or "")
+                if not piece:
+                    continue
+                if not streamed_reply:
+                    streamed_reply = True
+                    yield {"type": "assistant_start"}
+                content_buffer += piece
+                yield {"type": "assistant_delta", "text": piece}
+            elif event_type == "message":
+                assistant = event.get("message")
+
+        if not assistant:
+            yield {"type": "error", "message": "模型未返回有效回复"}
             return
 
         tool_calls = assistant.get("tool_calls") or []
-        content = (assistant.get("content") or "").strip()
+        content = (assistant.get("content") or content_buffer or "").strip()
 
         if content and not tool_calls:
-            yield {"type": "assistant", "text": content}
+            if streamed_reply:
+                yield {"type": "assistant_done", "text": content}
+            else:
+                yield {"type": "assistant_start"}
+                yield {"type": "assistant_delta", "text": content}
+                yield {"type": "assistant_done", "text": content}
             yield {"type": "done"}
             return
 
         if not tool_calls:
             yield {"type": "error", "message": "模型未返回有效回复"}
             return
+
+        if streamed_reply and content:
+            yield {"type": "assistant_done", "text": content}
 
         messages.append(assistant)
 
@@ -481,5 +643,8 @@ async def agent_chat_stream(
             )
 
         if round_index == MAX_TOOL_ROUNDS - 1:
-            yield {"type": "assistant", "text": "已达到最大工具调用轮次，请简化问题后重试。"}
+            final_text = "已达到最大工具调用轮次，请简化问题后重试。"
+            yield {"type": "assistant_start"}
+            yield {"type": "assistant_delta", "text": final_text}
+            yield {"type": "assistant_done", "text": final_text}
             yield {"type": "done"}

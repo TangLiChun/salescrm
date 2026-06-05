@@ -350,6 +350,29 @@ def list_contacts(
     return [_contact_from_row(row) for row in rows]
 
 
+def get_contact(user_id: int, contact_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
+                   email_sent, email_sent_at, follow_up_status, created_at, updated_at
+            FROM contacts
+            WHERE id = ? AND user_id = ?
+            """,
+            (contact_id, user_id),
+        ).fetchone()
+    return _contact_from_row(row) if row else None
+
+
+def list_contact_emails(user_id: int) -> set[str]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT lower(email) AS email FROM contacts WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {row["email"] for row in rows if row["email"]}
+
+
 def contact_exists(user_id: int, email: str) -> bool:
     with get_conn() as conn:
         row = conn.execute(
@@ -357,6 +380,40 @@ def contact_exists(user_id: int, email: str) -> bool:
             (user_id, email.strip()),
         ).fetchone()
     return row is not None
+
+
+def _pick_import_text(*values: object) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def normalize_import_row(row: dict) -> dict:
+    """Normalize import payloads so org/name are preserved across all import paths."""
+    normalized = dict(row)
+    org = _pick_import_text(
+        row.get("org"),
+        row.get("organization"),
+        row.get("company"),
+        row.get("network_name"),
+    )
+    name = _pick_import_text(
+        row.get("name"),
+        row.get("contact_name"),
+        row.get("contact"),
+        row.get("fn"),
+    )
+    handle = _pick_import_text(row.get("handle"))
+    if not name and handle and not handle.upper().startswith(("ORG", "NET", "AS-", "AS")):
+        name = handle
+
+    normalized["org"] = org
+    normalized["name"] = name
+    if not normalized.get("asn") and row.get("asn"):
+        normalized["asn"] = row.get("asn")
+    return normalized
 
 
 def import_contacts(user_id: int, rows: list[dict]) -> dict:
@@ -369,7 +426,8 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
     now = utc_now()
 
     with get_conn() as conn:
-        for row in rows:
+        for raw_row in rows:
+            row = normalize_import_row(raw_row)
             email = (row.get("email") or "").strip().lower()
             if not email or row.get("error"):
                 skipped += 1
@@ -386,19 +444,23 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 duplicates += 1
                 merged_notes = _merge_notes(existing["notes"], row.get("notes") or "")
                 merged_roles = _merge_roles(existing["roles"], row.get("roles") or [])
+                existing_org = (existing["org"] or "").strip()
+                existing_name = (existing["name"] or "").strip()
+                merged_org = existing_org or (row.get("org") or "").strip()
+                merged_name = existing_name or (row.get("name") or "").strip()
                 conn.execute(
                     """
                     UPDATE contacts
-                    SET org = CASE WHEN org = '' THEN ? ELSE org END,
-                        name = CASE WHEN name = '' THEN ? ELSE name END,
+                    SET org = ?,
+                        name = ?,
                         roles = ?,
                         notes = ?,
                         updated_at = ?
                     WHERE id = ?
                     """,
                     (
-                        row.get("org") or "",
-                        row.get("name") or "",
+                        merged_org,
+                        merged_name,
                         merged_roles,
                         merged_notes,
                         now,
