@@ -64,15 +64,26 @@
     </aside>
 
     <div class="app-frame">
-      <header class="app-header">
+      <header class="app-header app-header-minimal">
         <div class="app-header-copy">
-          <p class="eyebrow app-header-eyebrow">Sales CRM</p>
-          <h1 id="page-title">ASN Role 邮箱查询</h1>
-          <p id="page-subtitle" class="subtitle">批量查询全球 RIR（ARIN / RIPE / APNIC / LACNIC / AFRINIC）ASN 的 abuse / technical / administrative 等 role 邮箱</p>
+          <h1 id="page-title">ASN 查询</h1>
         </div>
       </header>
 
       <div id="background-jobs-bar" class="background-jobs-bar hidden" aria-live="polite"></div>
+
+      <div id="jobs-panel" class="jobs-panel hidden" role="dialog" aria-labelledby="jobs-panel-title" aria-modal="true">
+        <div class="jobs-panel-backdrop" data-close-jobs-panel></div>
+        <aside class="jobs-panel-sheet">
+          <header class="jobs-panel-header">
+            <h2 id="jobs-panel-title" data-i18n="jobs.panelTitle">后台任务</h2>
+            <button type="button" class="secondary-btn" data-close-jobs-panel data-i18n="common.close">关闭</button>
+          </header>
+          <ul id="jobs-panel-list" class="jobs-panel-list"></ul>
+        </aside>
+      </div>
+
+      <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
       <div class="app-content">
     <main id="lookup-view" class="layout">
@@ -82,9 +93,9 @@
           id="asn-input"
           rows="12"
           data-i18n-placeholder="lookup.asnPlaceholder"
-          placeholder="支持多种格式，自动去重：&#10;15169&#10;AS7922, 13335&#10;混排文本中的 ASN 8075 也会被识别"
+          placeholder="15169&#10;AS7922, 13335"
         ></textarea>
-        <p id="asn-parse-preview" class="stats hint"></p>
+        <p id="asn-parse-preview" class="stats hint hidden" aria-hidden="true"></p>
 
         <div class="controls">
           <label class="field">
@@ -144,7 +155,7 @@
             </thead>
             <tbody id="results-body">
               <tr class="empty-row">
-                <td colspan="9" data-i18n="lookup.emptyHint">输入 ASN 列表后点击「开始查询」</td>
+                <td colspan="9" data-i18n="lookup.emptyHint">—</td>
               </tr>
             </tbody>
           </table>
@@ -162,8 +173,6 @@
           placeholder="例如：&#10;找美国大型 ISP 和有线电视运营商，需要 networking / peering 联系人&#10;找北美 CDN 和 cloud 基础网络公司&#10;找数据中心互联 peering 负责人邮箱"
         ></textarea>
 
-        <div id="llm-status" class="llm-status" data-i18n="msg.checkingLlm">检查 LLM 配置中…</div>
-
         <div class="controls ai-controls">
           <label class="field">
             <span data-i18n="aiLeads.minScore">最低匹配分</span>
@@ -180,10 +189,6 @@
           <button id="discover-via-pi-btn" type="button" data-i18n="aiLeads.discoverViaPi">在 Pi 助手中找线索</button>
           <button id="discover-btn" type="button" class="secondary-btn" data-i18n="aiLeads.discoverDirect">直接运行（表格视图）</button>
         </div>
-        <p class="stats hint" data-i18n="aiLeads.hint">推荐用 Pi 助手：同一套 AI 引擎，可对话追问、查 ASN、导入联系人，并保留聊天历史。</p>
-
-        <div id="ai-sources" class="ai-sources hidden"></div>
-        <div id="ai-plan" class="ai-plan hidden"></div>
 
         <div id="ai-channels" class="ai-channels hidden"></div>
 
@@ -222,7 +227,7 @@
             </thead>
             <tbody id="ai-leads-body">
               <tr class="empty-row">
-                <td colspan="8" data-i18n="aiLeads.emptyHint">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>
+                <td colspan="8" data-i18n="aiLeads.emptyHint">—</td>
               </tr>
             </tbody>
           </table>
@@ -246,13 +251,6 @@
     </section>
 
     <section id="pi-agent-view" class="panel pi-agent-panel hidden">
-      <div class="pi-chat-header">
-        <div>
-          <h2 data-i18n="pi.title">Pi 助手</h2>
-          <p class="settings-desc" data-i18n="pi.desc">在网页里用对话操作 CRM：查 ASN、AI 找线索、搜索/导入联系人。可开多个独立对话任务，历史保存在浏览器中。</p>
-        </div>
-        <p id="pi-agent-status" class="llm-status" data-i18n="msg.checkingLlm">检查 LLM 配置中…</p>
-      </div>
       <div class="pi-chat-shell">
         <aside class="pi-chat-sidebar" aria-label="Pi chat threads">
           <div class="pi-chat-sidebar-head">
@@ -263,7 +261,7 @@
         </aside>
         <div class="pi-chat-main">
           <div id="pi-chat-messages" class="pi-chat-messages" aria-live="polite">
-            <div class="pi-chat-empty" data-i18n="pi.emptyHint">配置 LLM 后，在此输入需求，例如「查 AS22541 AS201341 的 abuse 邮箱并导入」或「搜索并标记已发邮件的联系人」</div>
+            <div class="pi-chat-empty" data-i18n="pi.emptyHint">输入任务开始对话</div>
           </div>
           <div id="pi-chat-progress" class="progress hidden">
             <div class="progress-bar"><div id="pi-chat-progress-fill"></div></div>
@@ -274,10 +272,14 @@
               <textarea id="pi-chat-input" rows="3" data-i18n-placeholder="pi.inputPlaceholder" placeholder="描述你想让 Pi 助手完成的任务…" disabled></textarea>
             </label>
             <div class="controls">
+              <label class="field checkbox-field">
+                <input id="pi-chat-background" type="checkbox">
+                <span data-i18n="jobs.runInBackground">后台运行（可关闭页面）</span>
+              </label>
               <button type="submit" id="pi-chat-send" disabled data-i18n="pi.send">发送</button>
               <button type="button" id="pi-chat-stop" class="secondary-btn hidden" data-i18n="pi.stop">停止</button>
               <button type="button" id="pi-chat-clear" class="secondary-btn" data-i18n="pi.clear">清空当前对话</button>
-              <span id="pi-chat-history-hint" class="stats hint"></span>
+              <span id="pi-chat-history-hint" class="stats hint hidden" aria-hidden="true"></span>
             </div>
           </form>
         </div>
@@ -288,7 +290,7 @@
       <div class="results-header">
         <div>
           <h2 data-i18n="schedules.title">定时自动找线索</h2>
-          <p id="schedules-stats" class="stats" data-i18n="schedules.statsDefault">服务启动后按间隔自动运行 AI 线索发现并导入</p>
+          <p id="schedules-stats" class="stats"></p>
           <p id="scheduler-status" class="stats scheduler-status"></p>
         </div>
         <div class="results-actions">
@@ -366,31 +368,23 @@
 
     <section id="settings-view" class="settings-page hidden">
       <div class="settings-shell">
-        <nav class="settings-rail" id="settings-rail" data-i18n-title="settings.railLabel" aria-label="设置分类">
+        <nav class="settings-rail" id="settings-rail" aria-label="Settings">
           <button type="button" class="settings-rail-item active" data-settings-cat="account">
-            <span class="settings-rail-icon" aria-hidden="true">🔐</span>
             <span data-i18n="settings.cat.account">账号安全</span>
           </button>
           <button type="button" class="settings-rail-item" data-settings-cat="ai">
-            <span class="settings-rail-icon" aria-hidden="true">AI</span>
             <span data-i18n="settings.cat.ai">AI 与搜索</span>
-            <span class="rail-dot" id="rail-dot-ai" data-i18n-title="settings.llmNotConfigured" title="LLM 未配置"></span>
           </button>
           <button type="button" class="settings-rail-item" data-settings-cat="import">
-            <span class="settings-rail-icon" aria-hidden="true">⇅</span>
             <span data-i18n="settings.cat.import">线索导入</span>
           </button>
           <button type="button" class="settings-rail-item" data-settings-cat="automation">
-            <span class="settings-rail-icon" aria-hidden="true">⏱</span>
             <span data-i18n="settings.cat.automation">自动化</span>
-            <span class="rail-dot" id="rail-dot-automation" data-i18n-title="settings.schedulerNotEnabled" title="定时任务未启用"></span>
           </button>
           <button type="button" class="settings-rail-item" data-settings-cat="templates">
-            <span class="settings-rail-icon" aria-hidden="true">✉</span>
             <span data-i18n="settings.cat.templates">邮件模板</span>
           </button>
           <button type="button" class="settings-rail-item" data-settings-cat="backup">
-            <span class="settings-rail-icon" aria-hidden="true">↓</span>
             <span data-i18n="settings.cat.backup">数据备份</span>
           </button>
         </nav>
@@ -398,10 +392,6 @@
         <div class="settings-main">
           <form id="settings-form" class="settings-form">
             <div class="settings-pane" data-settings-pane="account">
-              <header class="settings-pane-head">
-                <h2 class="settings-pane-title" data-i18n="settings.cat.account">账号安全</h2>
-                <p class="settings-desc" data-i18n="settings.accountDesc">管理你的登录凭证。默认账号/密码仅在系统首次初始化时生效，已登录后请用下方修改密码。</p>
-              </header>
               <div class="settings-card">
               <fieldset>
                 <legend data-i18n="settings.changePassword">修改登录密码</legend>
@@ -416,7 +406,6 @@
               </fieldset>
               <details class="settings-advanced">
                 <summary data-i18n="settings.advancedInit">高级：首次初始化设置</summary>
-                <p class="stats" data-i18n="settings.advancedInitHint">以下仅在数据库首次初始化时使用，正常运行后请勿随意修改。</p>
                 <label class="field"><span data-i18n="settings.defaultUsername">默认用户名</span>
                   <input id="setting-default-admin-user" type="text"></label>
                 <label class="field"><span data-i18n="settings.defaultPassword">默认密码</span>
@@ -428,10 +417,6 @@
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="ai">
-              <header class="settings-pane-head">
-                <h2 class="settings-pane-title" data-i18n="settings.cat.ai">AI 与搜索</h2>
-                <p class="settings-desc" data-i18n="settings.aiDesc">AI 线索发现依赖 LLM；搜索引擎 Key 为可选增强，全部留空时默认使用 DuckDuckGo。</p>
-              </header>
               <fieldset>
                 <legend data-i18n="settings.llmRequired">LLM（AI 线索发现必填）</legend>
                 <label class="field"><span>API Key</span>
@@ -443,7 +428,6 @@
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.zhipuWebSearch">智谱联网搜索（推荐）</legend>
-                <p class="stats" data-i18n="settings.zhipuWebSearchHint">使用智谱 Web Search API。若 LLM Base URL 为 open.bigmodel.cn，可留空 API Key 并复用上方 LLM Key。</p>
                 <label class="field"><span data-i18n="settings.zhipuApiKey">智谱 API Key</span>
                   <input id="setting-zhipu-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span data-i18n="settings.zhipuSearchEngine">搜索引擎</span>
@@ -456,7 +440,6 @@
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.brightdataSerp">Bright Data Google SERP</legend>
-                <p class="stats" data-i18n="settings.brightdataSerpHint">Bright Data SERP API，自动兼容 JSON / Markdown / HTML 响应。Zone 默认输出为 Markdown 时可保持「自动」。</p>
                 <label class="field"><span data-i18n="settings.brightdataApiKey">Bright Data API Key</span>
                   <input id="setting-brightdata-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span data-i18n="settings.brightdataSerpZone">SERP Zone 名称</span>
@@ -473,7 +456,6 @@
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.brightdataSocial">Bright Data 社交媒体 Profiles</legend>
-                <p class="stats" data-i18n="settings.brightdataSocialHint">按 URL 抓取 LinkedIn / X / Facebook profile（Bright Data Scraper API）。与 SERP 共用 API Key；discover_leads 会从搜索结果自动提取 URL 并补充抓取。</p>
                 <label class="field checkbox-field">
                   <input id="setting-brightdata-linkedin-enabled" type="checkbox">
                   <span data-i18n="settings.brightdataLinkedinEnabled">启用 LinkedIn 渠道</span>
@@ -495,7 +477,6 @@
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.shodan">Shodan</legend>
-                <p class="stats" data-i18n="settings.shodanHint">互联网资产搜索，discover_leads 会按 PeeringDB 关键词用 org filter 补充 ASN/域名。带 filter 的查询消耗 query credits。</p>
                 <label class="field checkbox-field">
                   <input id="setting-shodan-enabled" type="checkbox">
                   <span data-i18n="settings.shodanEnabled">启用 Shodan 渠道</span>
@@ -515,13 +496,8 @@
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="import">
-              <header class="settings-pane-head">
-                <h2 class="settings-pane-title" data-i18n="settings.cat.import">线索导入</h2>
-                <p class="settings-desc" data-i18n="settings.importDesc">控制哪些邮箱可以被导入。白名单非空时仅导入匹配项；黑名单始终排除。</p>
-              </header>
               <fieldset>
                 <legend data-i18n="settings.importFilter">导入过滤（黑名单 / 白名单）</legend>
-                <p class="stats" data-i18n="settings.importFilterHint">每行一条：域名（如 example.com）或带 * 的邮箱模式。</p>
                 <label class="field"><span data-i18n="settings.blocklist">黑名单</span>
                   <textarea id="setting-import-blocklist" rows="5" data-i18n-placeholder="settings.blocklistPlaceholder" placeholder=""></textarea></label>
                 <label class="field"><span data-i18n="settings.allowlist">白名单（留空表示不启用）</span>
@@ -530,10 +506,6 @@
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="automation">
-              <header class="settings-pane-head">
-                <h2 class="settings-pane-title" data-i18n="settings.cat.automation">自动化</h2>
-                <p class="settings-desc" data-i18n="settings.automationDesc">让服务在后台按间隔自动运行 AI 线索发现并导入联系人（按邮箱去重）。</p>
-              </header>
               <fieldset>
                 <legend data-i18n="settings.scheduledTasks">定时任务</legend>
                 <label class="field checkbox-field">
@@ -544,7 +516,6 @@
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.piAgentApi">Pi Agent API</legend>
-                <p class="settings-desc" data-i18n-html="settings.piAgentDesc">在同一台 VPS 上运行 Pi Coding Agent 时，用下方 Token 调用 CRM。Base URL：<code>http://127.0.0.1:8000</code></p>
                 <label class="field"><span data-i18n="settings.agentToken">Agent Token</span>
                   <div class="controls">
                     <input id="setting-agent-api-token" type="text" readonly data-i18n-placeholder="settings.agentTokenPlaceholder" placeholder="点击「重新生成」获取 Token" class="token-field">
@@ -553,15 +524,10 @@
                   </div>
                 </label>
                 <p id="agent-token-status" class="stats"></p>
-                <p class="hint" data-i18n-html="settings.piInstallHint">安装 Pi 扩展见仓库 <code>integrations/pi/README.md</code></p>
               </fieldset>
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="templates">
-              <header class="settings-pane-head">
-                <h2 class="settings-pane-title" data-i18n="settings.cat.templates">邮件模板</h2>
-                <p class="settings-desc" data-i18n-html="settings.templatesDesc">用于联系人列表的 mailto 一键发信。变量：<code>{org}</code> <code>{name}</code> <code>{email}</code> <code>{asn}</code> <code>{roles}</code></p>
-              </header>
               <fieldset>
                 <legend data-i18n="settings.emailTemplates">邮件模板</legend>
                 <div id="email-templates-list" class="template-list"></div>
@@ -579,10 +545,6 @@
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="backup">
-              <header class="settings-pane-head">
-                <h2 class="settings-pane-title" data-i18n="settings.cat.backup">数据备份</h2>
-                <p class="settings-desc" data-i18n="settings.backupDesc">下载完整 SQLite 数据库文件，用于迁移或灾难恢复。</p>
-              </header>
               <fieldset>
                 <legend data-i18n="settings.dataBackup">数据备份</legend>
                 <button id="download-backup-btn" type="button" class="secondary-btn" data-i18n="settings.downloadBackup">下载数据库备份</button>
@@ -810,7 +772,6 @@
     </div>
   </div>
 
-  <script src="/static/i18n.js"></script>
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

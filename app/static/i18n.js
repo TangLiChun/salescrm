@@ -9,22 +9,22 @@ const I18N = {
     "nav.contacts": "联系人列表",
     "nav.stats": "统计概览",
     "topbar.logout": "退出登录",
-    "page.lookup.title": "ASN Role 邮箱查询",
-    "page.lookup.subtitle": "批量查询全球 RIR（ARIN / RIPE / APNIC / LACNIC / AFRINIC）ASN 的 abuse / technical / administrative 等 role 邮箱",
+    "page.lookup.title": "ASN 查询",
+    "page.lookup.subtitle": "",
     "page.aiLeads.title": "AI 线索发现",
-    "page.aiLeads.subtitle": "AI 自动通过搜索引擎、PeeringDB、全球 RDAP 等多渠道搜索并评分筛选销售线索",
+    "page.aiLeads.subtitle": "",
     "page.piAgent.title": "Pi 助手",
-    "page.piAgent.subtitle": "对话式 CRM Agent：AI 找线索、查 ASN、导入联系人，与「AI 线索发现」共用引擎，历史保存在浏览器",
+    "page.piAgent.subtitle": "",
     "page.schedules.title": "定时任务",
-    "page.schedules.subtitle": "持续或按间隔自动运行 AI 线索发现，≥60 分自动导入联系人（邮箱去重）",
+    "page.schedules.subtitle": "",
     "page.settings.title": "系统设置",
     "page.settings.subtitle": "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理",
     "page.stats.title": "统计概览",
-    "page.stats.subtitle": "联系人跟进状态、发信与来源分布，以及近期导入趋势",
+    "page.stats.subtitle": "",
     "page.contacts.title": "联系人列表",
-    "page.contacts.subtitle": "管理联系人状态：标记已发邮件、筛选未联系对象、一键去重",
+    "page.contacts.subtitle": "",
     "lookup.asnList": "ASN 列表",
-    "lookup.asnPlaceholder": "支持多种格式，自动去重：\n15169\nAS7922, 13335\n混排文本中的 ASN 8075 也会被识别",
+    "lookup.asnPlaceholder": "15169\nAS7922, 13335",
     "lookup.delay": "请求间隔（秒）",
     "lookup.start": "开始查询",
     "lookup.results": "查询结果",
@@ -36,9 +36,9 @@ const I18N = {
     "lookup.colName": "名称",
     "lookup.colEmail": "邮箱",
     "lookup.colStatus": "状态",
-    "lookup.emptyHint": "输入 ASN 列表后点击「开始查询」",
+    "lookup.emptyHint": "—",
     "aiLeads.queryLabel": "描述你要找的销售线索",
-    "aiLeads.queryPlaceholder": "例如：\n找美国大型 ISP 和有线电视运营商，需要 networking / peering 联系人\n找北美 CDN 和 cloud 基础网络公司\n找数据中心互联 peering 负责人邮箱",
+    "aiLeads.queryPlaceholder": "例如：美国 ISP peering 联系人",
     "aiLeads.minScore": "最低匹配分",
     "aiLeads.autoImport": "自动导入联系人",
     "aiLeads.discoverViaPi": "在 Pi 助手中找线索",
@@ -50,12 +50,12 @@ const I18N = {
     "aiLeads.colScore": "分数",
     "aiLeads.colSource": "来源",
     "aiLeads.colReason": "AI 理由",
-    "aiLeads.emptyHint": "用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分",
+    "aiLeads.emptyHint": "—",
     "aiLeads.leadDetail": "线索详情",
     "aiLeads.importThisLead": "导入此线索",
     "pi.title": "Pi 助手",
     "pi.desc": "在网页里用对话操作 CRM：查 ASN、AI 找线索、搜索/导入联系人。可开多个独立对话任务，历史保存在浏览器中。",
-    "pi.emptyHint": "配置 LLM 后，在此输入需求，例如「查 AS22541 AS201341 的 abuse 邮箱并导入」或「搜索并标记已发邮件的联系人」",
+    "pi.emptyHint": "输入任务开始对话",
     "pi.message": "消息",
     "pi.inputPlaceholder": "描述你想让 Pi 助手完成的任务…",
     "pi.send": "发送",
@@ -72,7 +72,7 @@ const I18N = {
     "pi.confirmDeleteThread": "删除这个对话？该对话的消息记录将无法恢复。",
     "pi.recoveredThreadTitle": "历史对话（恢复）",
     "schedules.title": "定时自动找线索",
-    "schedules.statsDefault": "后台调度器会按任务设置自动运行 discover_leads 并导入",
+    "schedules.statsDefault": "",
     "schedules.runMode": "运行模式",
     "schedules.modeContinuous": "持续运行（完成后自动下一轮）",
     "schedules.modeInterval": "按固定间隔",
@@ -86,7 +86,7 @@ const I18N = {
     "schedules.taskName": "任务名称",
     "schedules.taskNamePlaceholder": "例如：美国 ISP 每日线索",
     "schedules.searchDesc": "搜索描述",
-    "schedules.searchPlaceholder": "与 AI 线索发现相同的自然语言描述",
+    "schedules.searchPlaceholder": "与 AI 线索发现相同",
     "schedules.intervalHours": "间隔（小时）",
     "schedules.create": "创建定时任务",
     "schedules.colName": "名称",
@@ -438,12 +438,35 @@ const I18N = {
     "jobs.lookupStarting": "ASN 查询启动中…",
     "jobs.leadsRunning": "AI 线索发现进行中…",
     "jobs.leadsProgress": "AI 线索 {message}",
+    "jobs.leadsRdap": "RDAP 查询 {current}/{total} {asn}",
     "jobs.lookupDone": "ASN 查询完成：{emails} 条邮箱",
     "jobs.leadsDone": "AI 线索完成：{count} 条",
     "jobs.enrichStarting": "联系人扩展启动中…",
     "jobs.enrichRunning": "联系人扩展：{message}",
     "jobs.enrichProgress": "联系人扩展 {current}/{total} {asn}",
     "jobs.enrichDone": "联系人 #{contactId} 扩展完成：{count} 条新线索。{message}",
+    "jobs.piStarting": "Pi 任务启动中…",
+    "jobs.piRunning": "Pi {message}",
+    "jobs.piProgress": "Pi · {name} · {message}",
+    "jobs.piDone": "Pi 任务完成：{snippet}",
+    "jobs.piDoneInline": "后台任务完成：{snippet}",
+    "jobs.piDoneFallback": "已完成",
+    "jobs.panelTitle": "后台任务",
+    "jobs.viewAll": "查看全部",
+    "jobs.activeCount": "{count} 个任务进行中",
+    "jobs.emptyList": "暂无任务记录",
+    "jobs.type.lookup": "ASN 查询",
+    "jobs.type.lead_discover": "AI 线索发现",
+    "jobs.type.enrich_contact": "联系人扩展",
+    "jobs.type.pi_agent": "Pi 助手",
+    "jobs.status.pending": "排队中",
+    "jobs.status.running": "运行中",
+    "jobs.status.done": "已完成",
+    "jobs.status.error": "失败",
+    "jobs.viewPi": "查看 Pi",
+    "jobs.viewLeads": "查看线索",
+    "jobs.viewLookup": "查看结果",
+    "jobs.viewContacts": "查看联系人",
     "jobs.failed": "后台任务失败",
     "msg.jobStartedBackground": "已在后台开始，可切换页面或关闭标签；进度显示在顶部。",
     "msg.enrichFailed": "联系人扩展失败",
@@ -457,22 +480,22 @@ const I18N = {
     "nav.contacts": "Contacts",
     "nav.stats": "Statistics",
     "topbar.logout": "Log out",
-    "page.lookup.title": "ASN Role Email Lookup",
-    "page.lookup.subtitle": "Batch lookup of abuse / technical / administrative role emails for ASNs across global RIRs (ARIN / RIPE / APNIC / LACNIC / AFRINIC)",
+    "page.lookup.title": "ASN Lookup",
+    "page.lookup.subtitle": "",
     "page.aiLeads.title": "AI Lead Discovery",
-    "page.aiLeads.subtitle": "AI searches and scores sales leads via search engines, PeeringDB, global RDAP, and more",
+    "page.aiLeads.subtitle": "",
     "page.piAgent.title": "Pi Assistant",
-    "page.piAgent.subtitle": "Conversational CRM agent: find leads, lookup ASNs, import contacts — same engine as AI Lead Discovery, history saved in browser",
+    "page.piAgent.subtitle": "",
     "page.schedules.title": "Schedules",
-    "page.schedules.subtitle": "Run AI lead discovery continuously or on a fixed interval; auto-import contacts scoring ≥60 (deduped by email)",
+    "page.schedules.subtitle": "",
     "page.settings.title": "Settings",
     "page.settings.subtitle": "LLM, search engines, schedules, and other config stored in the database — manage from the web UI",
     "page.stats.title": "Statistics",
-    "page.stats.subtitle": "Follow-up status, email sent/unsent, source distribution, and recent import trends",
+    "page.stats.subtitle": "",
     "page.contacts.title": "Contacts",
-    "page.contacts.subtitle": "Manage contact status: mark emails sent, filter unsent, dedupe in one click",
+    "page.contacts.subtitle": "",
     "lookup.asnList": "ASN list",
-    "lookup.asnPlaceholder": "Multiple formats supported, auto-deduped:\n15169\nAS7922, 13335\nASNs embedded in text (e.g. 8075) are also recognized",
+    "lookup.asnPlaceholder": "15169\nAS7922, 13335",
     "lookup.delay": "Request delay (sec)",
     "lookup.start": "Start lookup",
     "lookup.results": "Results",
@@ -484,9 +507,9 @@ const I18N = {
     "lookup.colName": "Name",
     "lookup.colEmail": "Email",
     "lookup.colStatus": "Status",
-    "lookup.emptyHint": "Enter ASN list and click Start lookup",
+    "lookup.emptyHint": "—",
     "aiLeads.queryLabel": "Describe the sales leads you want",
-    "aiLeads.queryPlaceholder": "Examples:\nUS large ISPs and cable operators, networking / peering contacts\nNorth American CDN and cloud network companies\nData center peering contact emails",
+    "aiLeads.queryPlaceholder": "e.g. US ISP peering contacts",
     "aiLeads.minScore": "Min match score",
     "aiLeads.autoImport": "Auto-import contacts",
     "aiLeads.discoverViaPi": "Find leads in Pi Assistant",
@@ -498,12 +521,12 @@ const I18N = {
     "aiLeads.colScore": "Score",
     "aiLeads.colSource": "Source",
     "aiLeads.colReason": "AI reason",
-    "aiLeads.emptyHint": "Describe your target customers in natural language — AI will search and score across channels",
+    "aiLeads.emptyHint": "—",
     "aiLeads.leadDetail": "Lead details",
     "aiLeads.importThisLead": "Import this lead",
     "pi.title": "Pi Assistant",
     "pi.desc": "Operate CRM by chat: ASN lookup, AI leads, search/import contacts. Open separate chat threads per task; history saved in browser.",
-    "pi.emptyHint": "After configuring LLM, try: \"Lookup abuse emails for AS22541 AS201341 and import\" or \"Search contacts and mark sent\"",
+    "pi.emptyHint": "Start a task to chat",
     "pi.message": "Message",
     "pi.inputPlaceholder": "Describe what you want Pi to do…",
     "pi.send": "Send",
@@ -520,7 +543,7 @@ const I18N = {
     "pi.confirmDeleteThread": "Delete this chat? Its messages cannot be recovered.",
     "pi.recoveredThreadTitle": "Recovered chat",
     "schedules.title": "Scheduled lead discovery",
-    "schedules.statsDefault": "Background scheduler runs discover_leads per task settings and imports matches",
+    "schedules.statsDefault": "",
     "schedules.runMode": "Run mode",
     "schedules.modeContinuous": "Continuous (next run after each finish)",
     "schedules.modeInterval": "Fixed interval",
@@ -534,7 +557,7 @@ const I18N = {
     "schedules.taskName": "Task name",
     "schedules.taskNamePlaceholder": "e.g. US ISP daily leads",
     "schedules.searchDesc": "Search description",
-    "schedules.searchPlaceholder": "Same natural-language description as AI Lead Discovery",
+    "schedules.searchPlaceholder": "Same as AI Lead Discovery",
     "schedules.intervalHours": "Interval (hours)",
     "schedules.create": "Create schedule",
     "schedules.colName": "Name",
@@ -886,12 +909,35 @@ const I18N = {
     "jobs.lookupStarting": "ASN lookup starting…",
     "jobs.leadsRunning": "AI lead discovery running…",
     "jobs.leadsProgress": "AI leads {message}",
+    "jobs.leadsRdap": "RDAP lookup {current}/{total} {asn}",
     "jobs.lookupDone": "ASN lookup done: {emails} emails",
     "jobs.leadsDone": "AI leads done: {count} leads",
     "jobs.enrichStarting": "Contact enrich starting…",
     "jobs.enrichRunning": "Contact enrich: {message}",
     "jobs.enrichProgress": "Contact enrich {current}/{total} {asn}",
     "jobs.enrichDone": "Contact #{contactId} enrich done: {count} new leads. {message}",
+    "jobs.piStarting": "Pi task starting…",
+    "jobs.piRunning": "Pi {message}",
+    "jobs.piProgress": "Pi · {name} · {message}",
+    "jobs.piDone": "Pi task done: {snippet}",
+    "jobs.piDoneInline": "Background task done: {snippet}",
+    "jobs.piDoneFallback": "Completed",
+    "jobs.panelTitle": "Background jobs",
+    "jobs.viewAll": "View all",
+    "jobs.activeCount": "{count} running",
+    "jobs.emptyList": "No jobs yet",
+    "jobs.type.lookup": "ASN lookup",
+    "jobs.type.lead_discover": "AI lead discovery",
+    "jobs.type.enrich_contact": "Contact enrich",
+    "jobs.type.pi_agent": "Pi assistant",
+    "jobs.status.pending": "Queued",
+    "jobs.status.running": "Running",
+    "jobs.status.done": "Done",
+    "jobs.status.error": "Failed",
+    "jobs.viewPi": "Open Pi",
+    "jobs.viewLeads": "View leads",
+    "jobs.viewLookup": "View results",
+    "jobs.viewContacts": "View contacts",
     "jobs.failed": "Background job failed",
     "msg.jobStartedBackground": "Started in background — switch tabs or close this page; progress shows at the top.",
     "msg.enrichFailed": "Contact enrich failed",
@@ -902,7 +948,7 @@ const LANG_STORAGE_KEY = "salescrm:lang";
 let currentLang = localStorage.getItem(LANG_STORAGE_KEY) || "zh";
 if (!I18N[currentLang]) currentLang = "zh";
 
-function t(key, params) {
+export function t(key, params) {
   let str = I18N[currentLang]?.[key] ?? I18N.zh[key] ?? key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -912,19 +958,19 @@ function t(key, params) {
   return str;
 }
 
-function getLanguage() {
+export function getLanguage() {
   return currentLang;
 }
 
-function followUpLabel(key) {
+export function followUpLabel(key) {
   return t(`followUp.${key || "new"}`) || key;
 }
 
-function followUpOptions() {
+export function followUpOptions() {
   return ["new", "contacted", "replied", "invalid", "interested"];
 }
 
-function channelLabel(key) {
+export function channelLabel(key) {
   const map = {
     peeringdb: "channel.peeringdb",
     shodan: "channel.shodan",
@@ -940,7 +986,7 @@ function channelLabel(key) {
   return t(map[key] || key);
 }
 
-function applyI18nToDocument() {
+export function applyI18nToDocument() {
   document.documentElement.lang = currentLang === "zh" ? "zh-CN" : "en";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     const key = el.getAttribute("data-i18n");
@@ -965,7 +1011,7 @@ function applyI18nToDocument() {
   });
 }
 
-function setLanguage(lang) {
+export function setLanguage(lang) {
   if (!I18N[lang] || lang === currentLang) return;
   currentLang = lang;
   localStorage.setItem(LANG_STORAGE_KEY, lang);
@@ -973,7 +1019,7 @@ function setLanguage(lang) {
   window.dispatchEvent(new CustomEvent("languagechange", { detail: { lang } }));
 }
 
-function initI18n() {
+export function initI18n() {
   applyI18nToDocument();
   document.getElementById("lang-switch")?.addEventListener("click", (event) => {
     const btn = event.target.closest("[data-lang]");
@@ -981,8 +1027,4 @@ function initI18n() {
   });
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initI18n);
-} else {
-  initI18n();
-}
+window.t = t;

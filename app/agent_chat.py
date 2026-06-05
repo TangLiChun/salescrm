@@ -688,6 +688,65 @@ def _extract_json_args(text: str) -> dict[str, Any]:
     return {}
 
 
+def _import_result_summary(result: dict[str, Any]) -> str:
+    imported = int(result.get("imported") or 0)
+    skipped = int(result.get("skipped") or 0)
+    parts = [f"导入 {imported} 条"]
+    if skipped:
+        parts.append(f"跳过 {skipped} 条")
+    return " · ".join(parts)
+
+
+def tool_result_summary(name: str, result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    if result.get("error"):
+        return str(result["error"])
+    if name in ("discover_leads", "enrich_contact"):
+        parts = [f"共 {result.get('lead_count', 0)} 条线索"]
+        if result.get("contact_id"):
+            parts.insert(0, f"联系人 #{result['contact_id']}")
+        if result.get("import"):
+            parts.append(_import_result_summary(result["import"]))
+        elif result.get("message"):
+            parts.append(str(result["message"]))
+        return " · ".join(parts)
+    if name == "lookup_asns":
+        asns = result.get("asns") or []
+        return f"识别 {len(asns)} 个 ASN · {result.get('email_count', 0)} 条邮箱"
+    if name == "list_contacts":
+        contacts = result.get("contacts") or []
+        return f"返回 {len(contacts)} 条（总计 {result.get('total', 0)}）"
+    if name == "get_contact":
+        contact = result.get("contact") or {}
+        return f"#{contact.get('id', '')} {contact.get('email') or ''}".strip()
+    if name == "update_contact":
+        contact = result.get("contact") or {}
+        return f"已更新 #{contact.get('id', '')} {contact.get('email') or ''}".strip()
+    if name == "mark_contact_sent":
+        if result.get("ok"):
+            status = "已标记发信" if result.get("sent") else "已取消发信标记"
+            return f"联系人 #{result.get('contact_id', '')} {status}"
+        return ""
+    if name == "delete_contacts":
+        return f"已删除 {result.get('deleted', 0)} / {result.get('requested', 0)} 条"
+    if name == "add_contact_note":
+        return "已添加备注" if result.get("ok") else ""
+    if name == "dedupe_contacts":
+        return (
+            f"去重完成：删除 {result.get('removed', 0)} 条，"
+            f"剩余 {result.get('total_contacts', result.get('total', 0))} 条"
+        )
+    if name == "import_leads":
+        return _import_result_summary(result)
+    if name == "get_stats":
+        return f"联系人 {result.get('total', 0)} · 已发 {result.get('sent', 0)}"
+    try:
+        return json.dumps(result, ensure_ascii=False)[:8000]
+    except (TypeError, ValueError):
+        return str(result)[:8000]
+
+
 def _infer_tool_name(name: str, args: dict[str, Any]) -> str:
     cleaned = (name or "").strip().lower()
     if cleaned in KNOWN_TOOL_NAMES:

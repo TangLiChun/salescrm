@@ -56,7 +56,9 @@ from app.database import (
     update_user_password,
 )
 from app.background_jobs import (
+    PiAgentThreadBusyError,
     get_job_for_user,
+    iter_job_events,
     list_jobs_for_user,
     recover_background_jobs_on_startup,
     spawn_background_job,
@@ -91,7 +93,7 @@ MAX_ASNS = 200
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    recover_background_jobs_on_startup()
+    await recover_background_jobs_on_startup()
     await start_scheduler()
     yield
     await stop_scheduler()
@@ -137,6 +139,11 @@ class EnrichContactJobRequest(BaseModel):
     contact_id: int = Field(gt=0)
     min_score: int = Field(default=50, ge=0, le=100)
     auto_import: bool = True
+
+
+class PiAgentJobRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    thread_id: str | None = Field(default=None, max_length=64)
 
 
 class ScheduleRequest(BaseModel):
@@ -871,6 +878,31 @@ async def create_lead_discover_job(body: LeadDiscoverRequest, user: CurrentUser)
     return {"job": job}
 
 
+@app.post("/api/jobs/pi-agent")
+async def create_pi_agent_job(body: PiAgentJobRequest, user: CurrentUser) -> dict:
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 LLM API Key，请在系统设置中填写",
+        )
+    if body.thread_id:
+        thread = get_pi_thread(user["id"], body.thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="对话不存在")
+    try:
+        job = spawn_background_job(
+            user["id"],
+            "pi_agent",
+            {
+                "message": body.message.strip(),
+                "thread_id": body.thread_id,
+            },
+        )
+    except PiAgentThreadBusyError:
+        raise HTTPException(status_code=409, detail="该对话已有后台 Pi 任务运行中，请等待完成后再发送")
+    return {"job": job}
+
+
 @app.post("/api/jobs/enrich")
 async def create_enrich_contact_job(body: EnrichContactJobRequest, user: CurrentUser) -> dict:
     if not llm_configured():
@@ -893,6 +925,15 @@ async def create_enrich_contact_job(body: EnrichContactJobRequest, user: Current
         },
     )
     return {"job": job}
+
+
+@app.get("/api/jobs/events")
+async def jobs_events_stream(user: CurrentUser) -> StreamingResponse:
+    return StreamingResponse(
+        iter_job_events(user["id"]),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/jobs")

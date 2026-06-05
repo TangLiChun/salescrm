@@ -98,6 +98,17 @@ def _migrate_scheduled_jobs(conn) -> None:
     )
 
 
+def _migrate_background_jobs(conn) -> None:
+    columns = _table_columns(conn, "background_jobs")
+    if "checkpoint_json" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE background_jobs
+            ADD COLUMN checkpoint_json TEXT
+            """
+        )
+
+
 def _migrate_pi_chat_threads(conn) -> None:
     columns = _table_columns(conn, "pi_chat_threads")
     if "context_summary" not in columns:
@@ -320,6 +331,7 @@ def init_db() -> None:
 
         _migrate_contacts(conn)
         _migrate_scheduled_jobs(conn)
+        _migrate_background_jobs(conn)
         _migrate_pi_chat_threads(conn)
 
         from app.settings_store import init_settings
@@ -1442,6 +1454,8 @@ def update_background_job(
     message: str | None = None,
     progress: dict | None = None,
     result: dict | None = None,
+    checkpoint: dict | None = None,
+    clear_checkpoint: bool = False,
     finished_at: bool = False,
 ) -> None:
     import json as _json
@@ -1460,6 +1474,11 @@ def update_background_job(
     if result is not None:
         fields.append("result_json = %s")
         values.append(_json.dumps(result, ensure_ascii=False))
+    if clear_checkpoint:
+        fields.append("checkpoint_json = NULL")
+    elif checkpoint is not None:
+        fields.append("checkpoint_json = %s")
+        values.append(_json.dumps(checkpoint, ensure_ascii=False))
     if finished_at:
         fields.append("finished_at = %s")
         values.append(utc_now())
@@ -1469,6 +1488,36 @@ def update_background_job(
             f"UPDATE background_jobs SET {', '.join(fields)} WHERE id = %s",
             values,
         )
+
+
+def list_resumable_background_jobs() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM background_jobs
+            WHERE status IN ('pending', 'running')
+            ORDER BY created_at ASC
+            """,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def has_active_pi_agent_job(user_id: int, thread_id: str) -> bool:
+    if not thread_id:
+        return False
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM background_jobs
+            WHERE user_id = %s
+              AND job_type = 'pi_agent'
+              AND status IN ('pending', 'running')
+              AND params_json::jsonb->>'thread_id' = %s
+            LIMIT 1
+            """,
+            (user_id, thread_id),
+        ).fetchone()
+    return row is not None
 
 
 def mark_interrupted_background_jobs() -> None:

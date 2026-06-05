@@ -3,29 +3,82 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import defaultdict
 from typing import Any
 
+from app.agent_chat import agent_chat_stream, tool_result_summary
 from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     create_background_job,
     get_background_job,
+    has_active_pi_agent_job,
     list_background_jobs,
-    mark_interrupted_background_jobs,
+    list_resumable_background_jobs,
     update_background_job,
 )
+from app.lead_checkpoint import parse_checkpoint, checkpoint_resume_message, progress_from_checkpoint
 from app.lead_discovery import discover_leads_stream
+from app.pi_chat_store import (
+    compress_thread_context_until_current,
+    get_pi_thread,
+    upsert_pi_thread,
+)
 from arin_lookup import RoleContact, lookup_asns_batch, parse_asns_from_text, rows_to_csv
 
 logger = logging.getLogger(__name__)
 
 _running: set[int] = set()
 MAX_ASNS = 200
+_job_event_subscribers: dict[int, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
+
+
+def _update_job(job_id: int, **kwargs: Any) -> None:
+    update_background_job(job_id, **kwargs)
+    _publish_job_event(job_id)
+
+
+def _publish_job_event(job_id: int) -> None:
+    job = get_background_job(job_id)
+    if not job:
+        return
+    public = _public_job(job)
+    if not public:
+        return
+    user_id = int(job["user_id"])
+    payload = {"type": "job", "job": public}
+    dead: list[asyncio.Queue[dict[str, Any]]] = []
+    for queue in list(_job_event_subscribers.get(user_id, ())):
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            dead.append(queue)
+    for queue in dead:
+        unsubscribe_job_events(user_id, queue)
+
+
+def subscribe_job_events(user_id: int) -> asyncio.Queue[dict[str, Any]]:
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
+    _job_event_subscribers[user_id].add(queue)
+    return queue
+
+
+def unsubscribe_job_events(user_id: int, queue: asyncio.Queue[dict[str, Any]]) -> None:
+    subs = _job_event_subscribers.get(user_id)
+    if not subs:
+        return
+    subs.discard(queue)
+    if not subs:
+        _job_event_subscribers.pop(user_id, None)
 
 
 def _public_job(job: dict | None) -> dict | None:
     if not job:
         return None
     out = dict(job)
+    checkpoint = parse_checkpoint(out.get("checkpoint_json"))
+    if checkpoint:
+        out["checkpoint_phase"] = checkpoint.get("phase")
+    out.pop("checkpoint_json", None)
     for key in ("params_json", "progress_json", "result_json"):
         raw = out.get(key)
         if isinstance(raw, str) and raw:
@@ -59,6 +112,10 @@ def _slim_progress(event: dict[str, Any]) -> dict[str, Any]:
     if event_type == "source_result":
         slim["source"] = event.get("source")
         slim["count"] = event.get("count")
+    if event.get("phase"):
+        slim["phase"] = event.get("phase")
+    if event_type in ("tool_progress", "tool_result"):
+        slim["name"] = event.get("name")
     if event_type == "parsed":
         slim["total"] = event.get("total")
     return slim
@@ -75,7 +132,7 @@ async def _run_lookup_job(job_id: int) -> None:
 
     asns = parse_asns_from_text(text)
     if not asns:
-        update_background_job(
+        _update_job(
             job_id,
             status="error",
             message="No valid ASNs found.",
@@ -83,7 +140,7 @@ async def _run_lookup_job(job_id: int) -> None:
         )
         return
     if len(asns) > MAX_ASNS:
-        update_background_job(
+        _update_job(
             job_id,
             status="error",
             message=f"Maximum {MAX_ASNS} ASNs per request.",
@@ -91,17 +148,17 @@ async def _run_lookup_job(job_id: int) -> None:
         )
         return
 
-    update_background_job(job_id, status="running", message="lookup running")
+    _update_job(job_id, status="running", message="lookup running")
     total = len(asns)
 
     try:
-        update_background_job(
+        _update_job(
             job_id,
             progress={"type": "parsed", "total": total, "message": f"parsed {total} ASNs"},
         )
 
         async def on_progress(index: int, total: int, asn: int, rows) -> None:
-            update_background_job(
+            _update_job(
                 job_id,
                 progress=_slim_progress(
                     {
@@ -124,7 +181,7 @@ async def _run_lookup_job(job_id: int) -> None:
 
         emails = sum(1 for row in all_rows if row.get("email"))
         errors = sum(1 for row in all_rows if row.get("error"))
-        update_background_job(
+        _update_job(
             job_id,
             status="done",
             message="lookup complete",
@@ -140,7 +197,7 @@ async def _run_lookup_job(job_id: int) -> None:
         )
     except Exception as exc:  # noqa: BLE001 — persist job failure for UI polling
         logger.exception("lookup job %s failed", job_id)
-        update_background_job(
+        _update_job(
             job_id,
             status="error",
             message=str(exc),
@@ -176,9 +233,21 @@ async def _run_lead_discover_job(job_id: int) -> None:
     auto_import = bool(params.get("auto_import"))
     user_id = int(job["user_id"])
 
-    update_background_job(job_id, status="running", message="lead discovery running")
+    checkpoint = parse_checkpoint(job.get("checkpoint_json"))
+    if checkpoint and checkpoint.get("query") != query:
+        checkpoint = None
+
+    start_message = checkpoint_resume_message(checkpoint) or "lead discovery running"
+    _update_job(job_id, status="running", message=start_message)
     leads: list[dict[str, Any]] = []
     last_import: dict[str, Any] | None = None
+
+    def save_checkpoint(data: dict[str, Any]) -> None:
+        _update_job(
+            job_id,
+            checkpoint=data,
+            progress=progress_from_checkpoint(data),
+        )
 
     try:
         async for event in discover_leads_stream(
@@ -187,10 +256,12 @@ async def _run_lead_discover_job(job_id: int) -> None:
             delay=delay,
             auto_import=auto_import,
             user_id=user_id,
+            checkpoint=checkpoint,
+            on_checkpoint=save_checkpoint,
         ):
             event_type = event.get("type")
             if event_type == "error":
-                update_background_job(
+                _update_job(
                     job_id,
                     status="error",
                     message=str(event.get("message") or "lead discovery failed"),
@@ -206,19 +277,20 @@ async def _run_lead_discover_job(job_id: int) -> None:
                 last_import = event.get("import")
                 if event.get("leads"):
                     leads = list(event.get("leads") or [])
-            update_background_job(job_id, progress=_slim_progress(event))
+            _update_job(job_id, progress=_slim_progress(event))
 
-        update_background_job(
+        _update_job(
             job_id,
             status="done",
             message=f"found {len(leads)} leads",
             progress={"type": "done"},
             result={"leads": leads, "import": last_import},
+            clear_checkpoint=True,
             finished_at=True,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("lead discover job %s failed", job_id)
-        update_background_job(
+        _update_job(
             job_id,
             status="error",
             message=str(exc),
@@ -237,7 +309,7 @@ async def _run_enrich_contact_job(job_id: int) -> None:
     user_id = int(job["user_id"])
 
     if contact_id <= 0:
-        update_background_job(
+        _update_job(
             job_id,
             status="error",
             message="contact_id invalid",
@@ -245,7 +317,7 @@ async def _run_enrich_contact_job(job_id: int) -> None:
         )
         return
 
-    update_background_job(job_id, status="running", message="contact enrich running")
+    _update_job(job_id, status="running", message="contact enrich running")
     leads: list[dict[str, Any]] = []
     last_import: dict[str, Any] | None = None
     done_message = ""
@@ -259,7 +331,7 @@ async def _run_enrich_contact_job(job_id: int) -> None:
         ):
             event_type = event.get("type")
             if event_type == "error":
-                update_background_job(
+                _update_job(
                     job_id,
                     status="error",
                     message=str(event.get("message") or "contact enrich failed"),
@@ -276,9 +348,9 @@ async def _run_enrich_contact_job(job_id: int) -> None:
                 done_message = str(event.get("message") or "")
                 if event.get("leads"):
                     leads = list(event.get("leads") or [])
-            update_background_job(job_id, progress=_slim_progress(event))
+            _update_job(job_id, progress=_slim_progress(event))
 
-        update_background_job(
+        _update_job(
             job_id,
             status="done",
             message=done_message or f"enriched contact #{contact_id}: {len(leads)} leads",
@@ -293,7 +365,120 @@ async def _run_enrich_contact_job(job_id: int) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("enrich contact job %s failed", job_id)
-        update_background_job(
+        _update_job(
+            job_id,
+            status="error",
+            message=str(exc),
+            finished_at=True,
+        )
+
+
+def _ensure_user_message_on_thread(user_id: int, thread_id: str | None, message: str) -> None:
+    if not thread_id or not message:
+        return
+    thread = get_pi_thread(user_id, thread_id)
+    history = list((thread or {}).get("history") or [])
+    if history and history[-1].get("role") == "user" and history[-1].get("content") == message:
+        return
+    upsert_pi_thread(user_id, thread_id, history=history + [{"role": "user", "content": message}])
+
+
+async def _run_pi_agent_job(job_id: int) -> None:
+    job = get_background_job(job_id)
+    if not job:
+        return
+    params = json.loads(job.get("params_json") or "{}")
+    message = str(params.get("message") or "").strip()
+    thread_id = str(params.get("thread_id") or "").strip() or None
+    user_id = int(job["user_id"])
+
+    if not message:
+        _update_job(
+            job_id,
+            status="error",
+            message="empty message",
+            finished_at=True,
+        )
+        return
+
+    _update_job(job_id, status="running", message="Pi 任务运行中")
+    _ensure_user_message_on_thread(user_id, thread_id, message)
+
+    new_entries: list[dict[str, Any]] = []
+    last_assistant = ""
+    error_msg: str | None = None
+
+    try:
+        async for event in agent_chat_stream(
+            user_id,
+            message,
+            None,
+            thread_id=thread_id,
+        ):
+            event_type = event.get("type")
+            if event_type == "error":
+                error_msg = str(event.get("message") or "Pi 任务失败")
+                break
+            if event_type in ("status", "tool_progress", "tool_result"):
+                _update_job(job_id, progress=_slim_progress(event))
+            if event_type == "tool_result":
+                name = str(event.get("name") or "tool")
+                result = event.get("result") or {}
+                summary = tool_result_summary(name, result)
+                entry: dict[str, Any] = {
+                    "role": "tool",
+                    "name": name,
+                    "summary": summary[:8000],
+                }
+                if name == "lookup_asns":
+                    rows = result.get("rows") or result.get("preview") or []
+                    if isinstance(rows, list):
+                        entry["preview"] = rows[:25]
+                if not entry["summary"] and isinstance(result, dict):
+                    try:
+                        entry["summary"] = json.dumps(result, ensure_ascii=False)[:8000]
+                    except (TypeError, ValueError):
+                        entry["summary"] = summary
+                new_entries.append(entry)
+            if event_type == "assistant_done":
+                text = str(event.get("text") or "").strip()
+                if text:
+                    new_entries.append({"role": "assistant", "content": text})
+                    last_assistant = text
+            if event_type == "done":
+                break
+
+        if error_msg:
+            _update_job(
+                job_id,
+                status="error",
+                message=error_msg,
+                progress={"type": "error", "message": error_msg},
+                finished_at=True,
+            )
+            return
+
+        if thread_id and new_entries:
+            thread = get_pi_thread(user_id, thread_id)
+            base_history = list((thread or {}).get("history") or [])
+            upsert_pi_thread(user_id, thread_id, history=base_history + new_entries)
+            await asyncio.to_thread(compress_thread_context_until_current, user_id, thread_id)
+
+        _update_job(
+            job_id,
+            status="done",
+            message=(last_assistant[:200] if last_assistant else "Pi 任务完成"),
+            progress={"type": "done"},
+            result={
+                "thread_id": thread_id,
+                "assistant": last_assistant,
+                "entries": len(new_entries),
+            },
+            finished_at=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("pi agent job %s failed", job_id)
+        _update_job(
             job_id,
             status="error",
             message=str(exc),
@@ -316,8 +501,10 @@ async def _execute_job(job_id: int) -> None:
             await _run_lead_discover_job(job_id)
         elif job_type == "enrich_contact":
             await _run_enrich_contact_job(job_id)
+        elif job_type == "pi_agent":
+            await _run_pi_agent_job(job_id)
         else:
-            update_background_job(
+            _update_job(
                 job_id,
                 status="error",
                 message=f"unknown job type: {job_type}",
@@ -328,13 +515,40 @@ async def _execute_job(job_id: int) -> None:
 
 
 def spawn_background_job(user_id: int, job_type: str, params: dict[str, Any]) -> dict:
+    if job_type == "pi_agent":
+        thread_id = str(params.get("thread_id") or "").strip()
+        if thread_id and has_active_pi_agent_job(user_id, thread_id):
+            raise PiAgentThreadBusyError(thread_id)
     job = create_background_job(user_id, job_type, params)
     asyncio.create_task(_execute_job(job["id"]))
+    _publish_job_event(int(job["id"]))
     return _public_job(job) or {}
 
 
-def recover_background_jobs_on_startup() -> None:
-    mark_interrupted_background_jobs()
+class PiAgentThreadBusyError(Exception):
+    def __init__(self, thread_id: str) -> None:
+        self.thread_id = thread_id
+        super().__init__(f"pi_agent already running for thread {thread_id}")
+
+
+async def recover_background_jobs_on_startup() -> None:
+    jobs = list_resumable_background_jobs()
+    if not jobs:
+        return
+    for job in jobs:
+        job_id = int(job["id"])
+        if job.get("status") == "running":
+            resume_msg = ""
+            if job.get("job_type") == "lead_discover":
+                resume_msg = checkpoint_resume_message(parse_checkpoint(job.get("checkpoint_json")))
+            message = resume_msg or "服务重启，已重新排队"
+            _update_job(
+                job_id,
+                status="pending",
+                message=message,
+            )
+        asyncio.create_task(_execute_job(job_id))
+    logger.info("Re-queued %s background job(s) after startup", len(jobs))
 
 
 def get_job_for_user(user_id: int, job_id: int) -> dict | None:
@@ -344,3 +558,20 @@ def get_job_for_user(user_id: int, job_id: int) -> dict | None:
 def list_jobs_for_user(user_id: int, *, active_only: bool = False) -> list[dict]:
     jobs = list_background_jobs(user_id, active_only=active_only)
     return [_public_job(job) or {} for job in jobs]
+
+
+async def iter_job_events(user_id: int):
+    """SSE stream of background job updates for a user."""
+    queue = subscribe_job_events(user_id)
+    try:
+        for job in list_jobs_for_user(user_id, active_only=True):
+            payload = {"type": "job", "job": job}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=30.0)
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+    finally:
+        unsubscribe_job_events(user_id, queue)
