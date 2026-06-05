@@ -4,20 +4,27 @@
 
 ## 1. CRM 侧
 
-部署/更新 CRM 后，在 Web UI：
+运行 `./scripts/deploy.sh` 会自动：
 
-**系统设置 → 自动化 → Pi Agent API → 重新生成**
+- 从容器读取 Agent API Token 并写入 `${APP_DIR}/.pi-env`
+- 安装 Node.js 20、Pi CLI、Sales CRM 扩展包
+- 在 `~/.bashrc` 加入 `source .pi-env`（仅首次）
 
-复制 Token，Base URL 固定为 `http://127.0.0.1:8000`（同机访问）。
+手动重新生成 Token：Web UI **系统设置 → 自动化 → Pi Agent API → 重新生成**，然后重新部署或更新 `.pi-env`。
 
 验证：
 
 ```bash
+source /opt/salescrm/.pi-env
 curl -s -H "Authorization: Bearer $SALESCRM_TOKEN" \
-  http://127.0.0.1:8000/api/agent/health | jq
+  http://127.0.0.1:8000/api/agent/health
 ```
 
-## 2. 安装 Pi
+跳过 Pi 安装：`SKIP_PI=1 ./scripts/deploy.sh`
+
+## 2. 手动安装（可选）
+
+若自动步骤失败，可手动执行：
 
 需要 Node.js 18+：
 

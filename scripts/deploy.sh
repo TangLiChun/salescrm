@@ -18,6 +18,7 @@
 #   GIT_BRANCH      分支（默认 main）
 #   SKIP_PULL=1     跳过 git pull（仅重建容器）
 #   FORCE_REBUILD=1 构建镜像时使用 --no-cache
+#   SKIP_PI=1       跳过 Pi Coding Agent 安装与配置
 #
 # 部署验证（失败则 exit 1 并打印日志）：
 #   1. docker build 阶段导入 app（Dockerfile）— 捕获启动语法/路由错误
@@ -32,6 +33,9 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 APP_PORT="${APP_PORT:-8000}"
 SKIP_PULL="${SKIP_PULL:-0}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
+SKIP_PI="${SKIP_PI:-0}"
+PI_ENV_FILE=""
+PI_SETUP_OK=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -168,6 +172,143 @@ wait_healthy() {
   exit 1
 }
 
+node_major_version() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo 0
+    return
+  fi
+  node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0
+}
+
+install_node() {
+  local major
+  major="$(node_major_version)"
+  if [[ "${major}" -ge 18 ]]; then
+    log "Node.js 已安装: $(node -v)"
+    return 0
+  fi
+
+  if ! command -v apt-get >/dev/null 2>&1; then
+    warn "无法自动安装 Node.js（需要 18+），请手动安装后重新运行 deploy.sh"
+    return 1
+  fi
+
+  log "安装 Node.js 20..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO bash -
+  run_apt install -y -qq nodejs
+  major="$(node_major_version)"
+  if [[ "${major}" -lt 18 ]]; then
+    warn "Node.js 版本过低 ($(node -v 2>/dev/null || echo none))，Pi 需要 18+"
+    return 1
+  fi
+  log "Node.js 安装完成: $(node -v)"
+}
+
+fetch_agent_token() {
+  (cd "${APP_DIR}" && $SUDO docker exec salescrm python -c \
+    "from app.settings_store import get_agent_api_token; print(get_agent_api_token())" 2>/dev/null) \
+    | tr -d '\r' | head -n 1
+}
+
+write_pi_env_file() {
+  local token="$1"
+  PI_ENV_FILE="${APP_DIR}/.pi-env"
+  umask 077
+  cat > "${PI_ENV_FILE}" <<EOF
+# Sales CRM Pi Agent — 由 deploy.sh 自动生成，请勿提交到 git
+export SALESCRM_URL="http://127.0.0.1:${APP_PORT}"
+export SALESCRM_TOKEN="${token}"
+EOF
+  chmod 600 "${PI_ENV_FILE}"
+  $SUDO chown "$(id -un)":"$(id -gn)" "${PI_ENV_FILE}" 2>/dev/null || true
+}
+
+ensure_pi_env_autoload() {
+  local marker="# salescrm-pi-env"
+  local line="[[ -f \"${APP_DIR}/.pi-env\" ]] && source \"${APP_DIR}/.pi-env\""
+  local rc="${HOME}/.bashrc"
+  [[ -f "${rc}" ]] || return 0
+  if grep -qF "${marker}" "${rc}" 2>/dev/null; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "${marker}"
+    echo "${line}"
+  } >> "${rc}"
+}
+
+install_pi_cli() {
+  if command -v pi >/dev/null 2>&1; then
+    log "Pi CLI 已安装: $(pi --version 2>/dev/null | head -n 1 || echo pi)"
+    return 0
+  fi
+  log "安装 Pi Coding Agent CLI..."
+  npm install -g @mariozechner/pi-coding-agent
+  command -v pi >/dev/null 2>&1
+}
+
+install_pi_extension() {
+  log "安装 Sales CRM Pi 扩展包..."
+  pi install "${APP_DIR}/integrations/pi"
+}
+
+verify_pi_agent_api() {
+  local token="$1"
+  curl -fsS --max-time 10 \
+    -H "Authorization: Bearer ${token}" \
+    "http://127.0.0.1:${APP_PORT}/api/agent/health" >/dev/null
+}
+
+setup_pi_agent() {
+  if [[ "${SKIP_PI}" == "1" ]]; then
+    log "跳过 Pi Agent 安装 (SKIP_PI=1)"
+    return 0
+  fi
+
+  if [[ ! -d "${APP_DIR}/integrations/pi" ]]; then
+    warn "未找到 ${APP_DIR}/integrations/pi，跳过 Pi 安装"
+    return 0
+  fi
+
+  log "配置 Pi Coding Agent..."
+  if ! install_node; then
+    warn "Pi Agent 未安装：Node.js 不可用"
+    return 0
+  fi
+
+  local token
+  token="$(fetch_agent_token)"
+  if [[ -z "${token}" ]]; then
+    warn "无法读取 Agent API Token，跳过 Pi 配置"
+    return 0
+  fi
+
+  write_pi_env_file "${token}"
+  # shellcheck disable=SC1090
+  set +u
+  source "${PI_ENV_FILE}"
+  set -u
+
+  if ! install_pi_cli; then
+    warn "Pi CLI 安装失败，已写入 ${PI_ENV_FILE}，可稍后手动: npm i -g @mariozechner/pi-coding-agent"
+    return 0
+  fi
+
+  if ! install_pi_extension; then
+    warn "Pi 扩展安装失败，可稍后手动: source ${PI_ENV_FILE} && pi install ${APP_DIR}/integrations/pi"
+    return 0
+  fi
+
+  if verify_pi_agent_api "${token}"; then
+    PI_SETUP_OK=1
+    ensure_pi_env_autoload
+    log "Pi Agent 配置完成"
+  else
+    warn "Pi 扩展已安装，但 Agent API 验证失败，请运行 ./scripts/check.sh"
+  fi
+}
+
 print_summary() {
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
@@ -181,7 +322,12 @@ print_summary() {
   echo " 目录:    ${APP_DIR}"
   echo " 更新:    cd ${APP_DIR} && sudo ./scripts/deploy.sh"
   echo " 状态:    cd ${APP_DIR} && ./scripts/check.sh"
-  echo " Pi Agent: 见 integrations/pi/README.md"
+  if [[ "${PI_SETUP_OK}" == "1" && -n "${PI_ENV_FILE}" ]]; then
+    echo " Pi:      source ${PI_ENV_FILE} && cd ${APP_DIR} && pi"
+    echo " Pi 验证: curl -s -H \"Authorization: Bearer \$SALESCRM_TOKEN\" http://127.0.0.1:${APP_PORT}/api/agent/health"
+  elif [[ "${SKIP_PI}" != "1" ]]; then
+    echo " Pi:      安装未完成，见上方 WARNING 或 integrations/pi/README.md"
+  fi
   echo " 日志:    cd ${APP_DIR} && docker compose logs -f"
   echo " 重启:    cd ${APP_DIR} && docker compose restart"
   echo " 停止:    cd ${APP_DIR} && docker compose down"
@@ -194,6 +340,7 @@ main() {
   ensure_repo
   deploy_compose
   wait_healthy
+  setup_pi_agent
   print_summary
 }
 
