@@ -127,7 +127,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "discover_leads",
-            "description": "使用 CRM 内置 AI 多渠道线索发现（LLM 规划 → 联网搜索[智谱/Bright Data/Tavily/SerpAPI/Brave/DuckDuckGo 按优先级] → PeeringDB → 全球 RDAP → LLM 评分）",
+            "description": "首选线索工具：PeeringDB 直连 + 全球 RDAP + 联网搜索 + LLM 评分/入库。找 peering 联系人、挖 ASN 邮箱、批量线索请用这个，不要手动串联 web_search",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -286,7 +286,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "直接调用 CRM 联网搜索（与 discover_leads 内嵌的搜索引擎相同，按系统设置优先级自动选智谱/Tavily 等）",
+            "description": "仅用于快速查单个资料或验证 URL；找线索/Peering 联系人请用 discover_leads（含 PeeringDB+RDAP），不要用它替代 discover_leads",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -317,10 +317,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
 SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作网络运营商联系人库。
 
 能力：
-- lookup_asns：全球 RIR（ARIN/RIPE/APNIC/LACNIC/AFRINIC）RDAP 查 ASN role 邮箱
-- discover_leads：AI 多渠道找线索（联网搜索 + PeeringDB + RDAP + LLM 评分）
-- web_search：直接联网搜索（不跑完整线索流程）
-- get_search_config：查看当前联网搜索用哪个引擎（智谱 zhipu / Bright Data Google SERP / Tavily / SerpAPI / Brave / DuckDuckGo）及优先级
+- lookup_asns：已知 ASN 列表时，批量 RDAP 查 role 邮箱
+- discover_leads：首选线索工具 — PeeringDB 直连 + 全球 RDAP + 联网搜索 + LLM 评分（可 auto_import）
+- web_search：仅快速查资料，不要用它做线索挖掘主流程
+- get_search_config：查看联网搜索引擎配置
 - enrich_contact：为已有联系人扩展更多联系方式，可 auto_import
 - get_contact / list_contacts / import_leads：读取、搜索、导入联系人
 - update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理联系人
@@ -328,12 +328,18 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - get_import_filters / update_import_filters：导入黑名单/白名单（设置页同源）
 - list_schedules：定时线索任务
 
-联网搜索说明：系统设置 → AI 与搜索 中配置。默认优先级 brightdata(Bright Data Google SERP) > zhipu(智谱) > tavily > serpapi > brave > duckduckgo。
-用户问「AI 搜索用的什么 / 怎么调用 / 有哪些渠道」时，先调用 get_search_config 再回答，不要猜测。
+工具选用（重要）：
+- 找 peering 联系人 / 挖 ASN 邮箱 / 批量线索 → discover_leads（auto_import=true, min_score=60），不要手动堆 web_search
+- 已有明确 ASN 列表且只要 RDAP → lookup_asns
+- 已有 CRM 联系人要扩展 → enrich_contact
+- web_search 仅作补充；Bright Data markdown 模式 snippet 常为空，不可依赖
+
+联网搜索说明：系统设置 → AI 与搜索。优先级 brightdata > zhipu > tavily > serpapi > brave > duckduckgo。
+用户问搜索引擎配置时，先 get_search_config 再回答。
 
 规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。
-入库：线索 lead_score ≥ 60 时直接调用 import_leads 入库（无需再问用户）；discover_leads / enrich_contact 默认 auto_import=true、min_score=60。
-import_leads 的 asn 字段必须是纯数字（如 395092），不要带 AS 前缀。"""
+入库：lead_score ≥ 60 直接 import_leads 或 discover_leads auto_import，无需再问用户。
+import_leads 的 asn 必须是纯数字（如 395092），不要带 AS 前缀。"""
 
 
 async def _stream_lead_events(

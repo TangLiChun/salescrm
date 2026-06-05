@@ -139,6 +139,18 @@ def _normalize_result(title: str, url: str, snippet: str, *, backend: str, query
     }
 
 
+def _rows_useful(rows: list[dict[str, str]]) -> bool:
+    if not rows:
+        return False
+    for item in rows:
+        if (item.get("snippet") or "").strip():
+            return True
+        blob = f"{item.get('title') or ''} {item.get('url') or ''}"
+        if EMAIL_RE.findall(blob) or ASN_RE.findall(blob):
+            return True
+    return False
+
+
 def search_web(query: str, *, max_results: int = 8) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     seen_urls: set[str] = set()
@@ -155,7 +167,7 @@ def search_web(query: str, *, max_results: int = 8) -> list[dict[str, str]]:
             if url:
                 seen_urls.add(url)
             results.append(item)
-        if results:
+        if results and _rows_useful(results):
             break
 
     return results[:max_results]
@@ -435,22 +447,46 @@ def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, s
         return []
 
     data_format = _brightdata_data_format()
-    google_url = _build_brightdata_google_url(query, max_results=max_results, data_format=data_format)
-    payload = _build_brightdata_payload(zone, google_url, data_format=data_format)
-    body = _brightdata_fetch(api_key, payload)
-    rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+    rows: list[dict[str, str]] = []
 
-    if not rows and data_format == "auto":
-        fallback = "parsed_light"
+    if data_format == "auto":
+        for attempt_fmt in ("json", "parsed_light"):
+            google_url = _build_brightdata_google_url(
+                query, max_results=max_results, data_format=attempt_fmt
+            )
+            payload = _build_brightdata_payload(zone, google_url, data_format=attempt_fmt)
+            body = _brightdata_fetch(api_key, payload)
+            rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+            if rows and _rows_useful(rows):
+                return rows
+        google_url = _build_brightdata_google_url(query, max_results=max_results, data_format="raw")
+        payload = _build_brightdata_payload(zone, google_url, data_format="raw")
+        body = _brightdata_fetch(api_key, payload)
+        rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+    else:
         google_url = _build_brightdata_google_url(
-            query, max_results=max_results, data_format=fallback
+            query, max_results=max_results, data_format=data_format
         )
-        payload = _build_brightdata_payload(zone, google_url, data_format=fallback)
+        payload = _build_brightdata_payload(zone, google_url, data_format=data_format)
         body = _brightdata_fetch(api_key, payload)
         rows = _parse_brightdata_response(body, query=query, max_results=max_results)
 
+        if not rows and data_format == "markdown":
+            for fallback in ("parsed_light", "json"):
+                google_url = _build_brightdata_google_url(
+                    query, max_results=max_results, data_format=fallback
+                )
+                payload = _build_brightdata_payload(zone, google_url, data_format=fallback)
+                body = _brightdata_fetch(api_key, payload)
+                rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+                if rows and _rows_useful(rows):
+                    break
+
+    if rows and not _rows_useful(rows):
+        return []
+
     if not rows:
-        raise RuntimeError("Bright Data SERP 响应未能解析为搜索结果（已尝试 JSON/Markdown/HTML）")
+        raise RuntimeError("Bright Data SERP 响应未能解析为搜索结果（已尝试 JSON/parsed_light/Markdown/HTML）")
     return rows
 
 
