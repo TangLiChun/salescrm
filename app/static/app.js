@@ -1364,6 +1364,35 @@ function summarizePiThreadTitle(text) {
   return line.length > 42 ? `${line.slice(0, 42)}…` : line;
 }
 
+function historyFingerprint(history) {
+  if (!Array.isArray(history) || !history.length) return "";
+  const firstUser = history.find((item) => item.role === "user");
+  return firstUser?.content ? String(firstUser.content).slice(0, 96) : "";
+}
+
+function isValidHistoryItem(item) {
+  if (!item?.role) return false;
+  if (item.role === "user" || item.role === "assistant") {
+    return Boolean(String(item.content || "").trim());
+  }
+  if (item.role === "tool") {
+    return Boolean(item.name);
+  }
+  return false;
+}
+
+function normalizeHistoryItems(history) {
+  return Array.isArray(history) ? history.filter(isValidHistoryItem) : [];
+}
+
+function appendPiHistoryEntry(entry) {
+  piChatHistory.push(entry);
+  if (piChatHistory.length > PI_CHAT_MAX_STORED) {
+    piChatHistory = piChatHistory.slice(-PI_CHAT_MAX_STORED);
+  }
+  savePiChatHistory();
+}
+
 function getActivePiThread() {
   return piThreads.find((thread) => thread.id === activePiThreadId) || null;
 }
@@ -1425,9 +1454,7 @@ function migratePiChatV1ToThreads(userId) {
     const raw = localStorage.getItem(piChatStorageKey(userId));
     if (!raw) return null;
     const data = JSON.parse(raw);
-    const history = Array.isArray(data.history)
-      ? data.history.filter((item) => item?.role && item?.content)
-      : [];
+    const history = normalizeHistoryItems(data.history);
     if (!history.length) return null;
     const firstUser = history.find((item) => item.role === "user");
     return {
@@ -1440,6 +1467,49 @@ function migratePiChatV1ToThreads(userId) {
   } catch {
     return null;
   }
+}
+
+function recoverLegacyPiHistory(userId) {
+  const legacy = migratePiChatV1ToThreads(userId);
+  if (!legacy?.history?.length) return false;
+
+  const legacyFp = historyFingerprint(legacy.history);
+  if (
+    piThreads.some(
+      (thread) => thread.history?.length && historyFingerprint(thread.history) === legacyFp,
+    )
+  ) {
+    return false;
+  }
+
+  const emptyMatch = piThreads.find((thread) => {
+    if (thread.history?.length) return false;
+    if (!thread.title || !legacy.title) return false;
+    const a = thread.title.slice(0, 12);
+    const b = legacy.title.slice(0, 12);
+    return a === b || thread.title.includes(b) || legacy.title.includes(a);
+  });
+  if (emptyMatch) {
+    emptyMatch.history = legacy.history;
+    emptyMatch.updatedAt = Date.now();
+    if (activePiThreadId === emptyMatch.id) {
+      piChatHistory = [...legacy.history];
+    }
+    savePiThreadsStore();
+    return true;
+  }
+
+  piThreads.unshift({
+    ...legacy,
+    id: createPiThreadId(),
+    title: legacy.title || t("pi.recoveredThreadTitle"),
+    updatedAt: Date.now(),
+  });
+  if (piThreads.length > PI_THREADS_MAX) {
+    piThreads = piThreads.slice(0, PI_THREADS_MAX);
+  }
+  savePiThreadsStore();
+  return true;
 }
 
 function loadPiThreadsFromStorage(userId) {
@@ -1467,10 +1537,12 @@ function loadPiThreadsFromStorage(userId) {
       activePiThreadId = migrated.id;
       savePiThreadsStore();
     }
+  } else {
+    recoverLegacyPiHistory(userId);
   }
 
   if (!piThreads.length) {
-    createPiThread();
+    beginPiThread();
     return;
   }
 
@@ -1478,12 +1550,10 @@ function loadPiThreadsFromStorage(userId) {
     activePiThreadId = piThreads[0].id;
   }
   const active = getActivePiThread();
-  piChatHistory = Array.isArray(active?.history)
-    ? active.history.filter((item) => item?.role && item?.content)
-    : [];
+  piChatHistory = normalizeHistoryItems(active?.history);
 }
 
-function createPiThread(title) {
+function beginPiThread(title) {
   if (piChatBusy) {
     alert(t("pi.busySwitch"));
     return null;
@@ -1503,7 +1573,16 @@ function createPiThread(title) {
   activePiThreadId = thread.id;
   piChatHistory = [];
   restorePiChatUi();
-  savePiThreadsStore();
+  renderPiThreadList();
+  updatePiChatHistoryHint();
+  return thread;
+}
+
+function createPiThread(title) {
+  const thread = beginPiThread(title);
+  if (thread) {
+    savePiThreadsStore();
+  }
   return thread;
 }
 
@@ -1516,9 +1595,7 @@ function switchPiThread(threadId) {
   syncActivePiThreadHistory();
   activePiThreadId = threadId;
   const active = getActivePiThread();
-  piChatHistory = Array.isArray(active?.history)
-    ? active.history.filter((item) => item?.role && item?.content)
-    : [];
+  piChatHistory = normalizeHistoryItems(active?.history);
   restorePiChatUi();
   savePiThreadsStore();
 }
@@ -1550,6 +1627,37 @@ function loadPiChatHistoryFromStorage(userId) {
   loadPiThreadsFromStorage(userId);
 }
 
+function restorePiChatToolEntry(item) {
+  const name = item.name || "tool";
+  let el;
+  if (PI_LEAD_STREAM_TOOLS.has(name)) {
+    el = appendPiChatDiscoverTool(name);
+  } else if (name === "lookup_asns") {
+    el = appendPiChatLookupTool(name);
+  } else {
+    el = appendPiChatTool(name);
+  }
+  el.querySelector(".pi-chat-tool-head")?.classList.add("done");
+  const summary = item.summary || "";
+  const progressEl = el.querySelector(".pi-chat-tool-progress");
+  const pre = el.querySelector(".pi-chat-tool-result");
+  if (summary && progressEl) {
+    progressEl.textContent = summary;
+  }
+  if (name === "lookup_asns" && Array.isArray(item.preview)) {
+    pre?.classList.add("hidden");
+    for (const row of item.preview) {
+      appendPiChatLookupRow(el, row);
+    }
+    if (item.preview.length) {
+      el.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
+    }
+  } else if (summary && pre) {
+    pre.classList.remove("hidden");
+    pre.textContent = summary;
+  }
+}
+
 function restorePiChatUi() {
   piChatMessagesEl.innerHTML = "";
   if (!piChatHistory.length) {
@@ -1561,6 +1669,8 @@ function restorePiChatUi() {
   for (const item of piChatHistory) {
     if (item.role === "user" || item.role === "assistant") {
       appendPiChatBubble(item.role, item.content);
+    } else if (item.role === "tool") {
+      restorePiChatToolEntry(item);
     }
   }
   renderPiThreadList();
@@ -1600,7 +1710,7 @@ async function openPiAgentForLeads() {
     return;
   }
   switchView("pi-agent");
-  createPiThread(summarizePiThreadTitle(message));
+  beginPiThread(summarizePiThreadTitle(message));
   await sendPiChatMessage(message);
 }
 
@@ -1619,7 +1729,7 @@ async function openPiEnrichContact(contact) {
     .filter(Boolean)
     .join("\n");
   switchView("pi-agent");
-  createPiThread(t("pi.enrichThreadTitle", { label }));
+  beginPiThread(t("pi.enrichThreadTitle", { label }));
   await sendPiChatMessage(message);
 }
 
@@ -2113,10 +2223,18 @@ async function sendPiChatMessage(message) {
             }
           }
         } else if (payload.type === "tool_result") {
+          const summary = formatPiToolSummary(payload.name, payload.result);
+          const toolEntry = {
+            role: "tool",
+            name: payload.name || "tool",
+            summary: summary || "",
+          };
+          if (payload.name === "lookup_asns") {
+            toolEntry.preview = (payload.result?.rows || payload.result?.preview || []).slice(0, 25);
+          }
           if (activeToolEl) {
             activeToolEl.querySelector(".pi-chat-tool-head").classList.add("done");
             const pre = activeToolEl.querySelector(".pi-chat-tool-result");
-            const summary = formatPiToolSummary(payload.name, payload.result);
             if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
               pre.classList.add("hidden");
               if (summary) {
@@ -2153,8 +2271,10 @@ async function sendPiChatMessage(message) {
             } else {
               pre.classList.remove("hidden");
               pre.textContent = JSON.stringify(payload.result, null, 2);
+              toolEntry.summary = pre.textContent.slice(0, 2000);
             }
           }
+          appendPiHistoryEntry(toolEntry);
           activeToolEl = null;
           piChatProgressFill.style.width = "85%";
         } else if (payload.type === "assistant_start") {
@@ -2178,8 +2298,7 @@ async function sendPiChatMessage(message) {
           piChatProgressFill.style.width = "100%";
         } else if (payload.type === "assistant") {
           appendPiChatBubble("assistant", payload.text || "");
-          piChatHistory.push({ role: "assistant", content: payload.text || "" });
-          savePiChatHistory();
+          appendPiHistoryEntry({ role: "assistant", content: payload.text || "" });
           piChatProgressFill.style.width = "100%";
         } else if (payload.type === "error") {
           appendPiChatStatus(payload.message || t("msg.errorGeneric"));
@@ -2197,6 +2316,7 @@ async function sendPiChatMessage(message) {
   } finally {
     piChatController = null;
     setPiChatBusy(false);
+    savePiThreadsStore();
   }
 }
 
@@ -2897,6 +3017,14 @@ piThreadListEl?.addEventListener("click", (event) => {
   const threadBtn = event.target.closest(".pi-thread-btn[data-thread-id]");
   if (threadBtn) {
     switchPiThread(threadBtn.dataset.threadId);
+  }
+});
+window.addEventListener("beforeunload", () => {
+  savePiThreadsStore();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    savePiThreadsStore();
   }
 });
 asnInput.addEventListener("input", () => {
