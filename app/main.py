@@ -193,6 +193,7 @@ class SettingsUpdateRequest(BaseModel):
     brave_search_key: str | None = None
     brightdata_api_key: str | None = None
     brightdata_serp_zone: str | None = None
+    brightdata_serp_data_format: str | None = None
     scheduler_enabled: str | None = None
     scheduler_poll_seconds: str | None = None
     session_https_only: str | None = None

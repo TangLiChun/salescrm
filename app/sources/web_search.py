@@ -19,6 +19,10 @@ GOOGLE_SNIPPET_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 GOOGLE_HREF_RE = re.compile(r'href="(/url\?[^"]+|https?://[^"]+)"', re.IGNORECASE)
+MARKDOWN_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
+BRIGHTDATA_DATA_FORMATS = frozenset(
+    {"auto", "raw", "parsed_light", "parsed", "json", "markdown"}
+)
 
 from app.settings_store import get_setting
 
@@ -56,6 +60,11 @@ def brightdata_serp_configured() -> bool:
     return bool(get_setting("brightdata_api_key", "").strip()) and bool(
         get_setting("brightdata_serp_zone", "").strip()
     )
+
+
+def _brightdata_data_format() -> str:
+    fmt = (get_setting("brightdata_serp_data_format", "auto") or "auto").strip().lower()
+    return fmt if fmt in BRIGHTDATA_DATA_FORMATS else "auto"
 
 
 def available_backends() -> list[str]:
@@ -102,7 +111,8 @@ def get_search_config() -> dict[str, Any]:
             "configured": brightdata_serp_configured(),
             "endpoint": BRIGHTDATA_REQUEST_URL,
             "zone": get_setting("brightdata_serp_zone", "").strip(),
-            "response_format": "raw_html",
+            "data_format": _brightdata_data_format(),
+            "supported_response_types": ["json", "parsed_light", "markdown", "raw_html"],
         },
         "keys_configured": {
             "zhipu": zhipu_search_configured(),
@@ -237,14 +247,81 @@ def _parse_brightdata_json(data: dict[str, Any], *, query: str, max_results: int
         rows.append(
             _normalize_result(
                 str(item.get("title") or ""),
-                str(item.get("link") or ""),
-                str(item.get("description") or ""),
+                str(item.get("link") or item.get("url") or ""),
+                str(item.get("description") or item.get("snippet") or ""),
                 backend="brightdata",
                 query=query,
             )
         )
         if len(rows) >= max_results:
             break
+    return rows
+
+
+def _parse_brightdata_json_payload(data: Any, *, query: str, max_results: int) -> list[dict[str, str]]:
+    if isinstance(data, dict):
+        rows = _parse_brightdata_json(data, query=query, max_results=max_results)
+        if rows:
+            return rows
+        for key in ("html", "markdown", "body", "content", "text"):
+            inner = data.get(key)
+            if isinstance(inner, str) and inner.strip():
+                nested = _parse_brightdata_response(inner, query=query, max_results=max_results)
+                if nested:
+                    return nested
+    if isinstance(data, list):
+        rows: list[dict[str, str]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            link = str(item.get("link") or item.get("url") or "")
+            title = str(item.get("title") or link)
+            snippet = str(item.get("description") or item.get("snippet") or "")
+            if not link.startswith("http") or _is_junk_google_url(link):
+                continue
+            rows.append(
+                _normalize_result(title, link, snippet, backend="brightdata", query=query)
+            )
+            if len(rows) >= max_results:
+                break
+        return rows
+    return []
+
+
+def _looks_like_markdown(text: str) -> bool:
+    sample = text[:8000].lower()
+    if "<html" in sample or "<!doctype" in sample:
+        return False
+    return "](http" in text or text.lstrip().startswith("#")
+
+
+def _parse_brightdata_markdown(text: str, *, query: str, max_results: int) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    lines = text.splitlines()
+
+    for index, line in enumerate(lines):
+        for title, url in MARKDOWN_LINK_RE.findall(line):
+            url = url.strip()
+            title = title.strip()
+            if not url or not title or _is_junk_google_url(url) or url in seen_urls:
+                continue
+            snippet = ""
+            for offset in range(1, 4):
+                if index + offset >= len(lines):
+                    break
+                candidate = lines[index + offset].strip()
+                if not candidate or candidate.startswith("#") or MARKDOWN_LINK_RE.search(candidate):
+                    break
+                snippet = candidate.lstrip("-*> ").strip()
+                if snippet:
+                    break
+            seen_urls.add(url)
+            rows.append(
+                _normalize_result(title, url, snippet, backend="brightdata", query=query)
+            )
+            if len(rows) >= max_results:
+                return rows
     return rows
 
 
@@ -285,34 +362,50 @@ def _parse_brightdata_response(body: str, *, query: str, max_results: int) -> li
     text = (body or "").strip()
     if not text:
         return []
-    if text.startswith("{"):
+
+    if text.startswith("{") or text.startswith("["):
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
             data = None
-        if isinstance(data, dict):
-            parsed = _parse_brightdata_json(data, query=query, max_results=max_results)
+        if data is not None:
+            parsed = _parse_brightdata_json_payload(data, query=query, max_results=max_results)
             if parsed:
                 return parsed
+
+    if _looks_like_markdown(text):
+        parsed = _parse_brightdata_markdown(text, query=query, max_results=max_results)
+        if parsed:
+            return parsed
+
     return _parse_google_serp_html(text, query=query, max_results=max_results)
 
 
-def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, str]]:
-    api_key = get_setting("brightdata_api_key", "").strip()
-    zone = get_setting("brightdata_serp_zone", "").strip()
-    if not api_key or not zone:
-        return []
-
+def _build_brightdata_google_url(query: str, *, max_results: int, data_format: str) -> str:
     count = max(1, min(max_results, 20))
-    google_url = (
-        "https://www.google.com/search?"
-        + urllib.parse.urlencode({"q": query, "num": count, "hl": "en", "gl": "us"})
-    )
-    payload = {
-        "zone": zone,
-        "url": google_url,
-        "format": "raw",
-    }
+    params: dict[str, str] = {"q": query, "num": str(count), "hl": "en", "gl": "us"}
+    if data_format == "json":
+        params["brd_json"] = "1"
+    return "https://www.google.com/search?" + urllib.parse.urlencode(params)
+
+
+def _build_brightdata_payload(
+    zone: str,
+    google_url: str,
+    *,
+    data_format: str,
+) -> dict[str, str]:
+    payload: dict[str, str] = {"zone": zone, "url": google_url, "format": "raw"}
+    if data_format == "parsed_light":
+        payload["data_format"] = "parsed_light"
+    elif data_format == "parsed":
+        payload["data_format"] = "parsed"
+    elif data_format == "markdown":
+        payload["data_format"] = "markdown"
+    return payload
+
+
+def _brightdata_fetch(api_key: str, payload: dict[str, str]) -> str:
     req = urllib.request.Request(
         BRIGHTDATA_REQUEST_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -324,14 +417,37 @@ def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, s
     )
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
+            return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Bright Data SERP HTTP {exc.code}: {detail[:300]}") from exc
 
+
+def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, str]]:
+    api_key = get_setting("brightdata_api_key", "").strip()
+    zone = get_setting("brightdata_serp_zone", "").strip()
+    if not api_key or not zone:
+        return []
+
+    data_format = _brightdata_data_format()
+    google_url = _build_brightdata_google_url(query, max_results=max_results, data_format=data_format)
+    payload = _build_brightdata_payload(zone, google_url, data_format=data_format)
+    body = _brightdata_fetch(api_key, payload)
     rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+
+    if not rows and data_format == "auto":
+        for fallback in ("parsed_light", "json", "markdown"):
+            google_url = _build_brightdata_google_url(
+                query, max_results=max_results, data_format=fallback
+            )
+            payload = _build_brightdata_payload(zone, google_url, data_format=fallback)
+            body = _brightdata_fetch(api_key, payload)
+            rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+            if rows:
+                break
+
     if not rows:
-        raise RuntimeError("Bright Data SERP 返回 HTML 但未解析到有效结果")
+        raise RuntimeError("Bright Data SERP 响应未能解析为搜索结果（已尝试 JSON/Markdown/HTML）")
     return rows
 
 

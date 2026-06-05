@@ -379,11 +379,20 @@
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.brightdataSerp">Bright Data Google SERP</legend>
-                <p class="stats" data-i18n="settings.brightdataSerpHint">使用 Bright Data SERP API（format=raw HTML）。需在 Bright Data 控制台创建 SERP zone 并获取 API Key。</p>
+                <p class="stats" data-i18n="settings.brightdataSerpHint">Bright Data SERP API，自动兼容 JSON / Markdown / HTML 响应。Zone 默认输出为 Markdown 时可保持「自动」。</p>
                 <label class="field"><span data-i18n="settings.brightdataApiKey">Bright Data API Key</span>
                   <input id="setting-brightdata-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span data-i18n="settings.brightdataSerpZone">SERP Zone 名称</span>
                   <input id="setting-brightdata-serp-zone" type="text" placeholder="serp_api1"></label>
+                <label class="field"><span data-i18n="settings.brightdataSerpFormat">响应格式</span>
+                  <select id="setting-brightdata-serp-format">
+                    <option value="auto">auto（自动识别 + 回退）</option>
+                    <option value="markdown">markdown</option>
+                    <option value="parsed_light">parsed_light（JSON 前 10 条）</option>
+                    <option value="json">json（brd_json=1）</option>
+                    <option value="parsed">parsed（完整 JSON）</option>
+                    <option value="raw">raw（HTML）</option>
+                  </select></label>
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.searchApiOptional">其他搜索引擎 API（可选）</legend>

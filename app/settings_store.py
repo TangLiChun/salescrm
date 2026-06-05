@@ -30,6 +30,7 @@ DEFAULTS: dict[str, str] = {
     "brave_search_key": "",
     "brightdata_api_key": "",
     "brightdata_serp_zone": "",
+    "brightdata_serp_data_format": "auto",
     "zhipu_api_key": "",
     "zhipu_search_engine": "search_pro",
     "scheduler_enabled": "1",

@@ -1139,6 +1139,7 @@ async function loadSettingsForm() {
   setInputValue("setting-llm-model", data.llm_model);
   setInputValue("setting-zhipu-search-engine", data.zhipu_search_engine || "search_pro");
   setInputValue("setting-brightdata-serp-zone", data.brightdata_serp_zone || "");
+  setInputValue("setting-brightdata-serp-format", data.brightdata_serp_data_format || "auto");
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
 
@@ -1177,6 +1178,7 @@ async function saveSettings(event) {
     llm_model: document.getElementById("setting-llm-model").value.trim(),
     zhipu_search_engine: document.getElementById("setting-zhipu-search-engine").value.trim(),
     brightdata_serp_zone: document.getElementById("setting-brightdata-serp-zone").value.trim(),
+    brightdata_serp_data_format: document.getElementById("setting-brightdata-serp-format").value.trim(),
     scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
   };
@@ -1936,7 +1938,7 @@ function formatPiToolSummary(name, result) {
       return `当前联网搜索：智谱 ${zhipu.engine || "search_pro"}（${zhipu.configured ? "已配置" : "未配置"}）`;
     }
     if (active === "brightdata") {
-      return `当前联网搜索：Bright Data Google SERP（zone ${bright.zone || "未配置"}）`;
+      return `当前联网搜索：Bright Data Google SERP（zone ${bright.zone || "未配置"} · ${bright.data_format || "auto"}）`;
     }
     return `当前联网搜索：${active} · 优先级 ${(result.web_backend_priority || []).join(" > ")}`;
   }
