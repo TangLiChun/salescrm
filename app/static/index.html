@@ -225,7 +225,7 @@
       </div>
     </section>
 
-    <section id="settings-view" class="panel contacts-panel hidden">
+    <section id="settings-view" class="panel settings-view hidden">
       <div class="results-header">
         <div>
           <h2>系统设置</h2>
@@ -233,131 +233,132 @@
         </div>
       </div>
 
-      <form id="settings-form" class="settings-form">
-        <fieldset>
-          <legend>修改登录密码</legend>
-          <label class="field">
-            <span>当前密码</span>
-            <input id="pwd-current" type="password" autocomplete="current-password">
-          </label>
-          <label class="field">
-            <span>新密码</span>
-            <input id="pwd-new" type="password" autocomplete="new-password" minlength="6">
-          </label>
-          <label class="field">
-            <span>确认新密码</span>
-            <input id="pwd-confirm" type="password" autocomplete="new-password" minlength="6">
-          </label>
-          <button id="change-password-btn" type="button" class="secondary-btn">更新密码</button>
-          <p id="password-status" class="stats"></p>
-        </fieldset>
+      <div class="settings-shell">
+        <nav class="settings-rail" id="settings-rail" aria-label="设置分类">
+          <button type="button" class="settings-rail-item active" data-settings-cat="account">账号安全</button>
+          <button type="button" class="settings-rail-item" data-settings-cat="ai">
+            AI 与搜索 <span class="rail-dot" id="rail-dot-ai" title="LLM 未配置"></span>
+          </button>
+          <button type="button" class="settings-rail-item" data-settings-cat="import">线索导入</button>
+          <button type="button" class="settings-rail-item" data-settings-cat="automation">
+            自动化 <span class="rail-dot" id="rail-dot-automation" title="定时任务未启用"></span>
+          </button>
+          <button type="button" class="settings-rail-item" data-settings-cat="templates">邮件模板</button>
+          <button type="button" class="settings-rail-item" data-settings-cat="backup">数据备份</button>
+        </nav>
 
-        <fieldset>
-          <legend>登录账号（仅首次初始化使用）</legend>
-          <label class="field">
-            <span>默认用户名</span>
-            <input id="setting-default-admin-user" type="text">
-          </label>
-          <label class="field">
-            <span>默认密码</span>
-            <input id="setting-default-admin-password" type="password" placeholder="留空则不修改">
-          </label>
-          <label class="field">
-            <span>Session Secret</span>
-            <input id="setting-session-secret" type="password" placeholder="留空则不修改">
-          </label>
-        </fieldset>
+        <div class="settings-content">
+          <form id="settings-form" class="settings-form">
+            <!-- 账号安全 -->
+            <div class="settings-pane" data-settings-pane="account">
+              <p class="settings-desc">管理你的登录凭证。默认账号/密码仅在系统首次初始化时生效，已登录后请用下方修改密码。</p>
+              <fieldset>
+                <legend>修改登录密码</legend>
+                <label class="field"><span>当前密码</span>
+                  <input id="pwd-current" type="password" autocomplete="current-password"></label>
+                <label class="field"><span>新密码</span>
+                  <input id="pwd-new" type="password" autocomplete="new-password" minlength="6"></label>
+                <label class="field"><span>确认新密码</span>
+                  <input id="pwd-confirm" type="password" autocomplete="new-password" minlength="6"></label>
+                <button id="change-password-btn" type="button" class="secondary-btn">更新密码</button>
+                <p id="password-status" class="stats"></p>
+              </fieldset>
+              <details class="settings-advanced">
+                <summary>高级：首次初始化设置</summary>
+                <p class="stats">以下仅在数据库首次初始化时使用，正常运行后请勿随意修改。</p>
+                <label class="field"><span>默认用户名</span>
+                  <input id="setting-default-admin-user" type="text"></label>
+                <label class="field"><span>默认密码</span>
+                  <input id="setting-default-admin-password" type="password" placeholder="留空则不修改"></label>
+                <label class="field"><span>Session Secret</span>
+                  <input id="setting-session-secret" type="password" placeholder="留空则不修改"></label>
+              </details>
+            </div>
 
-        <fieldset>
-          <legend>LLM（AI 线索发现必填）</legend>
-          <label class="field">
-            <span>API Key</span>
-            <input id="setting-llm-api-key" type="password" placeholder="留空则不修改">
-          </label>
-          <label class="field">
-            <span>Base URL</span>
-            <input id="setting-llm-base-url" type="url">
-          </label>
-          <label class="field">
-            <span>Model</span>
-            <input id="setting-llm-model" type="text">
-          </label>
-        </fieldset>
+            <!-- AI 与搜索 -->
+            <div class="settings-pane hidden" data-settings-pane="ai">
+              <p class="settings-desc">AI 线索发现依赖 LLM；搜索引擎 Key 为可选增强，全部留空时默认使用 DuckDuckGo。</p>
+              <fieldset>
+                <legend>LLM（AI 线索发现必填）</legend>
+                <label class="field"><span>API Key</span>
+                  <input id="setting-llm-api-key" type="password" placeholder="留空则不修改"></label>
+                <label class="field"><span>Base URL</span>
+                  <input id="setting-llm-base-url" type="url"></label>
+                <label class="field"><span>Model</span>
+                  <input id="setting-llm-model" type="text"></label>
+              </fieldset>
+              <fieldset>
+                <legend>搜索引擎 API（可选）</legend>
+                <label class="field"><span>Tavily API Key</span>
+                  <input id="setting-tavily-api-key" type="password" placeholder="留空则不修改"></label>
+                <label class="field"><span>SerpAPI Key</span>
+                  <input id="setting-serpapi-key" type="password" placeholder="留空则不修改"></label>
+                <label class="field"><span>Bing Search Key</span>
+                  <input id="setting-bing-search-key" type="password" placeholder="留空则不修改"></label>
+              </fieldset>
+            </div>
 
-        <fieldset>
-          <legend>搜索引擎 API（可选）</legend>
-          <label class="field">
-            <span>Tavily API Key</span>
-            <input id="setting-tavily-api-key" type="password" placeholder="留空则不修改">
-          </label>
-          <label class="field">
-            <span>SerpAPI Key</span>
-            <input id="setting-serpapi-key" type="password" placeholder="留空则不修改">
-          </label>
-          <label class="field">
-            <span>Bing Search Key</span>
-            <input id="setting-bing-search-key" type="password" placeholder="留空则不修改">
-          </label>
-        </fieldset>
+            <!-- 线索导入 -->
+            <div class="settings-pane hidden" data-settings-pane="import">
+              <p class="settings-desc">控制哪些邮箱可以被导入。白名单非空时仅导入匹配项；黑名单始终排除。</p>
+              <fieldset>
+                <legend>导入过滤（黑名单 / 白名单）</legend>
+                <p class="stats">每行一条：域名（如 <code>example.com</code>）或带 <code>*</code> 的邮箱模式。</p>
+                <label class="field"><span>黑名单</span>
+                  <textarea id="setting-import-blocklist" rows="5" placeholder="noreply.com&#10;*@mailinator.com"></textarea></label>
+                <label class="field"><span>白名单（留空表示不启用）</span>
+                  <textarea id="setting-import-allowlist" rows="5" placeholder="yourcompany.com"></textarea></label>
+              </fieldset>
+            </div>
 
-        <fieldset>
-          <legend>导入过滤（黑名单 / 白名单）</legend>
-          <p class="stats">每行一条：域名（如 <code>example.com</code>）或带 <code>*</code> 的邮箱模式。白名单非空时仅导入匹配的邮箱；黑名单始终排除匹配项。</p>
-          <label class="field">
-            <span>黑名单</span>
-            <textarea id="setting-import-blocklist" rows="4" placeholder="noreply.com&#10;*@mailinator.com"></textarea>
-          </label>
-          <label class="field">
-            <span>白名单（留空表示不启用）</span>
-            <textarea id="setting-import-allowlist" rows="4" placeholder="yourcompany.com"></textarea>
-          </label>
-        </fieldset>
+            <!-- 自动化 -->
+            <div class="settings-pane hidden" data-settings-pane="automation">
+              <p class="settings-desc">让服务在后台按间隔自动运行 AI 线索发现并导入联系人（按邮箱去重）。</p>
+              <fieldset>
+                <legend>定时任务</legend>
+                <label class="field checkbox-field">
+                  <input id="setting-scheduler-enabled" type="checkbox">
+                  <span>启用后台定时任务</span></label>
+                <label class="field"><span>检查间隔（秒）</span>
+                  <input id="setting-scheduler-poll-seconds" type="number" min="30" max="3600"></label>
+              </fieldset>
+            </div>
 
-        <fieldset>
-          <legend>定时任务</legend>
-          <label class="field checkbox-field">
-            <input id="setting-scheduler-enabled" type="checkbox">
-            <span>启用后台定时任务</span>
-          </label>
-          <label class="field">
-            <span>检查间隔（秒）</span>
-            <input id="setting-scheduler-poll-seconds" type="number" min="30" max="3600">
-          </label>
-        </fieldset>
+            <!-- 邮件模板 -->
+            <div class="settings-pane hidden" data-settings-pane="templates">
+              <p class="settings-desc">用于联系人列表的 mailto 一键发信。变量：<code>{org}</code> <code>{name}</code> <code>{email}</code> <code>{asn}</code> <code>{roles}</code></p>
+              <fieldset>
+                <legend>邮件模板</legend>
+                <div id="email-templates-list" class="template-list"></div>
+                <label class="field"><span>模板名称</span>
+                  <input id="template-name" type="text" placeholder="例如：Peering 初次联系"></label>
+                <label class="field"><span>主题</span>
+                  <input id="template-subject" type="text" placeholder="Peering inquiry — {org}"></label>
+                <label class="field"><span>正文</span>
+                  <textarea id="template-body" rows="6" placeholder="Hi {name},&#10;&#10;We would like to discuss peering with {org} (AS{asn})…"></textarea></label>
+                <div class="controls">
+                  <button id="save-template-btn" type="button" class="secondary-btn">保存模板</button>
+                </div>
+                <p id="template-status" class="stats"></p>
+              </fieldset>
+            </div>
 
-        <fieldset>
-          <legend>邮件模板</legend>
-          <p class="stats">变量：<code>{org}</code> <code>{name}</code> <code>{email}</code> <code>{asn}</code> <code>{roles}</code></p>
-          <div id="email-templates-list" class="template-list"></div>
-          <label class="field">
-            <span>模板名称</span>
-            <input id="template-name" type="text" placeholder="例如：Peering 初次联系">
-          </label>
-          <label class="field">
-            <span>主题</span>
-            <input id="template-subject" type="text" placeholder="Peering inquiry — {org}">
-          </label>
-          <label class="field">
-            <span>正文</span>
-            <textarea id="template-body" rows="6" placeholder="Hi {name},&#10;&#10;We would like to discuss peering with {org} (AS{asn})…"></textarea>
-          </label>
-          <div class="controls">
-            <button id="save-template-btn" type="button" class="secondary-btn">保存模板</button>
-          </div>
-          <p id="template-status" class="stats"></p>
-        </fieldset>
+            <!-- 数据备份 -->
+            <div class="settings-pane hidden" data-settings-pane="backup">
+              <p class="settings-desc">下载完整 SQLite 数据库文件，用于迁移或灾难恢复。</p>
+              <fieldset>
+                <legend>数据备份</legend>
+                <button id="download-backup-btn" type="button" class="secondary-btn">下载数据库备份</button>
+              </fieldset>
+            </div>
 
-        <fieldset>
-          <legend>数据备份</legend>
-          <p class="stats">下载完整 SQLite 数据库文件，用于迁移或灾难恢复。</p>
-          <button id="download-backup-btn" type="button" class="secondary-btn">下载数据库备份</button>
-        </fieldset>
-
-        <div class="controls">
-          <button type="submit">保存设置</button>
+            <div class="settings-footer" id="settings-footer">
+              <button type="submit">保存设置</button>
+              <p id="settings-status" class="stats"></p>
+            </div>
+          </form>
         </div>
-        <p id="settings-status" class="stats"></p>
-      </form>
+      </div>
     </section>
 
     <section id="stats-view" class="panel contacts-panel hidden">
