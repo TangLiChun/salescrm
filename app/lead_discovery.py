@@ -27,6 +27,9 @@ from app.sources import peeringdb as peeringdb_source
 from app.sources import shodan as shodan_source
 from app.sources import web_search
 from app.sources import brightdata_social as bs
+from app.sources import forums as forums_source
+from app.sources import web_unlocker as web_unlocker_source
+from app.sources.forum_registry import FORUM_CHANNELS
 from app.sources.social_registry import SOCIAL_CHANNELS, extract_all_social_urls_from_web_results
 from app.social_contacts import enrich_candidates_with_social
 from arin_lookup import lookup_asn
@@ -173,7 +176,12 @@ async def discover_leads_stream(
         ]
         if plan["channels"].get("shodan"):
             channel_bits.append("Shodan")
+        if plan["channels"].get("web_unlocker"):
+            channel_bits.append("Web Unlocker")
         for spec in SOCIAL_CHANNELS:
+            if plan["channels"].get(spec.key):
+                channel_bits.append(spec.label)
+        for spec in FORUM_CHANNELS:
             if plan["channels"].get(spec.key):
                 channel_bits.append(spec.label)
         yield {
@@ -188,6 +196,7 @@ async def discover_leads_stream(
             web_queries,
             max_results_per_query=max(4, plan.get("max_web_results", 20) // max(len(web_queries), 1)),
         )
+        forum_task = asyncio.to_thread(forums_source.discover_from_keywords, keywords)
         shodan_task = None
         if shodan_source.is_configured() and keywords:
             shodan_task = asyncio.to_thread(
@@ -197,13 +206,23 @@ async def discover_leads_stream(
             )
 
         if shodan_task:
-            networks, web_results, shodan_bundle = await asyncio.gather(
-                peeringdb_task, web_task, shodan_task
+            networks, web_results, forum_results, shodan_bundle = await asyncio.gather(
+                peeringdb_task, web_task, forum_task, shodan_task
             )
             shodan_networks, shodan_web = shodan_bundle
         else:
-            networks, web_results = await asyncio.gather(peeringdb_task, web_task)
+            networks, web_results, forum_results = await asyncio.gather(
+                peeringdb_task, web_task, forum_task
+            )
             shodan_networks, shodan_web = [], []
+
+        if forum_results:
+            seen_web = {(item.get("url") or "").strip() for item in web_results if item.get("url")}
+            for item in forum_results:
+                url = (item.get("url") or "").strip()
+                if url and url not in seen_web:
+                    seen_web.add(url)
+                    web_results.append(item)
 
         if shodan_networks or shodan_web:
             seen_asn = {int(net["asn"]) for net in networks}
@@ -212,6 +231,20 @@ async def discover_leads_stream(
                     seen_asn.add(int(net["asn"]))
                     networks.append(net)
             web_results.extend(shodan_web)
+
+        unlocker_summary: dict[str, Any] = {"fetched": 0, "urls": [], "errors": []}
+        if web_unlocker_source.is_configured() and web_results:
+            yield {
+                "type": "status",
+                "message": f"Web Unlocker 补充抓取页面正文（最多 {web_unlocker_source.max_urls_limit()} 个 URL）…",
+            }
+            try:
+                unlocker_summary = await asyncio.to_thread(
+                    web_unlocker_source.enrich_web_results,
+                    web_results,
+                )
+            except Exception as exc:
+                yield {"type": "status", "message": f"Web Unlocker 跳过：{exc}"}
 
         social_profiles_by_channel = {}
         found_social_urls = extract_all_social_urls_from_web_results(web_results)
@@ -255,6 +288,30 @@ async def discover_leads_stream(
             "count": len(web_results),
             "preview": [r.get("title") or r.get("url") or "" for r in web_results[:5]],
         }
+        if unlocker_summary.get("fetched"):
+            yield {
+                "type": "source_result",
+                "source": "web_unlocker",
+                "count": unlocker_summary["fetched"],
+                "preview": unlocker_summary.get("urls") or [],
+            }
+        forum_counts: dict[str, int] = {}
+        for item in web_results:
+            backend = item.get("backend") or ""
+            if backend in {"lowendtalk", "webhostingtalk"}:
+                forum_counts[backend] = forum_counts.get(backend, 0) + 1
+        for key, count in forum_counts.items():
+            if count:
+                yield {
+                    "type": "source_result",
+                    "source": key,
+                    "count": count,
+                    "preview": [
+                        r.get("title") or r.get("url") or ""
+                        for r in web_results
+                        if r.get("backend") == key
+                    ][:5],
+                }
         for spec in SOCIAL_CHANNELS:
             profiles = social_profiles_by_channel.get(spec.key) or []
             if not profiles:

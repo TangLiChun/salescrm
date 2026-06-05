@@ -165,9 +165,9 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
             )
         )
 
-    if name in ("shodan_search", "web_search"):
+    if name in ("shodan_search", "web_search", "fetch_web_pages", "search_hosting_forums"):
         networks = result.get("networks") or []
-        web_results = result.get("web_results") or result.get("results") or []
+        web_results = result.get("web_results") or result.get("results") or result.get("pages") or []
         payload = {
             "query": result.get("query"),
             "match_count": result.get("match_count") or result.get("result_count"),

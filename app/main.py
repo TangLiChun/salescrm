@@ -237,6 +237,11 @@ class SettingsUpdateRequest(BaseModel):
     brightdata_x_enabled: str | None = None
     brightdata_facebook_dataset_id: str | None = None
     brightdata_facebook_enabled: str | None = None
+    brightdata_web_unlocker_zone: str | None = None
+    brightdata_web_unlocker_enabled: str | None = None
+    brightdata_web_unlocker_max_urls: str | None = None
+    lowendtalk_enabled: str | None = None
+    webhostingtalk_enabled: str | None = None
     scheduler_enabled: str | None = None
     scheduler_poll_seconds: str | None = None
     session_https_only: str | None = None

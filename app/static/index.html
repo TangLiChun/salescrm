@@ -467,6 +467,18 @@
                   </select></label>
               </fieldset>
               <fieldset>
+                <legend data-i18n="settings.brightdataWebUnlocker">Bright Data Web Unlocker</legend>
+                <p class="hint" data-i18n="settings.brightdataWebUnlockerHint">抓取 peering/contact 等页面正文（Markdown），补充 SERP snippet 为空的结果。与 SERP 共用 API Key，需单独创建 Web Unlocker Zone。</p>
+                <label class="field checkbox-field">
+                  <input id="setting-brightdata-web-unlocker-enabled" type="checkbox">
+                  <span data-i18n="settings.brightdataWebUnlockerEnabled">启用 Web Unlocker 渠道</span>
+                </label>
+                <label class="field"><span data-i18n="settings.brightdataWebUnlockerZone">Web Unlocker Zone 名称</span>
+                  <input id="setting-brightdata-web-unlocker-zone" type="text" data-i18n-placeholder="settings.optionalField" placeholder=""></label>
+                <label class="field"><span data-i18n="settings.brightdataWebUnlockerMaxUrls">每轮最多抓取 URL 数</span>
+                  <input id="setting-brightdata-web-unlocker-max-urls" type="number" min="1" max="12" step="1" value="6"></label>
+              </fieldset>
+              <fieldset>
                 <legend data-i18n="settings.brightdataSocial">Bright Data 社交媒体 Profiles</legend>
                 <label class="field checkbox-field">
                   <input id="setting-brightdata-linkedin-enabled" type="checkbox">
@@ -486,6 +498,18 @@
                 </label>
                 <label class="field"><span data-i18n="settings.brightdataFacebookDataset">Facebook Dataset ID</span>
                   <input id="setting-brightdata-facebook-dataset" type="text" data-i18n-placeholder="settings.datasetIdPlaceholder" placeholder=""></label>
+              </fieldset>
+              <fieldset>
+                <legend data-i18n="settings.hostingForums">主机论坛渠道</legend>
+                <p class="hint" data-i18n="settings.hostingForumsHint">LowEndTalk 可直连站内搜索；WebHostingTalk 受 Cloudflare 保护，站内搜索需 Web Unlocker，两者都会额外做 site: 搜索引擎查询。</p>
+                <label class="field checkbox-field">
+                  <input id="setting-lowendtalk-enabled" type="checkbox">
+                  <span data-i18n="settings.lowendtalkEnabled">启用 LowEndTalk</span>
+                </label>
+                <label class="field checkbox-field">
+                  <input id="setting-webhostingtalk-enabled" type="checkbox">
+                  <span data-i18n="settings.webhostingtalkEnabled">启用 WebHostingTalk</span>
+                </label>
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.shodan">Shodan</legend>

@@ -422,7 +422,11 @@ def _build_brightdata_payload(
     return payload
 
 
-def _brightdata_fetch(api_key: str, payload: dict[str, str]) -> str:
+def brightdata_request(payload: dict[str, str], *, timeout: float = 90) -> str:
+    """POST Bright Data /request (SERP, Web Unlocker, etc.)."""
+    api_key = get_setting("brightdata_api_key", "").strip()
+    if not api_key:
+        raise RuntimeError("未配置 Bright Data API Key")
     req = urllib.request.Request(
         BRIGHTDATA_REQUEST_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -433,11 +437,16 @@ def _brightdata_fetch(api_key: str, payload: dict[str, str]) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Bright Data SERP HTTP {exc.code}: {detail[:300]}") from exc
+        raise RuntimeError(f"Bright Data HTTP {exc.code}: {detail[:300]}") from exc
+
+
+def _brightdata_fetch(api_key: str, payload: dict[str, str]) -> str:
+    _ = api_key  # kept for call-site compatibility; key always read from settings
+    return brightdata_request(payload)
 
 
 def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, str]]:

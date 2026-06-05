@@ -784,6 +784,12 @@ export function formatPiToolSummary(name, result) {
   if (name === "web_search") {
     return `${result.backend_used || "search"} · ${result.result_count ?? 0} 条结果 · 邮箱 ${result.emails_found?.length ?? 0} · ASN ${result.asns_found?.length ?? 0}`;
   }
+  if (name === "fetch_web_pages") {
+    return `Web Unlocker · ${result.page_count ?? 0} 页 · 邮箱 ${result.emails_found?.length ?? 0}`;
+  }
+  if (name === "search_hosting_forums") {
+    return `论坛 · ${(result.forums_searched || []).join("+") || "—"} · ${result.result_count ?? 0} 条`;
+  }
   if (name === "collect_linkedin_profiles") {
     return `LinkedIn · ${result.profile_count ?? 0} 个 profile`;
   }
@@ -1002,7 +1008,7 @@ export function handlePiDiscoverProgress(toolEl, message) {
   }
 
   if (message.includes("多渠道") || message.includes("搜索中")) {
-    for (const key of ["peeringdb", "web_search", "shodan"]) {
+    for (const key of ["peeringdb", "web_search", "web_unlocker", "lowendtalk", "webhostingtalk", "shodan"]) {
       if (toolEl._piChannelState?.[key]?.state === "idle") {
         setPiDiscoverChannel(toolEl, key, { state: "active" });
       }
@@ -1046,7 +1052,7 @@ export function handlePiDiscoverToolEvent(toolEl, event) {
     case "plan":
       renderPiChatPlan(toolEl, event.plan);
       pushPiDiscoverTicker(toolEl, event.plan?.summary || t("pi.planReady"));
-      for (const key of ["peeringdb", "web_search", "shodan"]) {
+      for (const key of ["peeringdb", "web_search", "web_unlocker", "lowendtalk", "webhostingtalk", "shodan"]) {
         if (toolEl._piChannelState?.[key]?.state === "idle") {
           setPiDiscoverChannel(toolEl, key, { state: "active" });
         }

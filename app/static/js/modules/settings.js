@@ -204,6 +204,13 @@ export async function loadSettingsForm() {
   setInputValue("setting-zhipu-search-engine", data.zhipu_search_engine || "search_pro");
   setInputValue("setting-brightdata-serp-zone", data.brightdata_serp_zone || "");
   setInputValue("setting-brightdata-serp-format", data.brightdata_serp_data_format || "auto");
+  setInputValue("setting-brightdata-web-unlocker-zone", data.brightdata_web_unlocker_zone || "");
+  document.getElementById("setting-brightdata-web-unlocker-enabled").checked =
+    (data.brightdata_web_unlocker_enabled || "0") === "1";
+  setInputValue(
+    "setting-brightdata-web-unlocker-max-urls",
+    data.brightdata_web_unlocker_max_urls || "6",
+  );
   setInputValue("setting-brightdata-linkedin-dataset", data.brightdata_linkedin_dataset_id || "");
   document.getElementById("setting-brightdata-linkedin-enabled").checked =
     (data.brightdata_linkedin_enabled || "0") === "1";
@@ -214,6 +221,8 @@ export async function loadSettingsForm() {
   document.getElementById("setting-brightdata-facebook-enabled").checked =
     (data.brightdata_facebook_enabled || "0") === "1";
   document.getElementById("setting-shodan-enabled").checked = (data.shodan_enabled || "0") === "1";
+  document.getElementById("setting-lowendtalk-enabled").checked = (data.lowendtalk_enabled || "1") === "1";
+  document.getElementById("setting-webhostingtalk-enabled").checked = (data.webhostingtalk_enabled || "1") === "1";
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
   setInputValue("setting-import-blocklist", data.import_blocklist || "");
@@ -258,6 +267,13 @@ export async function saveSettings(event) {
     zhipu_search_engine: document.getElementById("setting-zhipu-search-engine").value.trim(),
     brightdata_serp_zone: document.getElementById("setting-brightdata-serp-zone").value.trim(),
     brightdata_serp_data_format: document.getElementById("setting-brightdata-serp-format").value.trim(),
+    brightdata_web_unlocker_zone: document.getElementById("setting-brightdata-web-unlocker-zone").value.trim(),
+    brightdata_web_unlocker_enabled: document.getElementById("setting-brightdata-web-unlocker-enabled").checked
+      ? "1"
+      : "0",
+    brightdata_web_unlocker_max_urls: String(
+      Math.max(1, Math.min(12, Number(document.getElementById("setting-brightdata-web-unlocker-max-urls").value) || 6)),
+    ),
     brightdata_linkedin_dataset_id: document.getElementById("setting-brightdata-linkedin-dataset").value.trim(),
     brightdata_linkedin_enabled: document.getElementById("setting-brightdata-linkedin-enabled").checked
       ? "1"
@@ -267,6 +283,8 @@ export async function saveSettings(event) {
     brightdata_facebook_dataset_id: document.getElementById("setting-brightdata-facebook-dataset").value.trim(),
     brightdata_facebook_enabled: document.getElementById("setting-brightdata-facebook-enabled").checked ? "1" : "0",
     shodan_enabled: document.getElementById("setting-shodan-enabled").checked ? "1" : "0",
+    lowendtalk_enabled: document.getElementById("setting-lowendtalk-enabled").checked ? "1" : "0",
+    webhostingtalk_enabled: document.getElementById("setting-webhostingtalk-enabled").checked ? "1" : "0",
     scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
     import_blocklist: document.getElementById("setting-import-blocklist").value,

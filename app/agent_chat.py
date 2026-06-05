@@ -42,7 +42,9 @@ from app.pi_chat_store import (
 from app.pi_context import compress_tool_result_for_llm
 from app.settings_store import get_setting, update_settings
 from app.sources import brightdata_social as bs
+from app.sources import forums as forums_source
 from app.sources import shodan as shodan_source
+from app.sources import web_unlocker as web_unlocker_source
 from app.sources import web_search
 from app.sources.channel_registry import get_channel_config
 from app.sources.social_registry import FACEBOOK, LINKEDIN, SOCIAL_CHANNELS, X
@@ -77,6 +79,8 @@ KNOWN_TOOL_NAMES = {
     "get_search_config",
     "shodan_search",
     "web_search",
+    "fetch_web_pages",
+    "search_hosting_forums",
     "lookup_asns",
     "discover_leads",
     "enrich_contact",
@@ -367,7 +371,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_search_config",
-            "description": "查看数据渠道配置：搜索引擎、Shodan、LinkedIn/X/Facebook、PeeringDB/RDAP 等是否启用",
+            "description": "查看数据渠道配置：搜索引擎、Web Unlocker、Shodan、LinkedIn/X/Facebook、PeeringDB/RDAP 等是否启用",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -404,6 +408,56 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         FACEBOOK,
         example_url="https://www.facebook.com/username",
     ),
+    {
+        "type": "function",
+        "function": {
+            "name": "search_hosting_forums",
+            "description": (
+                "在 LowEndTalk / WebHostingTalk 搜索主机/VPS/peering 相关帖子。"
+                "LowEndTalk 可直连；WebHostingTalk 站内搜索需 Web Unlocker，"
+                "两者均会尝试 site: 搜索引擎查询"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "搜索关键词，如公司名、ASN、VPS provider"},
+                    "forums": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["lowendtalk", "webhostingtalk"]},
+                        "description": "限定论坛，默认搜索所有已启用论坛",
+                    },
+                    "max_results": {"type": "integer", "description": "最多返回条数，默认 12"},
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_web_pages",
+            "description": (
+                "Bright Data Web Unlocker 抓取网页正文（Markdown）。"
+                "用于 peering/contact/NOC 等页面；SERP snippet 为空时尤其有用。"
+                "需配置 Web Unlocker Zone；与 SERP 共用 Bright Data API Key"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要抓取的 https URL 列表",
+                    },
+                    "max_urls": {
+                        "type": "integer",
+                        "description": f"最多抓取条数，默认 {web_unlocker_source.DEFAULT_MAX_URLS}",
+                    },
+                },
+                "required": ["urls"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -494,6 +548,8 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - lookup_asns：已知 ASN 列表时，批量 RDAP 查 role 邮箱
 - discover_leads：首选线索工具 — PeeringDB + RDAP + 联网搜索 + 社交媒体（LinkedIn/X/Facebook，若启用）+ LLM 评分
 - collect_linkedin_profiles / collect_x_profiles / collect_facebook_profiles：Bright Data 按 URL 抓社交 profile
+- fetch_web_pages：Bright Data Web Unlocker 抓 peering/contact 等页面正文（需 Web Unlocker Zone）
+- search_hosting_forums：LowEndTalk / WebHostingTalk 论坛搜索
 - web_search：仅快速查资料，不要用它做线索挖掘主流程
 - get_search_config：查看各数据渠道配置（搜索/社交/Shodan/PeeringDB 等）
 - shodan_search：Shodan 资产搜索（org/asn filter），discover_leads 已自动接入
@@ -509,7 +565,7 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - 找 peering 联系人 / 挖 ASN 邮箱 / 批量线索 → discover_leads（auto_import=true, min_score=60），不要手动堆 web_search
 - 已有明确 ASN 列表且只要 RDAP → lookup_asns
 - 已有 CRM 联系人要扩展 → enrich_contact
-- web_search 仅作补充；Bright Data markdown 模式 snippet 常为空，不可依赖
+- web_search 仅作补充；Bright Data markdown 模式 snippet 常为空，不可依赖；可配合 fetch_web_pages 抓正文
 - 已有社交 profile URL → 用对应 collect_*_profiles；批量找线索仍用 discover_leads（会自动从搜索结果提取 URL）
 
 联网搜索说明：系统设置 → AI 与搜索。搜索引擎优先级 brightdata > zhipu > tavily > serpapi > brave > duckduckgo。
@@ -1212,6 +1268,67 @@ async def _run_tool(
             "lead_previews": previews[:15],
             "config": bs.channel_config(spec),
             "note": f"{spec.label} 通常无邮箱；请结合 discover_leads / lookup_asns 找可导入邮箱",
+        }
+
+    if name == "search_hosting_forums":
+        keyword = str(args.get("keyword") or "").strip()
+        forums = [str(item).strip() for item in (args.get("forums") or []) if str(item).strip()]
+        max_results = max(1, min(int(args.get("max_results") or 12), 24))
+        if not keyword:
+            return {"error": "请提供 keyword"}
+        emit.progress(f"论坛搜索：{keyword}")
+        try:
+            payload = await asyncio.to_thread(
+                forums_source.search_forums,
+                keyword,
+                forums=forums or None,
+                max_results=max_results,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+        if payload.get("error"):
+            return payload
+        return payload
+
+    if name == "fetch_web_pages":
+        urls = [str(item).strip() for item in (args.get("urls") or []) if str(item).strip()]
+        max_urls = max(
+            1,
+            min(int(args.get("max_urls") or web_unlocker_source.max_urls_limit()), 12),
+        )
+        if not urls:
+            return {"error": "请提供 urls（https 页面 URL 列表）"}
+        if not web_unlocker_source.is_configured():
+            return {
+                "error": "Bright Data Web Unlocker 未配置",
+                "hint": "在系统设置填写 Bright Data API Key、Web Unlocker Zone 并启用渠道",
+                "config": web_unlocker_source.get_config(),
+            }
+        emit.progress(f"Web Unlocker 抓取 {min(len(urls), max_urls)} 个页面…")
+        try:
+            rows = await asyncio.to_thread(
+                web_unlocker_source.fetch_pages,
+                urls,
+                max_urls=max_urls,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "config": web_unlocker_source.get_config()}
+        signals = web_search.extract_signals_from_results(
+            [row for row in rows if not row.get("error")]
+        )
+        return {
+            "page_count": len(rows),
+            "pages": [
+                {
+                    "url": row.get("url"),
+                    "snippet": (row.get("snippet") or "")[:400],
+                    "error": row.get("error"),
+                }
+                for row in rows[:15]
+            ],
+            "emails_found": signals.get("emails") or [],
+            "asns_found": signals.get("asns") or [],
+            "config": web_unlocker_source.get_config(),
         }
 
     if name == "web_search":

@@ -38,6 +38,11 @@ DEFAULTS: dict[str, str] = {
     "brightdata_x_enabled": "0",
     "brightdata_facebook_dataset_id": "",
     "brightdata_facebook_enabled": "0",
+    "brightdata_web_unlocker_zone": "",
+    "brightdata_web_unlocker_enabled": "0",
+    "brightdata_web_unlocker_max_urls": "6",
+    "lowendtalk_enabled": "1",
+    "webhostingtalk_enabled": "1",
     "zhipu_api_key": "",
     "zhipu_search_engine": "search_pro",
     "shodan_api_key": "",
@@ -183,11 +188,18 @@ def get_public_settings() -> dict[str, Any]:
                 and values.get("brightdata_facebook_enabled", "0") != "0"
                 and values.get("brightdata_facebook_dataset_id", "").strip()
             ),
+            "brightdata_web_unlocker": bool(
+                values.get("brightdata_api_key", "").strip()
+                and values.get("brightdata_web_unlocker_enabled", "0") != "0"
+                and values.get("brightdata_web_unlocker_zone", "").strip()
+            ),
             "duckduckgo": True,
             "shodan": bool(
                 values.get("shodan_api_key", "").strip()
                 and values.get("shodan_enabled", "1") != "0"
             ),
+            "lowendtalk": values.get("lowendtalk_enabled", "1") != "0",
+            "webhostingtalk": values.get("webhostingtalk_enabled", "1") != "0",
         },
     }
 

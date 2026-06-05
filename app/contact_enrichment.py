@@ -19,6 +19,8 @@ from app.lead_preferences import (
 from app.sources import peeringdb as peeringdb_source
 from app.sources import web_search
 from app.sources import brightdata_social as bs
+from app.sources import forums as forums_source
+from app.sources import web_unlocker as web_unlocker_source
 from app.sources.social_registry import SOCIAL_CHANNELS, extract_all_social_urls_from_web_results
 from app.social_contacts import enrich_candidates_with_social
 
@@ -193,6 +195,47 @@ async def enrich_contact_stream(
             "count": len(web_results),
             "preview": [r.get("title") or r.get("url") or "" for r in web_results[:5]],
         }
+
+    forum_keywords = [org] if org else []
+    if forum_keywords:
+        forum_results = await asyncio.to_thread(forums_source.discover_from_keywords, forum_keywords)
+        if forum_results:
+            seen_web = {(item.get("url") or "").strip() for item in web_results if item.get("url")}
+            added = 0
+            for item in forum_results:
+                url = (item.get("url") or "").strip()
+                if url and url not in seen_web:
+                    seen_web.add(url)
+                    web_results.append(item)
+                    added += 1
+            if added:
+                yield {
+                    "type": "source_result",
+                    "source": "hosting_forums",
+                    "count": added,
+                    "preview": [r.get("title") or r.get("url") or "" for r in forum_results[:5]],
+                }
+
+    if web_unlocker_source.is_configured() and web_results:
+        yield {
+            "type": "status",
+            "message": f"Web Unlocker 补充抓取页面正文（最多 {min(5, web_unlocker_source.max_urls_limit())} 个 URL）…",
+        }
+        try:
+            summary = await asyncio.to_thread(
+                web_unlocker_source.enrich_web_results,
+                web_results,
+                max_urls=min(5, web_unlocker_source.max_urls_limit()),
+            )
+            if summary.get("fetched"):
+                yield {
+                    "type": "source_result",
+                    "source": "web_unlocker",
+                    "count": summary["fetched"],
+                    "preview": summary.get("urls") or [],
+                }
+        except Exception as exc:
+            yield {"type": "status", "message": f"Web Unlocker 跳过：{exc}"}
 
     signals = web_search.extract_signals_from_results(web_results)
     social_profiles_by_channel: dict[str, list[dict[str, Any]]] = {}
