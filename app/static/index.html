@@ -167,6 +167,21 @@
           </table>
         </div>
       </section>
+
+      <div id="lead-detail-modal" class="contact-notes-modal hidden" role="dialog" aria-labelledby="lead-detail-title">
+        <div class="contact-notes-backdrop" data-close-detail></div>
+        <div class="contact-notes-dialog">
+          <div class="contact-notes-header">
+            <h3 id="lead-detail-title">线索详情</h3>
+            <button type="button" class="secondary-btn contact-notes-close" data-close-detail>关闭</button>
+          </div>
+          <div id="lead-detail-body" class="lead-detail-body"></div>
+          <label class="field checkbox-field lead-detail-import">
+            <input id="lead-detail-import" type="checkbox">
+            <span>导入此线索</span>
+          </label>
+        </div>
+      </div>
     </section>
 
     <section id="schedules-view" class="panel contacts-panel hidden">

@@ -94,6 +94,10 @@ const aiLeadsBody = document.getElementById("ai-leads-body");
 const aiChannelsEl = document.getElementById("ai-channels");
 const importLeadsBtn = document.getElementById("import-leads-btn");
 const retryDiscoverBtn = document.getElementById("retry-discover-btn");
+const leadDetailModal = document.getElementById("lead-detail-modal");
+const leadDetailBody = document.getElementById("lead-detail-body");
+const leadDetailImport = document.getElementById("lead-detail-import");
+let detailLeadIndex = null;
 
 let allRows = [];
 let csvContent = "";
@@ -1200,7 +1204,10 @@ function renderAiLeads() {
       <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email)}</a></td>
       <td>${roles || "—"}</td>
       <td class="mono">${lead.asn ? `AS${lead.asn}` : "—"}</td>
-      <td>${escapeHtml(lead.lead_reason || lead.source_detail || "—")}</td>
+      <td>
+        ${escapeHtml(lead.lead_reason || lead.source_detail || "—")}
+        <button type="button" class="link-btn lead-detail-btn" data-index="${index}">详情</button>
+      </td>
     `;
     aiLeadsBody.appendChild(tr);
   }
@@ -1217,6 +1224,36 @@ function formatSource(lead) {
     "ai-lead": "AI",
   };
   return map[source] || source;
+}
+
+function openLeadDetail(index) {
+  const lead = aiLeads[index];
+  if (!lead) return;
+  detailLeadIndex = index;
+  const roles = (lead.roles || []).map((r) => `<span class="role-tag">${escapeHtml(r)}</span>`).join(" ") || "—";
+  const rows = [
+    ["组织", escapeHtml(lead.org || lead.network_name || "—"), false],
+    ["邮箱", `<a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a>`, true],
+    ["ASN", lead.asn ? `AS${lead.asn}` : "—", true],
+    ["Role", roles, false],
+    ["来源", escapeHtml(formatSource(lead)), false],
+    ["来源详情", escapeHtml(lead.source_detail || "—"), false],
+    ["网络名", escapeHtml(lead.network_name || "—"), false],
+    ["匹配关键词", escapeHtml(lead.matched_keyword || "—"), true],
+    ["AI 评分", `<span class="score-badge">${lead.lead_score || 0}</span>`, false],
+    ["AI 理由", escapeHtml(lead.lead_reason || "—"), false],
+  ];
+  leadDetailBody.innerHTML = rows
+    .map(([k, v, mono]) => `<div class="lead-detail-row"><span class="k">${k}</span><span class="v${mono ? " mono" : ""}">${v}</span></div>`)
+    .join("");
+  ensureLeadSelected(lead);
+  leadDetailImport.checked = lead._selected !== false;
+  leadDetailModal.classList.remove("hidden");
+}
+
+function closeLeadDetail() {
+  detailLeadIndex = null;
+  leadDetailModal.classList.add("hidden");
 }
 
 function renderAiPlan(plan) {
@@ -1701,6 +1738,34 @@ schedulesBody.addEventListener("click", (event) => {
   if (deleteBtn) {
     deleteSchedule(deleteBtn.dataset.id).catch((error) => alert(error.message));
   }
+});
+
+aiLeadsBody.addEventListener("click", (event) => {
+  const btn = event.target.closest(".lead-detail-btn");
+  if (btn) openLeadDetail(Number(btn.dataset.index));
+});
+
+aiLeadsBody.addEventListener("change", (event) => {
+  const check = event.target.closest(".row-import-check");
+  if (!check || check.dataset.kind !== "ai") return;
+  const lead = aiLeads[Number(check.dataset.index)];
+  if (lead) lead._selected = check.checked;
+  updateAiLeadsStats();
+});
+
+leadDetailModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-detail]")) closeLeadDetail();
+});
+
+leadDetailImport.addEventListener("change", () => {
+  if (detailLeadIndex === null) return;
+  const lead = aiLeads[detailLeadIndex];
+  if (lead) lead._selected = leadDetailImport.checked;
+  renderAiLeads();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !leadDetailModal.classList.contains("hidden")) closeLeadDetail();
 });
 
 bootstrap();
