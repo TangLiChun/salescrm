@@ -202,7 +202,12 @@ export async function loadLlmStatus() {
     discoverBtn.disabled = true;
     if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
   }
-  updatePiAgentStatus();
+  try {
+    const { updatePiAgentStatus } = await import("./pi.js");
+    updatePiAgentStatus();
+  } catch {
+    // pi module may still be loading during bootstrap
+  }
 }
 
 export function setDiscoverRunning(running) {

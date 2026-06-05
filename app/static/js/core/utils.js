@@ -1,17 +1,20 @@
 import { t } from "../../i18n.js";
 
 export async function api(url, options = {}) {
+  const { redirectOn401 = true, ...fetchOptions } = options;
   const response = await fetch(url, {
     credentials: "same-origin",
-    ...options,
+    ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {}),
+      ...(fetchOptions.headers || {}),
     },
   });
 
   if (response.status === 401) {
-    window.location.href = "/login";
+    if (redirectOn401) {
+      window.location.href = "/login";
+    }
     throw new Error(t("msg.loginRequired"));
   }
 

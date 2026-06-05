@@ -206,7 +206,9 @@ export function mapServerPiThreadFull(row) {
 export async function refreshActivePiThreadMeta() {
   if (!state.activePiThreadId) return;
   try {
-    const thread = await api(`/api/pi/threads/${encodeURIComponent(state.activePiThreadId)}`);
+    const thread = await api(`/api/pi/threads/${encodeURIComponent(state.activePiThreadId)}`, {
+      redirectOn401: false,
+    });
     const index = state.piThreads.findIndex((item) => item.id === state.activePiThreadId);
     if (index >= 0) {
       state.piThreads[index].has_context_summary = Boolean((thread.context_summary || "").trim());
@@ -220,7 +222,9 @@ export async function refreshActivePiThreadMeta() {
 export async function fetchActivePiThreadHistory() {
   if (!state.activePiThreadId) return;
   try {
-    const thread = await api(`/api/pi/threads/${encodeURIComponent(state.activePiThreadId)}`);
+    const thread = await api(`/api/pi/threads/${encodeURIComponent(state.activePiThreadId)}`, {
+      redirectOn401: false,
+    });
     const mapped = mapServerPiThreadFull(thread);
     const index = state.piThreads.findIndex((item) => item.id === mapped.id);
     if (index >= 0) {
@@ -268,7 +272,7 @@ export async function loadPiChatFromServer(userId) {
   state.activePiThreadId = null;
   state.piChatHistory = [];
   try {
-    const data = await api("/api/pi/threads");
+    const data = await api("/api/pi/threads", { redirectOn401: false });
     state.piThreads = Array.isArray(data.threads)
       ? data.threads.map(mapServerPiThreadSummary).slice(0, PI_THREADS_MAX)
       : [];
@@ -442,7 +446,17 @@ export function loadPiChatHistoryFromStorage(userId) {
 }
 
 export async function loadPiChatForUser(userId) {
-  await loadPiChatFromServer(userId);
+  try {
+    await loadPiChatFromServer(userId);
+  } catch (error) {
+    console.warn("Pi chat init failed:", error);
+    try {
+      loadPiThreadsFromStorage(userId);
+      restorePiChatUi();
+    } catch {
+      // ignore secondary failures
+    }
+  }
 }
 
 export function restorePiChatToolEntry(item) {
@@ -479,6 +493,7 @@ export function restorePiChatToolEntry(item) {
 }
 
 export function restorePiChatUi() {
+  if (!piChatMessagesEl) return;
   piChatMessagesEl.innerHTML = "";
   if (!state.piChatHistory.length) {
     piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHint")}</div>`;

@@ -488,23 +488,30 @@ window.addEventListener("languagechange", refreshUiOnLanguageChange);
 
 async function bootstrap() {
   initI18n();
+
+  let user;
   try {
-    const user = await api("/api/me");
-    currentUserEl.textContent = user.username;
-    state.currentUserId = user.id;
-    await loadPiChatForUser(state.currentUserId);
+    user = await api("/api/me", { redirectOn401: false });
   } catch {
     window.location.href = "/login";
     return;
   }
 
-  await loadLlmStatus();
+  if (currentUserEl) {
+    currentUserEl.textContent = user.username || "";
+  }
+  state.currentUserId = user.id;
+
+  await loadPiChatForUser(state.currentUserId);
+  await loadLlmStatus().catch((error) => console.warn("LLM status load failed:", error));
   leadQueryInput.value = t("bootstrap.leadQueryDefault");
   scheduleQueryInput.value = leadQueryInput.value;
-  await loadContacts();
-  await loadSchedules();
+  await loadContacts().catch((error) => console.warn("Contacts load failed:", error));
+  await loadSchedules().catch((error) => console.warn("Schedules load failed:", error));
   startJobEventStream();
-  await resumeBackgroundJobs();
+  await resumeBackgroundJobs().catch((error) => console.warn("Job resume failed:", error));
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+  console.error("Bootstrap failed:", error);
+});
