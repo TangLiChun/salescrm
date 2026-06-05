@@ -163,7 +163,19 @@ def init_db() -> None:
                 FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS email_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_email_templates_user ON email_templates(user_id, updated_at DESC);
             """
         )
 
