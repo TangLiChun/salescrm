@@ -121,6 +121,18 @@ def _migrate_pi_chat_threads(conn) -> None:
         )
 
 
+def _migrate_user_lead_preferences(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_lead_preferences (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            prefs_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+
+
 REQUIRED_TABLES = (
     "users",
     "contacts",
@@ -132,6 +144,7 @@ REQUIRED_TABLES = (
     "email_templates",
     "pi_chat_threads",
     "asn_lookup_cache",
+    "user_lead_preferences",
 )
 
 
@@ -333,6 +346,7 @@ def init_db() -> None:
         _migrate_scheduled_jobs(conn)
         _migrate_background_jobs(conn)
         _migrate_pi_chat_threads(conn)
+        _migrate_user_lead_preferences(conn)
 
         from app.settings_store import init_settings
 
@@ -562,6 +576,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
     skipped = 0
     duplicates = 0
     filtered = 0
+    imported_rows: list[dict] = []
     now = utc_now()
 
     with get_conn() as conn:
@@ -648,6 +663,24 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 ),
             )
             imported += 1
+            imported_rows.append(
+                {
+                    "email": email,
+                    "org": row.get("org") or "",
+                    "name": row.get("name") or "",
+                    "roles": row.get("roles") or roles,
+                    "source": row.get("source") or "arin",
+                    "notes": notes,
+                }
+            )
+
+    if imported_rows:
+        try:
+            from app.lead_preferences import record_import_feedback
+
+            record_import_feedback(user_id, imported_rows)
+        except Exception:
+            pass
 
     return {"imported": imported, "skipped": skipped, "duplicates": duplicates, "filtered": filtered}
 
@@ -705,6 +738,15 @@ def update_contact_follow_up_status(
         return False
     now = utc_now()
     with get_conn() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {CONTACT_SELECT_SQL}
+            FROM contacts WHERE id = %s AND user_id = %s
+            """,
+            (contact_id, user_id),
+        ).fetchone()
+        if not row:
+            return False
         cursor = conn.execute(
             """
             UPDATE contacts
@@ -713,7 +755,16 @@ def update_contact_follow_up_status(
             """,
             (follow_up_status, now, contact_id, user_id),
         )
-        return cursor.rowcount > 0
+        updated = cursor.rowcount > 0
+
+    if updated:
+        try:
+            from app.lead_preferences import record_status_feedback
+
+            record_status_feedback(user_id, _contact_from_row(row), follow_up_status)
+        except Exception:
+            pass
+    return updated
 
 
 def update_contact(
@@ -895,6 +946,16 @@ def delete_contact_note(user_id: int, contact_id: int, note_id: int) -> bool:
 
 def delete_contact(user_id: int, contact_id: int) -> bool:
     with get_conn() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {CONTACT_SELECT_SQL}
+            FROM contacts WHERE id = %s AND user_id = %s
+            """,
+            (contact_id, user_id),
+        ).fetchone()
+        if not row:
+            return False
+        contact = _contact_from_row(row)
         conn.execute(
             "DELETE FROM contact_notes WHERE contact_id = %s AND user_id = %s",
             (contact_id, user_id),
@@ -903,7 +964,16 @@ def delete_contact(user_id: int, contact_id: int) -> bool:
             "DELETE FROM contacts WHERE id = %s AND user_id = %s",
             (contact_id, user_id),
         )
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+
+    if deleted:
+        try:
+            from app.lead_preferences import record_delete_feedback
+
+            record_delete_feedback(user_id, contact)
+        except Exception:
+            pass
+    return deleted
 
 
 def dedupe_contacts(*, user_id: int | None = None, conn: Any | None = None) -> dict:

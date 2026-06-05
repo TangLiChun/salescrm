@@ -171,7 +171,7 @@ def parse_json_response(raw: str) -> dict[str, Any]:
     return parsed
 
 
-def plan_lead_search(user_query: str) -> dict[str, Any]:
+def plan_lead_search(user_query: str, *, preference_hints: str | None = None) -> dict[str, Any]:
     system = (
         "你是 B2B 销售线索研究助手，会通过多种渠道找线索：搜索引擎、PeeringDB、ARIN RDAP。"
         "根据用户需求输出 JSON："
@@ -183,10 +183,13 @@ def plan_lead_search(user_query: str) -> dict[str, Any]:
         "target_profile(中文，理想客户画像)。"
         "只返回 JSON。"
     )
+    user_content = user_query
+    if preference_hints:
+        user_content = f"{user_query}\n\n【用户历史偏好与反馈】\n{preference_hints}"
     raw = chat_completion(
         [
             {"role": "system", "content": system},
-            {"role": "user", "content": user_query},
+            {"role": "user", "content": user_content},
         ]
     )
     plan = parse_json_response(raw)
@@ -307,7 +310,13 @@ def extract_leads_from_web(
     return leads[:20]
 
 
-def score_leads(user_query: str, plan: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def score_leads(
+    user_query: str,
+    plan: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    preference_hints: str | None = None,
+) -> list[dict[str, Any]]:
     if not candidates:
         return []
 
@@ -330,8 +339,10 @@ def score_leads(user_query: str, plan: dict[str, Any], candidates: list[dict[str
         "你是 B2B 销售线索评分助手。根据用户需求与候选联系人，输出 JSON："
         '{"results":[{"index":0,"score":0-100,"relevant":true/false,"reason":"中文，30字以内"}]}。'
         "评分标准：与用户需求匹配度、角色是否适合销售触达（technical/administrative/routing 更高，abuse 较低）。"
-        "只返回 JSON。"
     )
+    if preference_hints:
+        system += f" 用户历史反馈：{preference_hints}"
+    system += " 只返回 JSON。"
     user = json.dumps(
         {
             "user_query": user_query,

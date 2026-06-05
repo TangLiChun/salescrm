@@ -503,6 +503,17 @@
                 <label class="field"><span data-i18n="settings.allowlist">白名单（留空表示不启用）</span>
                   <textarea id="setting-import-allowlist" rows="5" data-i18n-placeholder="settings.allowlistPlaceholder" placeholder=""></textarea></label>
               </fieldset>
+              <fieldset>
+                <legend data-i18n="settings.leadPreferences">AI 线索偏好（自动学习）</legend>
+                <p class="settings-desc" data-i18n="settings.leadPreferencesHint">系统会根据你的导入、跟进状态与删除操作自动调整搜索策略。此处为只读预览，可随时重置。</p>
+                <div id="lead-prefs-panel" class="lead-prefs-panel">
+                  <p class="lead-prefs-empty" data-i18n="settings.leadPrefsLoading">加载中…</p>
+                </div>
+                <div class="controls lead-prefs-actions">
+                  <button type="button" id="reset-lead-prefs-btn" class="secondary-btn" data-i18n="settings.resetLeadPrefs">重置偏好</button>
+                  <p id="lead-prefs-status" class="stats"></p>
+                </div>
+              </fieldset>
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="automation">

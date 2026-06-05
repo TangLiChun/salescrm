@@ -1,7 +1,7 @@
 import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state, SETTINGS_FORM_CATS } from "../core/state.js";
-import { api, setInputValue } from "../core/utils.js";
+import { api, escapeHtml, setInputValue } from "../core/utils.js";
 import { loadLlmStatus } from "./leads.js";
 
 const { settingsView, pageTitle, settingsStatusEl } = dom;
@@ -28,6 +28,99 @@ export function switchSettingsCat(cat) {
   if (!settingsView.classList.contains("hidden")) {
     pageTitle.textContent = t(SETTINGS_CAT_TITLE_KEYS[cat] || "page.settings.title");
   }
+  if (cat === "import") {
+    loadLeadPreferences().catch(() => {});
+  }
+}
+
+function renderPrefTags(items) {
+  if (!items?.length) {
+    return `<span class="lead-prefs-none">${escapeHtml(t("settings.leadPrefsNone"))}</span>`;
+  }
+  return items
+    .map((item) => `<span class="lead-prefs-tag">${escapeHtml(String(item))}</span>`)
+    .join("");
+}
+
+function renderPrefSection(labelKey, items) {
+  return `
+    <div class="lead-prefs-section">
+      <div class="lead-prefs-label">${escapeHtml(t(labelKey))}</div>
+      <div class="lead-prefs-tags">${renderPrefTags(items)}</div>
+    </div>`;
+}
+
+function hasLeadPreferenceData(prefs) {
+  const listKeys = [
+    "preferred_roles",
+    "keyword_hints",
+    "liked_orgs",
+    "avoid_orgs",
+    "avoid_domains",
+  ];
+  if (listKeys.some((key) => (prefs[key] || []).length > 0)) {
+    return true;
+  }
+  if (Number(prefs.min_score_hint || 60) > 60) {
+    return true;
+  }
+  const stats = prefs.stats || {};
+  return Object.values(stats).some((value) => Number(value) > 0);
+}
+
+export async function loadLeadPreferences() {
+  const panel = document.getElementById("lead-prefs-panel");
+  if (!panel) return;
+
+  panel.innerHTML = `<p class="lead-prefs-empty">${escapeHtml(t("settings.leadPrefsLoading"))}</p>`;
+
+  const data = await api("/api/lead-preferences");
+  const prefs = data.preferences || {};
+  const stats = prefs.stats || {};
+
+  if (!hasLeadPreferenceData(prefs)) {
+    panel.innerHTML = `<p class="lead-prefs-empty">${escapeHtml(t("settings.leadPrefsEmpty"))}</p>`;
+    return;
+  }
+
+  const statItems = [
+    ["settings.leadPrefsStatImports", stats.imports],
+    ["settings.leadPrefsStatInvalid", stats.invalid],
+    ["settings.leadPrefsStatInterested", stats.interested],
+    ["settings.leadPrefsStatReplied", stats.replied],
+    ["settings.leadPrefsStatContacted", stats.contacted],
+    ["settings.leadPrefsStatDeleted", stats.deleted],
+  ]
+    .map(
+      ([key, value]) =>
+        `<div class="lead-prefs-stat"><span class="lead-prefs-stat-label">${escapeHtml(t(key))}</span><span class="lead-prefs-stat-value">${escapeHtml(String(value || 0))}</span></div>`,
+    )
+    .join("");
+
+  panel.innerHTML = `
+    <div class="lead-prefs-min-score">
+      <span class="lead-prefs-label">${escapeHtml(t("settings.leadPrefsMinScore"))}</span>
+      <strong>${escapeHtml(String(prefs.min_score_hint ?? 60))}</strong>
+    </div>
+    <div class="lead-prefs-stats">${statItems}</div>
+    ${renderPrefSection("settings.leadPrefsPreferredRoles", prefs.preferred_roles)}
+    ${renderPrefSection("settings.leadPrefsKeywordHints", prefs.keyword_hints)}
+    ${renderPrefSection("settings.leadPrefsLikedOrgs", prefs.liked_orgs)}
+    ${renderPrefSection("settings.leadPrefsAvoidOrgs", prefs.avoid_orgs)}
+    ${renderPrefSection("settings.leadPrefsAvoidDomains", prefs.avoid_domains)}
+  `;
+}
+
+export async function resetLeadPreferences() {
+  if (!window.confirm(t("settings.resetLeadPrefsConfirm"))) {
+    return;
+  }
+  await api("/api/lead-preferences/reset", { method: "POST" });
+  const statusEl = document.getElementById("lead-prefs-status");
+  if (statusEl) {
+    statusEl.textContent = t("settings.leadPrefsReset");
+  }
+  await loadLeadPreferences();
 }
 
 export async function regenerateAgentToken() {
@@ -69,6 +162,8 @@ export async function loadSettingsForm() {
   document.getElementById("setting-shodan-enabled").checked = (data.shodan_enabled || "0") === "1";
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
+  setInputValue("setting-import-blocklist", data.import_blocklist || "");
+  setInputValue("setting-import-allowlist", data.import_allowlist || "");
 
   const agentTokenEl = document.getElementById("setting-agent-api-token");
   if (agentTokenEl && !agentTokenEl.dataset.revealed) {
@@ -95,6 +190,9 @@ export async function loadSettingsForm() {
     el.placeholder = configured ? t("msg.apiKeyConfigured", { masked }) : t("msg.apiKeyNotConfigured");
   }
   settingsStatusEl.textContent = "";
+  if (state.activeSettingsCat === "import") {
+    await loadLeadPreferences();
+  }
 }
 
 export async function saveSettings(event) {
@@ -117,6 +215,8 @@ export async function saveSettings(event) {
     shodan_enabled: document.getElementById("setting-shodan-enabled").checked ? "1" : "0",
     scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
+    import_blocklist: document.getElementById("setting-import-blocklist").value,
+    import_allowlist: document.getElementById("setting-import-allowlist").value,
   };
 
   const secrets = [

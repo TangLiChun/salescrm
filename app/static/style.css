@@ -2788,6 +2788,89 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   margin-top: var(--space-4);
 }
 
+.lead-prefs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.lead-prefs-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.lead-prefs-min-score {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.lead-prefs-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lead-prefs-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: var(--space-2);
+}
+
+.lead-prefs-stat {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2, var(--surface));
+}
+
+.lead-prefs-stat-label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.lead-prefs-stat-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.lead-prefs-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lead-prefs-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.lead-prefs-tag {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: oklch(0.94 0.02 250);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.lead-prefs-none {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.lead-prefs-actions {
+  margin-top: var(--space-3);
+  align-items: center;
+  gap: var(--space-3);
+}
+
 /* ----- Contacts page layout ------------------------------------------------ */
 
 .contacts-page {

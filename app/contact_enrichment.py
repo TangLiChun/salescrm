@@ -10,6 +10,12 @@ from arin_lookup import lookup_asn
 from app.database import get_contact, import_contacts, list_contact_emails, update_contact_social_fields
 from app.lead_discovery import _contact_candidates, _dedupe_candidates
 from app.llm import LLMError, extract_leads_from_web, score_leads
+from app.lead_preferences import (
+    effective_min_score,
+    filter_avoided_candidates,
+    get_prefs,
+    preference_hints_for_llm,
+)
 from app.sources import peeringdb as peeringdb_source
 from app.sources import web_search
 from app.sources import brightdata_social as bs
@@ -124,6 +130,10 @@ async def enrich_contact_stream(
     if not anchor_email:
         yield {"type": "error", "message": "该联系人没有邮箱，无法作为扩展锚点"}
         return
+
+    prefs = get_prefs(user_id)
+    preference_hints = preference_hints_for_llm(prefs)
+    score_threshold = effective_min_score(prefs, min_score)
 
     known_emails = list_contact_emails(user_id)
     enrich_query = _enrich_user_query(contact)
@@ -314,6 +324,7 @@ async def enrich_contact_stream(
         web_results=web_results,
         profiles_by_channel=social_profiles_by_channel,
     )
+    candidates = filter_avoided_candidates(candidates, prefs)
 
     if not candidates:
         yield {
@@ -328,12 +339,20 @@ async def enrich_contact_stream(
     yield {"type": "status", "message": f"AI 正在评估 {len(candidates)} 条相关联系人…"}
 
     try:
-        scored = await asyncio.to_thread(score_leads, enrich_query, mini_plan, candidates)
+        scored = await asyncio.to_thread(
+            score_leads,
+            enrich_query,
+            mini_plan,
+            candidates,
+            preference_hints=preference_hints,
+        )
     except LLMError as exc:
         yield {"type": "error", "message": str(exc)}
         return
 
-    leads = [row for row in scored if row.get("lead_relevant") and row.get("lead_score", 0) >= min_score]
+    leads = [
+        row for row in scored if row.get("lead_relevant") and row.get("lead_score", 0) >= score_threshold
+    ]
     leads.sort(key=lambda item: item.get("lead_score", 0), reverse=True)
 
     for lead in leads:

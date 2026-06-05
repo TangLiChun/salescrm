@@ -317,6 +317,20 @@ def get_settings(_: CurrentUser) -> dict:
     return get_settings_for_edit()
 
 
+@app.get("/api/lead-preferences")
+def get_lead_preferences(user: CurrentUser) -> dict:
+    from app.lead_preferences import get_prefs
+
+    return {"preferences": get_prefs(user["id"])}
+
+
+@app.post("/api/lead-preferences/reset")
+def reset_lead_preferences(user: CurrentUser) -> dict:
+    from app.lead_preferences import reset_prefs
+
+    return {"preferences": reset_prefs(user["id"]), "ok": True}
+
+
 @app.put("/api/settings")
 async def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
     from app.settings_store import get_settings

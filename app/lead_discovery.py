@@ -14,6 +14,14 @@ from app.lead_checkpoint import (
     phase_at_least,
 )
 from app.llm import LLMError, extract_leads_from_web, plan_lead_search, score_leads
+from app.lead_preferences import (
+    apply_prefs_to_plan,
+    effective_min_score,
+    filter_avoided_candidates,
+    get_prefs,
+    preference_hints_for_llm,
+    record_search_feedback,
+)
 from app.sources import list_channels
 from app.sources import peeringdb as peeringdb_source
 from app.sources import shodan as shodan_source
@@ -101,6 +109,10 @@ async def discover_leads_stream(
     cp: dict[str, Any] = dict(checkpoint or {})
     phase = str(cp.get("phase") or "")
 
+    prefs: dict[str, Any] = get_prefs(user_id) if user_id else {}
+    preference_hints = preference_hints_for_llm(prefs) if user_id else None
+    score_threshold = effective_min_score(prefs, min_score) if user_id else min_score
+
     def persist(next_phase: str, **fields: Any) -> None:
         nonlocal cp, phase
         cp = {
@@ -108,7 +120,7 @@ async def discover_leads_stream(
             **fields,
             "phase": next_phase,
             "query": user_query,
-            "min_score": min_score,
+            "min_score": score_threshold,
         }
         phase = next_phase
         if on_checkpoint:
@@ -123,10 +135,17 @@ async def discover_leads_stream(
         yield {"type": "status", "message": "正在理解你的需求…"}
 
         try:
-            plan = await asyncio.to_thread(plan_lead_search, user_query)
+            plan = await asyncio.to_thread(
+                plan_lead_search, user_query, preference_hints=preference_hints
+            )
         except LLMError as exc:
             yield {"type": "error", "message": str(exc)}
             return
+
+        if user_id:
+            plan = apply_prefs_to_plan(plan, prefs)
+            if preference_hints:
+                plan["preference_applied"] = True
 
         channels = list_channels()
         plan["channels"] = channels
@@ -385,6 +404,8 @@ async def discover_leads_stream(
     if not phase_at_least(phase, PHASE_SCORED):
         all_candidates = _dedupe_candidates(all_candidates)
         all_candidates = [row for row in all_candidates if row.get("email")]
+        if user_id:
+            all_candidates = filter_avoided_candidates(all_candidates, prefs)
         all_candidates = enrich_candidates_with_social(
             all_candidates,
             web_results=web_results,
@@ -407,7 +428,13 @@ async def discover_leads_stream(
         }
 
         try:
-            scored = await asyncio.to_thread(score_leads, user_query, plan, all_candidates)
+            scored = await asyncio.to_thread(
+                score_leads,
+                user_query,
+                plan,
+                all_candidates,
+                preference_hints=preference_hints,
+            )
         except LLMError as exc:
             yield {"type": "error", "message": str(exc)}
             return
@@ -415,7 +442,7 @@ async def discover_leads_stream(
         leads = [
             row
             for row in scored
-            if row.get("lead_relevant") and row.get("lead_score", 0) >= min_score
+            if row.get("lead_relevant") and row.get("lead_score", 0) >= score_threshold
         ]
         leads.sort(key=lambda item: item.get("lead_score", 0), reverse=True)
         persist(PHASE_SCORED, leads=leads, all_candidates=all_candidates)
@@ -438,6 +465,12 @@ async def discover_leads_stream(
                 notes += f" · {detail}"
             payload.append({**lead, "source": source, "notes": notes.strip(" ·")})
         import_result = await asyncio.to_thread(import_contacts, user_id, payload)
+
+    if user_id and leads:
+        try:
+            await asyncio.to_thread(record_search_feedback, user_id, user_query, plan)
+        except Exception:
+            pass
 
     yield {
         "type": "done",

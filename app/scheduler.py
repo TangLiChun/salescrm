@@ -47,15 +47,20 @@ def get_scheduler_status() -> dict[str, Any]:
 
 
 async def run_scheduled_job(job: dict) -> dict:
+    from app.lead_preferences import effective_min_score, get_prefs
+
     job_id = int(job["id"])
     user_id = int(job["user_id"])
     if not claim_scheduled_job(job_id):
         return {"ok": False, "status": "skipped", "message": "任务已在运行中"}
 
+    prefs = get_prefs(user_id)
+    min_score = effective_min_score(prefs, int(job["min_score"]))
+
     try:
         result = await run_lead_discovery_batch(
             job["query"],
-            min_score=int(job["min_score"]),
+            min_score=min_score,
             delay=0.5,
             auto_import=bool(job["auto_import"]),
             user_id=user_id,
