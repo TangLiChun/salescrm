@@ -9,7 +9,7 @@ SECRET_KEYS = {
     "llm_api_key",
     "tavily_api_key",
     "serpapi_key",
-    "bing_search_key",
+    "brave_search_key",
     "session_secret",
     "default_admin_password",
     "agent_api_token",
@@ -25,7 +25,7 @@ DEFAULTS: dict[str, str] = {
     "llm_model": "gpt-4o-mini",
     "tavily_api_key": "",
     "serpapi_key": "",
-    "bing_search_key": "",
+    "brave_search_key": "",
     "scheduler_enabled": "1",
     "scheduler_poll_seconds": "60",
     "import_blocklist": "",
@@ -58,6 +58,31 @@ def init_settings(conn) -> None:
             "UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'agent_api_token'",
             (secrets.token_urlsafe(32), now),
         )
+
+    _migrate_bing_to_brave(conn)
+
+
+def _migrate_bing_to_brave(conn) -> None:
+    """One-time: copy legacy bing_search_key into brave_search_key."""
+    bing = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'bing_search_key'"
+    ).fetchone()
+    if not bing or not (bing["value"] or "").strip():
+        return
+    brave = conn.execute(
+        "SELECT value FROM app_settings WHERE key = 'brave_search_key'"
+    ).fetchone()
+    if brave and (brave["value"] or "").strip():
+        return
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        ("brave_search_key", bing["value"].strip(), now),
+    )
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -115,7 +140,7 @@ def get_public_settings() -> dict[str, Any]:
         "search_keys": {
             "tavily": bool(values.get("tavily_api_key", "").strip()),
             "serpapi": bool(values.get("serpapi_key", "").strip()),
-            "bing": bool(values.get("bing_search_key", "").strip()),
+            "brave": bool(values.get("brave_search_key", "").strip()),
             "duckduckgo": True,
         },
     }

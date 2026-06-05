@@ -165,7 +165,7 @@ class SettingsUpdateRequest(BaseModel):
     llm_model: str | None = None
     tavily_api_key: str | None = None
     serpapi_key: str | None = None
-    bing_search_key: str | None = None
+    brave_search_key: str | None = None
     scheduler_enabled: str | None = None
     scheduler_poll_seconds: str | None = None
     session_https_only: str | None = None

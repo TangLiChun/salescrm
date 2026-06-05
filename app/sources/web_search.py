@@ -20,8 +20,8 @@ def available_backends() -> list[str]:
         backends.append("tavily")
     if get_setting("serpapi_key", "").strip():
         backends.append("serpapi")
-    if get_setting("bing_search_key", "").strip():
-        backends.append("bing")
+    if get_setting("brave_search_key", "").strip():
+        backends.append("brave")
     backends.append("duckduckgo")
     return backends
 
@@ -101,8 +101,8 @@ def _search_with_backend(backend: str, query: str, *, max_results: int) -> list[
         return _search_tavily(query, max_results=max_results)
     if backend == "serpapi":
         return _search_serpapi(query, max_results=max_results)
-    if backend == "bing":
-        return _search_bing(query, max_results=max_results)
+    if backend == "brave":
+        return _search_brave(query, max_results=max_results)
     if backend == "duckduckgo":
         return _search_duckduckgo(query, max_results=max_results)
     return []
@@ -153,21 +153,29 @@ def _search_serpapi(query: str, *, max_results: int) -> list[dict[str, str]]:
     return rows
 
 
-def _search_bing(query: str, *, max_results: int) -> list[dict[str, str]]:
-    api_key = get_setting("bing_search_key", "").strip()
-    params = urllib.parse.urlencode({"q": query, "count": max_results})
-    url = f"https://api.bing.microsoft.com/v7.0/search?{params}"
-    req = urllib.request.Request(url, headers={"Ocp-Apim-Subscription-Key": api_key})
+def _search_brave(query: str, *, max_results: int) -> list[dict[str, str]]:
+    api_key = get_setting("brave_search_key", "").strip()
+    count = max(1, min(max_results, 20))
+    params = urllib.parse.urlencode({"q": query, "count": count})
+    url = f"https://api.search.brave.com/res/v1/web/search?{params}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": api_key,
+        },
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.load(resp)
     rows = []
-    for item in data.get("webPages", {}).get("value") or []:
+    for item in (data.get("web") or {}).get("results") or []:
         rows.append(
             _normalize_result(
-                item.get("name") or "",
+                item.get("title") or "",
                 item.get("url") or "",
-                item.get("snippet") or "",
-                backend="bing",
+                item.get("description") or item.get("snippet") or "",
+                backend="brave",
                 query=query,
             )
         )

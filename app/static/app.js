@@ -972,7 +972,7 @@ async function loadSettingsForm() {
     ["setting-llm-api-key", data.llm_api_key, data.llm_api_key_configured],
     ["setting-tavily-api-key", data.tavily_api_key, data.tavily_api_key_configured],
     ["setting-serpapi-key", data.serpapi_key, data.serpapi_key_configured],
-    ["setting-bing-search-key", data.bing_search_key, data.bing_search_key_configured],
+    ["setting-brave-search-key", data.brave_search_key, data.brave_search_key_configured],
   ];
   for (const [id, masked, configured] of secretFields) {
     const el = document.getElementById(id);
@@ -999,7 +999,7 @@ async function saveSettings(event) {
     ["llm_api_key", "setting-llm-api-key"],
     ["tavily_api_key", "setting-tavily-api-key"],
     ["serpapi_key", "setting-serpapi-key"],
-    ["bing_search_key", "setting-bing-search-key"],
+    ["brave_search_key", "setting-brave-search-key"],
   ];
   for (const [key, id] of secrets) {
     const value = document.getElementById(id).value.trim();
