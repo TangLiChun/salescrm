@@ -284,7 +284,7 @@ function renderRows() {
       <td>${escapeHtml(row.org || "—")}</td>
       <td>${roles || "—"}</td>
       <td>${escapeHtml(row.name || "—")}</td>
-      <td>${emailCell}</td>
+      <td class="col-email">${emailCell}</td>
       <td class="mono">${escapeHtml(row.handle || "—")}</td>
       <td>${escapeHtml(row.rir || "—")}</td>
       <td class="${statusClass}">${escapeHtml(statusText)}</td>

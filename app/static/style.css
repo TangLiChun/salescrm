@@ -565,9 +565,15 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .email-link {
   color: var(--accent-ink);
   text-decoration: none;
-  overflow-wrap: anywhere;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .email-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* Long emails in generic tables: wrap at @ / . instead of per-character breaks */
+.table-wrap:not(.contacts-table-wrap) td .email-link {
+  overflow-wrap: anywhere;
+}
 
 .contacts-table-wrap {
   overflow-x: auto;
@@ -590,13 +596,34 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 }
 
 .contacts-table .col-email {
-  min-width: 12rem;
+  min-width: 14rem;
+  width: 14rem;
+  max-width: 20rem;
   white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 
 .contacts-table .col-email .email-link {
-  overflow-wrap: normal;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+/* Email column in lookup / lead tables */
+.table-wrap:not(.contacts-table-wrap) .col-email {
+  min-width: 11rem;
+  white-space: nowrap;
+}
+
+.table-wrap:not(.contacts-table-wrap) .col-email .email-link {
+  white-space: nowrap;
+  word-break: normal;
 }
 
 .contacts-table .col-notes {
