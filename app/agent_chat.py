@@ -925,6 +925,52 @@ _INTRO_ONLY_NUDGE = (
 _MAX_LLM_NUDGES = 2
 
 
+def _fallback_prepared_calls(user_message: str) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+    """When the model keeps intro-only replies, run a sensible default CRM search."""
+    text = (user_message or "").strip()
+    lower = text.lower()
+    if not text:
+        return []
+
+    queries: list[str] = []
+    if any(token in text for token in ("运营商", "operator", " isp", "isp ", "电信", "联通", "移动")) or (
+        "还有" in text and "其他" in text
+    ):
+        queries = [
+            "运营商",
+            "ISP",
+            "Telecom",
+            "Network",
+            "Transit",
+            "Cogent",
+            "Verizon",
+            "AT&T",
+            "TDS",
+            "RCN",
+            "GTT",
+        ]
+    elif "abuse" in lower:
+        queries = ["abuse@"]
+    elif any(token in text for token in ("联系人", "crm", "搜索", "找出", "列出", "还有")):
+        queries = ["", "Network", "ISP"]
+
+    if not queries:
+        return []
+
+    raw_calls = [
+        {
+            "id": f"fallback-{uuid.uuid4().hex[:8]}",
+            "type": "function",
+            "function": {
+                "name": "list_contacts",
+                "arguments": json.dumps({"q": query, "limit": 100}, ensure_ascii=False),
+            },
+        }
+        for query in queries[:8]
+    ]
+    return _prepare_tool_calls(raw_calls)
+
+
 def _normalize_tool_name(name: str) -> str:
     cleaned = (name or "").strip().lower()
     for prefix in ("functions.", "function.", "tool.", "tools."):
@@ -1811,12 +1857,15 @@ async def agent_chat_stream(
             if content and not tool_calls:
                 if _assistant_promises_tool_use(content) and llm_nudge_count < _MAX_LLM_NUDGES:
                     llm_nudge_count += 1
-                    messages.append({"role": "assistant", "content": content})
-                    if assistant and assistant.get("reasoning_content"):
-                        messages[-1]["reasoning_content"] = assistant["reasoning_content"]
                     messages.append({"role": "user", "content": _INTRO_ONLY_NUDGE})
                     yield {"type": "status", "message": "模型未调用工具，正在重试…"}
                     continue
+                fallback_calls = _fallback_prepared_calls(message)
+                if fallback_calls and _assistant_promises_tool_use(content):
+                    prepared_calls = fallback_calls
+                    assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
+                    yield {"type": "status", "message": "模型未调用工具，正在直接搜索 CRM…"}
+                    break
                 if not streamed_reply:
                     yield {"type": "assistant_start"}
                     yield {"type": "assistant_delta", "text": content}
@@ -1855,16 +1904,18 @@ async def agent_chat_stream(
                     return
                 if llm_nudge_count < _MAX_LLM_NUDGES:
                     llm_nudge_count += 1
-                    if content:
-                        messages.append({"role": "assistant", "content": content})
-                        if assistant and assistant.get("reasoning_content"):
-                            messages[-1]["reasoning_content"] = assistant["reasoning_content"]
                     messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
                     yield {
                         "type": "status",
                         "message": "工具调用无效，正在重试…" if attempted_tools else "模型未调用工具，正在重试…",
                     }
                     continue
+                fallback_calls = _fallback_prepared_calls(message)
+                if fallback_calls and (attempted_tools or _assistant_promises_tool_use(content)):
+                    prepared_calls = fallback_calls
+                    assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
+                    yield {"type": "status", "message": "工具调用无效，正在直接搜索 CRM…"}
+                    break
                 yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
                 yield {"type": "done"}
                 return
