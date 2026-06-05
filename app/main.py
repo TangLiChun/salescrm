@@ -205,14 +205,14 @@ def health() -> dict:
     return {"ok": db_ok, "db": db_ok}
 
 
-@app.get("/login", response_class=HTMLResponse)
+@app.get("/login", response_class=HTMLResponse, response_model=None)
 def login_page(request: Request) -> HTMLResponse | RedirectResponse:
     if require_login(request):
         return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
     return render_page("login.html")
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, response_model=None)
 def index(request: Request) -> HTMLResponse | RedirectResponse:
     if not require_login(request):
         return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
