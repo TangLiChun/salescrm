@@ -93,6 +93,7 @@ const aiStatsEl = document.getElementById("ai-stats");
 const aiLeadsBody = document.getElementById("ai-leads-body");
 const aiChannelsEl = document.getElementById("ai-channels");
 const importLeadsBtn = document.getElementById("import-leads-btn");
+const retryDiscoverBtn = document.getElementById("retry-discover-btn");
 
 let allRows = [];
 let csvContent = "";
@@ -124,6 +125,8 @@ const CHANNEL_DEFS = [
   { key: "scoring", name: "LLM 评分" },
 ];
 let channelState = {};
+let discoverController = null;
+let lastDiscoverQuery = "";
 let llmConfigured = false;
 let emailTemplates = [];
 let editingTemplateId = null;
@@ -1288,7 +1291,24 @@ async function loadLlmStatus() {
   }
 }
 
+function setDiscoverRunning(running) {
+  if (running) {
+    discoverBtn.textContent = "取消";
+    discoverBtn.classList.add("danger-btn");
+    discoverBtn.disabled = false;
+    retryDiscoverBtn.classList.add("hidden");
+  } else {
+    discoverBtn.textContent = "AI 开始找线索";
+    discoverBtn.classList.remove("danger-btn");
+    discoverBtn.disabled = !llmConfigured;
+  }
+}
+
 async function runLeadDiscovery() {
+  if (discoverController) {
+    discoverController.abort();
+    return;
+  }
   const query = leadQueryInput.value.trim();
   if (!query) {
     alert("请先描述你要找的销售线索");
@@ -1307,7 +1327,10 @@ async function runLeadDiscovery() {
   aiProgressEl.classList.remove("hidden");
   aiProgressFill.style.width = "0%";
   aiProgressText.textContent = "AI 正在分析需求…";
-  discoverBtn.disabled = true;
+  lastDiscoverQuery = query;
+  discoverController = new AbortController();
+  setDiscoverRunning(true);
+  retryDiscoverBtn.classList.add("hidden");
   importLeadsBtn.disabled = true;
 
   try {
@@ -1315,6 +1338,7 @@ async function runLeadDiscovery() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
+      signal: discoverController.signal,
       body: JSON.stringify({
         query,
         min_score: Number(minScoreInput.value) || 60,
@@ -1413,10 +1437,19 @@ async function runLeadDiscovery() {
       }
     }
   } catch (error) {
-    alert(error.message || "AI 线索发现失败");
-    aiProgressText.textContent = "失败";
+    if (error.name === "AbortError") {
+      aiProgressText.textContent = "已取消";
+    } else {
+      aiProgressText.textContent = "失败";
+      if (typeof showLeadsError === "function") {
+        showLeadsError(error.message || "AI 线索发现失败");
+      } else {
+        alert(error.message || "AI 线索发现失败");
+      }
+    }
   } finally {
-    discoverBtn.disabled = !llmConfigured;
+    discoverController = null;
+    setDiscoverRunning(false);
   }
 }
 
@@ -1467,6 +1500,12 @@ lookupBtn.addEventListener("click", runLookup);
 exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
+retryDiscoverBtn.addEventListener("click", () => {
+  if (lastDiscoverQuery) {
+    leadQueryInput.value = lastDiscoverQuery;
+  }
+  runLeadDiscovery();
+});
 importLeadsBtn.addEventListener("click", importAiLeads);
 roleFilter.addEventListener("change", renderRows);
 contactStatusFilter.addEventListener("change", () => loadContacts(true).catch((error) => alert(error.message)));
