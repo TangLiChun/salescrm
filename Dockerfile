@@ -15,7 +15,8 @@ COPY scripts ./scripts
 RUN mkdir -p /app/data
 
 # 构建阶段验证依赖与应用可导入，避免运行时才暴露 ModuleNotFoundError
-RUN python -c "from app.main import app; print('app import ok')"
+# Verify imports without requiring a live database at build time
+RUN python -c "from app.agent_chat import agent_chat_stream; from app.database import init_db; print('app import ok')"
 
 EXPOSE 8000
 

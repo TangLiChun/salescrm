@@ -42,8 +42,9 @@ def init_settings(conn) -> None:
     for key, value in DEFAULTS.items():
         conn.execute(
             """
-            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (key) DO NOTHING
             """,
             (key, value, now),
         )
@@ -51,14 +52,14 @@ def init_settings(conn) -> None:
     row = conn.execute("SELECT value FROM app_settings WHERE key = 'session_secret'").fetchone()
     if row and not (row["value"] or "").strip():
         conn.execute(
-            "UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'session_secret'",
+            "UPDATE app_settings SET value = %s, updated_at = %s WHERE key = 'session_secret'",
             (secrets.token_hex(32), now),
         )
 
     row = conn.execute("SELECT value FROM app_settings WHERE key = 'agent_api_token'").fetchone()
     if row and not (row["value"] or "").strip():
         conn.execute(
-            "UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'agent_api_token'",
+            "UPDATE app_settings SET value = %s, updated_at = %s WHERE key = 'agent_api_token'",
             (secrets.token_urlsafe(32), now),
         )
 
@@ -81,7 +82,7 @@ def _migrate_bing_to_brave(conn) -> None:
     conn.execute(
         """
         INSERT INTO app_settings (key, value, updated_at)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
         """,
         ("brave_search_key", bing["value"].strip(), now),
@@ -90,7 +91,7 @@ def _migrate_bing_to_brave(conn) -> None:
 
 def get_setting(key: str, default: str = "") -> str:
     with get_conn() as conn:
-        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        row = conn.execute("SELECT value FROM app_settings WHERE key = %s", (key,)).fetchone()
     if not row:
         return DEFAULTS.get(key, default)
     value = row["value"]
@@ -113,7 +114,7 @@ def regenerate_agent_api_token() -> str:
         conn.execute(
             """
             INSERT INTO app_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
             ("agent_api_token", token, now),
@@ -195,7 +196,7 @@ def update_settings(updates: dict[str, str | None]) -> dict[str, Any]:
             conn.execute(
                 """
                 INSERT INTO app_settings (key, value, updated_at)
-                VALUES (?, ?, ?)
+                VALUES (%s, %s, %s)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
                 """,
                 (key, value.strip(), now),

@@ -1,76 +1,64 @@
 from __future__ import annotations
 
-import os
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
+import psycopg
+
+from app.db import db_path, get_conn
 from app.security import hash_password
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = ROOT_DIR / "data" / "salescrm.db"
-
 FOLLOW_UP_STATUSES = ("new", "contacted", "replied", "invalid", "interested")
-
-
-def db_path() -> Path:
-    configured = os.getenv("DATABASE_PATH")
-    if configured:
-        return Path(configured)
-    return DEFAULT_DB_PATH
-
-
-@contextmanager
-def get_conn():
-    path = db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {row["name"] for row in rows}
+def _iso(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
 
 
-def _migrate_contacts(conn: sqlite3.Connection) -> None:
+def _table_columns(conn, table: str) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table,),
+    ).fetchall()
+    return {row["column_name"] for row in rows}
+
+
+def _migrate_contacts(conn) -> None:
     columns = _table_columns(conn, "contacts")
     if "email_sent" not in columns:
-        conn.execute("ALTER TABLE contacts ADD COLUMN email_sent INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "ALTER TABLE contacts ADD COLUMN email_sent BOOLEAN NOT NULL DEFAULT FALSE"
+        )
     if "email_sent_at" not in columns:
-        conn.execute("ALTER TABLE contacts ADD COLUMN email_sent_at TEXT")
+        conn.execute("ALTER TABLE contacts ADD COLUMN email_sent_at TIMESTAMPTZ")
     if "follow_up_status" not in columns:
         conn.execute(
             "ALTER TABLE contacts ADD COLUMN follow_up_status TEXT NOT NULL DEFAULT 'new'"
         )
         conn.execute(
-            "UPDATE contacts SET follow_up_status = 'contacted' WHERE email_sent = 1"
+            "UPDATE contacts SET follow_up_status = 'contacted' WHERE email_sent = TRUE"
         )
 
     dedupe_contacts(conn=conn)
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_user_email ON contacts(user_id, email)")
-    try:
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_user_email_unique ON contacts(user_id, email)"
-        )
-    except sqlite3.IntegrityError:
-        dedupe_contacts(conn=conn)
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_user_email_unique ON contacts(user_id, email)"
-        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_user_email_unique ON contacts(user_id, email)"
+    )
 
 
 REQUIRED_TABLES = (
@@ -82,6 +70,8 @@ REQUIRED_TABLES = (
     "contact_notes",
     "job_runs",
     "email_templates",
+    "pi_chat_threads",
+    "asn_lookup_cache",
 )
 
 
@@ -90,7 +80,7 @@ def check_db() -> bool:
         with get_conn() as conn:
             conn.execute("SELECT 1").fetchone()
         return True
-    except sqlite3.Error:
+    except psycopg.Error:
         return False
 
 
@@ -99,30 +89,37 @@ def check_schema() -> bool:
         with get_conn() as conn:
             for table in REQUIRED_TABLES:
                 row = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    """
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = %s
+                    """,
                     (table,),
                 ).fetchone()
                 if not row:
                     return False
         return True
-    except sqlite3.Error:
+    except psycopg.Error:
         return False
 
 
 def init_db() -> None:
     with get_conn() as conn:
-        conn.executescript(
+        conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS contacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 asn INTEGER,
                 org TEXT,
                 name TEXT,
@@ -132,96 +129,144 @@ def init_db() -> None:
                 rir TEXT,
                 source TEXT NOT NULL DEFAULT 'arin',
                 notes TEXT,
-                email_sent INTEGER NOT NULL DEFAULT 0,
-                email_sent_at TEXT,
+                email_sent BOOLEAN NOT NULL DEFAULT FALSE,
+                email_sent_at TIMESTAMPTZ,
                 follow_up_status TEXT NOT NULL DEFAULT 'new',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS scheduled_jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 name TEXT NOT NULL,
                 query TEXT NOT NULL,
                 interval_hours INTEGER NOT NULL DEFAULT 24,
                 min_score INTEGER NOT NULL DEFAULT 60,
-                auto_import INTEGER NOT NULL DEFAULT 1,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                last_run_at TEXT,
+                auto_import BOOLEAN NOT NULL DEFAULT TRUE,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                last_run_at TIMESTAMPTZ,
                 last_run_status TEXT,
                 last_run_message TEXT,
-                next_run_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
+                next_run_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS contact_notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contact_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                contact_id INTEGER NOT NULL REFERENCES contacts(id),
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 body TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(contact_id) REFERENCES contacts(id),
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
-            CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
-            CREATE INDEX IF NOT EXISTS idx_contact_notes_contact ON contact_notes(contact_id, created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(enabled, next_run_at);
-
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS job_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL REFERENCES scheduled_jobs(id) ON DELETE CASCADE,
                 status TEXT NOT NULL,
                 message TEXT,
                 leads_found INTEGER NOT NULL DEFAULT 0,
                 imported INTEGER NOT NULL DEFAULT 0,
-                ran_at TEXT NOT NULL,
-                FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id) ON DELETE CASCADE
-            );
-
+                ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS email_templates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 name TEXT NOT NULL,
                 subject TEXT NOT NULL DEFAULT '',
                 body TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_email_templates_user ON email_templates(user_id, updated_at DESC);
-
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS background_jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
                 job_type TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 params_json TEXT NOT NULL DEFAULT '{}',
                 progress_json TEXT NOT NULL DEFAULT '{}',
                 result_json TEXT,
                 message TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                finished_at TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_background_jobs_user_status
-                ON background_jobs(user_id, status, updated_at DESC);
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                finished_at TIMESTAMPTZ
+            )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS asn_lookup_cache (
+                cache_key TEXT PRIMARY KEY,
+                asn INTEGER NOT NULL,
+                rir TEXT,
+                payload_json TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pi_chat_threads (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                title TEXT NOT NULL DEFAULT '',
+                history_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_contact_notes_contact ON contact_notes(contact_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(enabled, next_run_at)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_email_templates_user ON email_templates(user_id, updated_at DESC)"
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_background_jobs_user_status
+                ON background_jobs(user_id, status, updated_at DESC)
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asn_lookup_cache_expires ON asn_lookup_cache(expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pi_chat_threads_user ON pi_chat_threads(user_id, updated_at DESC)"
         )
 
         _migrate_contacts(conn)
@@ -240,15 +285,15 @@ def init_db() -> None:
             ).fetchone()["value"]
             now = utc_now()
             conn.execute(
-                "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                "INSERT INTO users (username, password_hash, created_at) VALUES (%s, %s, %s)",
                 (admin_user, hash_password(admin_pass), now),
             )
 
 
-def get_user_by_username(username: str) -> sqlite3.Row | None:
+def get_user_by_username(username: str) -> dict | None:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT id, username, password_hash FROM users WHERE username = ?",
+            "SELECT id, username, password_hash FROM users WHERE username = %s",
             (username.strip(),),
         ).fetchone()
 
@@ -265,18 +310,18 @@ def get_agent_owner_user_id() -> int | None:
     return int(first["id"]) if first else None
 
 
-def get_user_by_id(user_id: int) -> sqlite3.Row | None:
+def get_user_by_id(user_id: int) -> dict | None:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT id, username FROM users WHERE id = ?",
+            "SELECT id, username FROM users WHERE id = %s",
             (user_id,),
         ).fetchone()
 
 
-def get_user_auth_by_id(user_id: int) -> sqlite3.Row | None:
+def get_user_auth_by_id(user_id: int) -> dict | None:
     with get_conn() as conn:
         return conn.execute(
-            "SELECT id, username, password_hash FROM users WHERE id = ?",
+            "SELECT id, username, password_hash FROM users WHERE id = %s",
             (user_id,),
         ).fetchone()
 
@@ -284,15 +329,20 @@ def get_user_auth_by_id(user_id: int) -> sqlite3.Row | None:
 def update_user_password(user_id: int, new_password: str) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
+            "UPDATE users SET password_hash = %s WHERE id = %s",
             (hash_password(new_password), user_id),
         )
         return cursor.rowcount > 0
 
 
-def _contact_from_row(row: sqlite3.Row) -> dict:
+def _contact_from_row(row: dict | None) -> dict:
+    if not row:
+        return {}
     data = dict(row)
     data["email_sent"] = bool(data.get("email_sent"))
+    data["created_at"] = _iso(data.get("created_at"))
+    data["updated_at"] = _iso(data.get("updated_at"))
+    data["email_sent_at"] = _iso(data.get("email_sent_at"))
     if not data.get("follow_up_status"):
         data["follow_up_status"] = "new"
     return data
@@ -305,20 +355,20 @@ def _contact_filter_clause(
     follow_up_status: str | None = None,
     q: str | None = None,
 ) -> tuple[str, list[object]]:
-    clauses = ["user_id = ?"]
+    clauses = ["user_id = %s"]
     params: list[object] = [user_id]
     if status == "sent":
-        clauses.append("email_sent = 1")
+        clauses.append("email_sent = TRUE")
     elif status == "unsent":
-        clauses.append("email_sent = 0")
+        clauses.append("email_sent = FALSE")
     if follow_up_status and follow_up_status != "all":
-        clauses.append("follow_up_status = ?")
+        clauses.append("follow_up_status = %s")
         params.append(follow_up_status)
     if q and q.strip():
         like = f"%{q.strip().lower()}%"
         clauses.append(
-            "(lower(org) LIKE ? OR lower(name) LIKE ? OR lower(email) LIKE ? "
-            "OR lower(notes) LIKE ? OR lower(roles) LIKE ?)"
+            "(lower(org) LIKE %s OR lower(name) LIKE %s OR lower(email) LIKE %s "
+            "OR lower(notes) LIKE %s OR lower(roles) LIKE %s)"
         )
         params.extend([like, like, like, like, like])
     return " AND ".join(clauses), params
@@ -362,7 +412,7 @@ def list_contacts(
         ORDER BY email_sent ASC, created_at DESC, id DESC
     """
     if limit is not None:
-        sql += " LIMIT ? OFFSET ?"
+        sql += " LIMIT %s OFFSET %s"
         params = [*params, limit, offset]
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
@@ -376,7 +426,7 @@ def get_contact(user_id: int, contact_id: int) -> dict | None:
             SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
                    email_sent, email_sent_at, follow_up_status, created_at, updated_at
             FROM contacts
-            WHERE id = ? AND user_id = ?
+            WHERE id = %s AND user_id = %s
             """,
             (contact_id, user_id),
         ).fetchone()
@@ -386,7 +436,7 @@ def get_contact(user_id: int, contact_id: int) -> dict | None:
 def list_contact_emails(user_id: int) -> set[str]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT lower(email) AS email FROM contacts WHERE user_id = ?",
+            "SELECT lower(email) AS email FROM contacts WHERE user_id = %s",
             (user_id,),
         ).fetchall()
     return {row["email"] for row in rows if row["email"]}
@@ -395,7 +445,7 @@ def list_contact_emails(user_id: int) -> set[str]:
 def contact_exists(user_id: int, email: str) -> bool:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT 1 FROM contacts WHERE user_id = ? AND lower(email) = lower(?) LIMIT 1",
+            "SELECT 1 FROM contacts WHERE user_id = %s AND lower(email) = lower(%s) LIMIT 1",
             (user_id, email.strip()),
         ).fetchone()
     return row is not None
@@ -456,7 +506,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 continue
 
             existing = conn.execute(
-                "SELECT id, org, name, roles, notes FROM contacts WHERE user_id = ? AND lower(email) = ?",
+                "SELECT id, org, name, roles, notes FROM contacts WHERE user_id = %s AND lower(email) = %s",
                 (user_id, email),
             ).fetchone()
             if existing:
@@ -470,12 +520,12 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 conn.execute(
                     """
                     UPDATE contacts
-                    SET org = ?,
-                        name = ?,
-                        roles = ?,
-                        notes = ?,
-                        updated_at = ?
-                    WHERE id = ?
+                    SET org = %s,
+                        name = %s,
+                        roles = %s,
+                        notes = %s,
+                        updated_at = %s
+                    WHERE id = %s
                     """,
                     (
                         merged_org,
@@ -495,7 +545,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 INSERT INTO contacts (
                     user_id, asn, org, name, email, roles, handle, rir, source, notes,
                     email_sent, email_sent_at, follow_up_status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 'new', ?, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, 'new', %s, %s)
                 """,
                 (
                     user_id,
@@ -546,8 +596,8 @@ def mark_contact_sent(user_id: int, contact_id: int, *, sent: bool = True) -> bo
             cursor = conn.execute(
                 """
                 UPDATE contacts
-                SET email_sent = 1, email_sent_at = ?, follow_up_status = 'contacted', updated_at = ?
-                WHERE id = ? AND user_id = ?
+                SET email_sent = TRUE, email_sent_at = %s, follow_up_status = 'contacted', updated_at = %s
+                WHERE id = %s AND user_id = %s
                 """,
                 (now, now, contact_id, user_id),
             )
@@ -555,8 +605,8 @@ def mark_contact_sent(user_id: int, contact_id: int, *, sent: bool = True) -> bo
             cursor = conn.execute(
                 """
                 UPDATE contacts
-                SET email_sent = 0, email_sent_at = NULL, updated_at = ?
-                WHERE id = ? AND user_id = ?
+                SET email_sent = FALSE, email_sent_at = NULL, updated_at = %s
+                WHERE id = %s AND user_id = %s
                 """,
                 (now, contact_id, user_id),
             )
@@ -573,8 +623,8 @@ def update_contact_follow_up_status(
         cursor = conn.execute(
             """
             UPDATE contacts
-            SET follow_up_status = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
+            SET follow_up_status = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s
             """,
             (follow_up_status, now, contact_id, user_id),
         )
@@ -605,19 +655,19 @@ def update_contact(
                 """
                 SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
                        email_sent, email_sent_at, follow_up_status, created_at, updated_at
-                FROM contacts WHERE id = ? AND user_id = ?
+                FROM contacts WHERE id = %s AND user_id = %s
                 """,
                 (contact_id, user_id),
             ).fetchone()
         return _contact_from_row(row) if row else None
 
     updates["updated_at"] = utc_now()
-    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    set_clause = ", ".join(f"{key} = %s" for key in updates)
     params = list(updates.values()) + [contact_id, user_id]
 
     with get_conn() as conn:
         cursor = conn.execute(
-            f"UPDATE contacts SET {set_clause} WHERE id = ? AND user_id = ?",
+            f"UPDATE contacts SET {set_clause} WHERE id = %s AND user_id = %s",
             params,
         )
         if cursor.rowcount == 0:
@@ -626,7 +676,7 @@ def update_contact(
             """
             SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
                    email_sent, email_sent_at, follow_up_status, created_at, updated_at
-            FROM contacts WHERE id = ? AND user_id = ?
+            FROM contacts WHERE id = %s AND user_id = %s
             """,
             (contact_id, user_id),
         ).fetchone()
@@ -659,9 +709,9 @@ def bulk_delete_contacts(user_id: int, contact_ids: list[int]) -> dict:
     return {"deleted": deleted, "requested": len(contact_ids)}
 
 
-def _contact_owned(conn: sqlite3.Connection, user_id: int, contact_id: int) -> bool:
+def _contact_owned(conn: Any, user_id: int, contact_id: int) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM contacts WHERE id = ? AND user_id = ?",
+        "SELECT 1 FROM contacts WHERE id = %s AND user_id = %s",
         (contact_id, user_id),
     ).fetchone()
     return row is not None
@@ -675,7 +725,7 @@ def list_contact_notes(user_id: int, contact_id: int) -> list[dict] | None:
             """
             SELECT id, contact_id, user_id, body, created_at
             FROM contact_notes
-            WHERE contact_id = ? AND user_id = ?
+            WHERE contact_id = %s AND user_id = %s
             ORDER BY created_at DESC, id DESC
             """,
             (contact_id, user_id),
@@ -691,17 +741,13 @@ def create_contact_note(user_id: int, contact_id: int, body: str) -> dict | None
     with get_conn() as conn:
         if not _contact_owned(conn, user_id, contact_id):
             return None
-        cursor = conn.execute(
+        row = conn.execute(
             """
             INSERT INTO contact_notes (contact_id, user_id, body, created_at)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, contact_id, user_id, body, created_at
             """,
             (contact_id, user_id, text, now),
-        )
-        note_id = cursor.lastrowid
-        row = conn.execute(
-            "SELECT id, contact_id, user_id, body, created_at FROM contact_notes WHERE id = ?",
-            (note_id,),
         ).fetchone()
     return dict(row) if row else None
 
@@ -713,7 +759,7 @@ def delete_contact_note(user_id: int, contact_id: int, note_id: int) -> bool:
         cursor = conn.execute(
             """
             DELETE FROM contact_notes
-            WHERE id = ? AND contact_id = ? AND user_id = ?
+            WHERE id = %s AND contact_id = %s AND user_id = %s
             """,
             (note_id, contact_id, user_id),
         )
@@ -723,22 +769,22 @@ def delete_contact_note(user_id: int, contact_id: int, note_id: int) -> bool:
 def delete_contact(user_id: int, contact_id: int) -> bool:
     with get_conn() as conn:
         conn.execute(
-            "DELETE FROM contact_notes WHERE contact_id = ? AND user_id = ?",
+            "DELETE FROM contact_notes WHERE contact_id = %s AND user_id = %s",
             (contact_id, user_id),
         )
         cursor = conn.execute(
-            "DELETE FROM contacts WHERE id = ? AND user_id = ?",
+            "DELETE FROM contacts WHERE id = %s AND user_id = %s",
             (contact_id, user_id),
         )
         return cursor.rowcount > 0
 
 
-def dedupe_contacts(*, user_id: int | None = None, conn: sqlite3.Connection | None = None) -> dict:
+def dedupe_contacts(*, user_id: int | None = None, conn: Any | None = None) -> dict:
     removed = 0
 
-    def run(connection: sqlite3.Connection) -> dict:
+    def run(connection: Any) -> dict:
         nonlocal removed
-        where = "WHERE user_id = ?" if user_id is not None else ""
+        where = "WHERE user_id = %s" if user_id is not None else ""
         params = [user_id] if user_id is not None else []
         rows = connection.execute(
             f"""
@@ -754,7 +800,7 @@ def dedupe_contacts(*, user_id: int | None = None, conn: sqlite3.Connection | No
         for row in rows:
             key = (row["user_id"], (row["email"] or "").lower())
             if key in seen:
-                connection.execute("DELETE FROM contacts WHERE id = ?", (row["id"],))
+                connection.execute("DELETE FROM contacts WHERE id = %s", (row["id"],))
                 removed += 1
                 continue
             seen.add(key)
@@ -775,7 +821,7 @@ def list_scheduled_jobs(user_id: int) -> list[dict]:
                    last_run_at, last_run_status, last_run_message, next_run_at,
                    created_at, updated_at
             FROM scheduled_jobs
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY created_at DESC, id DESC
             """,
             (user_id,),
@@ -792,7 +838,7 @@ def list_scheduled_jobs(user_id: int) -> list[dict]:
 def get_scheduled_job(user_id: int, job_id: int) -> dict | None:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM scheduled_jobs WHERE id = ? AND user_id = ?",
+            "SELECT * FROM scheduled_jobs WHERE id = %s AND user_id = %s",
             (job_id, user_id),
         ).fetchone()
     if not row:
@@ -815,12 +861,13 @@ def create_scheduled_job(
 ) -> dict:
     now = utc_now()
     with get_conn() as conn:
-        cursor = conn.execute(
+        row = conn.execute(
             """
             INSERT INTO scheduled_jobs (
                 user_id, name, query, interval_hours, min_score, auto_import, enabled,
                 next_run_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 user_id,
@@ -828,14 +875,14 @@ def create_scheduled_job(
                 query.strip(),
                 interval_hours,
                 min_score,
-                1 if auto_import else 0,
-                1 if enabled else 0,
+                auto_import,
+                enabled,
                 now,
                 now,
                 now,
             ),
-        )
-        job_id = cursor.lastrowid
+        ).fetchone()
+        job_id = int(row["id"])
     job = get_scheduled_job(user_id, job_id)
     assert job is not None
     return job
@@ -848,17 +895,17 @@ def update_scheduled_job(user_id: int, job_id: int, **fields) -> dict | None:
         return get_scheduled_job(user_id, job_id)
 
     if "auto_import" in updates:
-        updates["auto_import"] = 1 if updates["auto_import"] else 0
+        updates["auto_import"] = bool(updates["auto_import"])
     if "enabled" in updates:
-        updates["enabled"] = 1 if updates["enabled"] else 0
+        updates["enabled"] = bool(updates["enabled"])
 
     updates["updated_at"] = utc_now()
-    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    set_clause = ", ".join(f"{key} = %s" for key in updates)
     params = list(updates.values()) + [job_id, user_id]
 
     with get_conn() as conn:
         cursor = conn.execute(
-            f"UPDATE scheduled_jobs SET {set_clause} WHERE id = ? AND user_id = ?",
+            f"UPDATE scheduled_jobs SET {set_clause} WHERE id = %s AND user_id = %s",
             params,
         )
         if cursor.rowcount == 0:
@@ -869,7 +916,7 @@ def update_scheduled_job(user_id: int, job_id: int, **fields) -> dict | None:
 def delete_scheduled_job(user_id: int, job_id: int) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
-            "DELETE FROM scheduled_jobs WHERE id = ? AND user_id = ?",
+            "DELETE FROM scheduled_jobs WHERE id = %s AND user_id = %s",
             (job_id, user_id),
         )
         return cursor.rowcount > 0
@@ -882,7 +929,7 @@ def list_due_scheduled_jobs() -> list[dict]:
             """
             SELECT *
             FROM scheduled_jobs
-            WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?)
+            WHERE enabled = TRUE AND (next_run_at IS NULL OR next_run_at <= %s)
             ORDER BY next_run_at ASC, id ASC
             """,
             (now,),
@@ -904,9 +951,9 @@ def mark_job_run(job_id: int, *, status: str, message: str, interval_hours: int)
         conn.execute(
             """
             UPDATE scheduled_jobs
-            SET last_run_at = ?, last_run_status = ?, last_run_message = ?,
-                next_run_at = ?, updated_at = ?
-            WHERE id = ?
+            SET last_run_at = %s, last_run_status = %s, last_run_message = %s,
+                next_run_at = %s, updated_at = %s
+            WHERE id = %s
             """,
             (now, status, message[:500], next_run, now, job_id),
         )
@@ -924,7 +971,7 @@ def insert_job_run(
         conn.execute(
             """
             INSERT INTO job_runs (job_id, status, message, leads_found, imported, ran_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (job_id, status, message[:500], leads_found, imported, utc_now()),
         )
@@ -938,9 +985,9 @@ def list_job_runs(user_id: int, job_id: int, *, limit: int = 20) -> list[dict] |
             """
             SELECT id, job_id, status, message, leads_found, imported, ran_at
             FROM job_runs
-            WHERE job_id = ?
+            WHERE job_id = %s
             ORDER BY ran_at DESC, id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (job_id, limit),
         ).fetchall()
@@ -953,7 +1000,7 @@ def list_email_templates(user_id: int) -> list[dict]:
             """
             SELECT id, name, subject, body, created_at, updated_at
             FROM email_templates
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY updated_at DESC, id DESC
             """,
             (user_id,),
@@ -967,7 +1014,7 @@ def get_email_template(user_id: int, template_id: int) -> dict | None:
             """
             SELECT id, name, subject, body, created_at, updated_at
             FROM email_templates
-            WHERE id = ? AND user_id = ?
+            WHERE id = %s AND user_id = %s
             """,
             (template_id, user_id),
         ).fetchone()
@@ -979,14 +1026,15 @@ def create_email_template(
 ) -> dict:
     now = utc_now()
     with get_conn() as conn:
-        cursor = conn.execute(
+        row = conn.execute(
             """
             INSERT INTO email_templates (user_id, name, subject, body, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (user_id, name.strip(), subject, body, now, now),
-        )
-        template_id = cursor.lastrowid
+        ).fetchone()
+        template_id = int(row["id"])
     return get_email_template(user_id, template_id)  # type: ignore[arg-type]
 
 
@@ -1009,12 +1057,12 @@ def update_email_template(
         return get_email_template(user_id, template_id)
 
     updates["updated_at"] = utc_now()
-    set_clause = ", ".join(f"{key} = ?" for key in updates)
+    set_clause = ", ".join(f"{key} = %s" for key in updates)
     params = list(updates.values()) + [template_id, user_id]
 
     with get_conn() as conn:
         cursor = conn.execute(
-            f"UPDATE email_templates SET {set_clause} WHERE id = ? AND user_id = ?",
+            f"UPDATE email_templates SET {set_clause} WHERE id = %s AND user_id = %s",
             params,
         )
         if cursor.rowcount == 0:
@@ -1025,7 +1073,7 @@ def update_email_template(
 def delete_email_template(user_id: int, template_id: int) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
-            "DELETE FROM email_templates WHERE id = ? AND user_id = ?",
+            "DELETE FROM email_templates WHERE id = %s AND user_id = %s",
             (template_id, user_id),
         )
         return cursor.rowcount > 0
@@ -1035,9 +1083,9 @@ def get_contact_stats(user_id: int) -> dict:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT follow_up_status, email_sent, source, date(created_at) AS day
+            SELECT follow_up_status, email_sent, source, (created_at::date)::text AS day
             FROM contacts
-            WHERE user_id = ?
+            WHERE user_id = %s
             """,
             (user_id,),
         ).fetchall()
@@ -1116,15 +1164,16 @@ def create_background_job(user_id: int, job_type: str, params: dict) -> dict:
 
     now = utc_now()
     with get_conn() as conn:
-        cursor = conn.execute(
+        row = conn.execute(
             """
             INSERT INTO background_jobs (
                 user_id, job_type, status, params_json, progress_json, created_at, updated_at
-            ) VALUES (?, ?, 'pending', ?, '{}', ?, ?)
+            ) VALUES (%s, %s, 'pending', %s, '{}', %s, %s)
+            RETURNING id
             """,
             (user_id, job_type, _json.dumps(params, ensure_ascii=False), now, now),
-        )
-        job_id = cursor.lastrowid
+        ).fetchone()
+        job_id = int(row["id"])
     job = get_background_job(job_id, user_id=user_id)
     assert job is not None
     return job
@@ -1134,19 +1183,19 @@ def get_background_job(job_id: int, *, user_id: int | None = None) -> dict | Non
     with get_conn() as conn:
         if user_id is None:
             row = conn.execute(
-                "SELECT * FROM background_jobs WHERE id = ?",
+                "SELECT * FROM background_jobs WHERE id = %s",
                 (job_id,),
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT * FROM background_jobs WHERE id = ? AND user_id = ?",
+                "SELECT * FROM background_jobs WHERE id = %s AND user_id = %s",
                 (job_id, user_id),
             ).fetchone()
     return dict(row) if row else None
 
 
 def list_background_jobs(user_id: int, *, active_only: bool = False) -> list[dict]:
-    query = "SELECT * FROM background_jobs WHERE user_id = ?"
+    query = "SELECT * FROM background_jobs WHERE user_id = %s"
     params: list[object] = [user_id]
     if active_only:
         query += " AND status IN ('pending', 'running')"
@@ -1167,27 +1216,27 @@ def update_background_job(
 ) -> None:
     import json as _json
 
-    fields: list[str] = ["updated_at = ?"]
+    fields: list[str] = ["updated_at = %s"]
     values: list[object] = [utc_now()]
     if status is not None:
-        fields.append("status = ?")
+        fields.append("status = %s")
         values.append(status)
     if message is not None:
-        fields.append("message = ?")
+        fields.append("message = %s")
         values.append(message[:500])
     if progress is not None:
-        fields.append("progress_json = ?")
+        fields.append("progress_json = %s")
         values.append(_json.dumps(progress, ensure_ascii=False))
     if result is not None:
-        fields.append("result_json = ?")
+        fields.append("result_json = %s")
         values.append(_json.dumps(result, ensure_ascii=False))
     if finished_at:
-        fields.append("finished_at = ?")
+        fields.append("finished_at = %s")
         values.append(utc_now())
     values.append(job_id)
     with get_conn() as conn:
         conn.execute(
-            f"UPDATE background_jobs SET {', '.join(fields)} WHERE id = ?",
+            f"UPDATE background_jobs SET {', '.join(fields)} WHERE id = %s",
             values,
         )
 
@@ -1200,8 +1249,8 @@ def mark_interrupted_background_jobs() -> None:
             UPDATE background_jobs
             SET status = 'error',
                 message = '服务重启，任务中断',
-                updated_at = ?,
-                finished_at = ?
+                updated_at = %s,
+                finished_at = %s
             WHERE status IN ('pending', 'running')
             """,
             (now, now),

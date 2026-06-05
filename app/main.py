@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -31,7 +31,6 @@ from app.database import (
     create_contact_note,
     create_scheduled_job,
     create_email_template,
-    db_path,
     dedupe_contacts,
     delete_contact,
     delete_contact_note,
@@ -66,6 +65,14 @@ from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.scheduler import run_scheduled_job, start_scheduler, stop_scheduler
 from app.security import verify_password
+from app.pi_chat_store import (
+    create_pi_thread,
+    delete_pi_thread,
+    get_pi_thread,
+    list_pi_threads,
+    sync_pi_threads_from_client,
+    upsert_pi_thread,
+)
 from app.settings_store import (
     get_public_settings,
     get_settings_for_edit,
@@ -79,11 +86,10 @@ from arin_lookup import lookup_asns_batch, parse_asns_from_text, rows_to_csv
 APP_DIR = Path(__file__).resolve().parent
 MAX_ASNS = 200
 
-init_db()
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    init_db()
     recover_background_jobs_on_startup()
     await start_scheduler()
     yield
@@ -210,6 +216,21 @@ class EmailTemplateUpdateRequest(BaseModel):
 class AgentChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     history: list[dict[str, str]] = Field(default_factory=list)
+    thread_id: str | None = Field(default=None, max_length=64)
+
+
+class PiThreadCreateRequest(BaseModel):
+    title: str = Field(default="", max_length=200)
+
+
+class PiThreadUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    history: list[dict] | None = None
+
+
+class PiThreadSyncRequest(BaseModel):
+    threads: list[dict] = Field(default_factory=list)
+    active_thread_id: str | None = Field(default=None, max_length=64)
 
 
 def render_page(filename: str) -> HTMLResponse:
@@ -289,15 +310,20 @@ def stats(user: CurrentUser) -> dict:
 
 
 @app.get("/api/backup")
-def download_backup(_: CurrentUser) -> FileResponse:
-    path = db_path()
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="数据库文件不存在")
-    filename = f"salescrm_backup_{time.strftime('%Y%m%d_%H%M%S')}.db"
-    return FileResponse(
-        path,
-        media_type="application/octet-stream",
-        filename=filename,
+def download_backup(user: CurrentUser) -> Response:
+    contacts = list_contacts(user["id"], limit=100000)
+    payload = {
+        "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "database": "postgresql",
+        "contacts": contacts,
+        "stats": get_contact_stats(user["id"]),
+    }
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    filename = f"salescrm_backup_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -609,7 +635,12 @@ async def agent_chat_stream_route(body: AgentChatRequest, user: CurrentUser) -> 
         )
 
     async def event_generator():
-        async for event in agent_chat_stream(user["id"], body.message, body.history):
+        async for event in agent_chat_stream(
+            user["id"],
+            body.message,
+            body.history,
+            thread_id=body.thread_id,
+        ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -617,6 +648,54 @@ async def agent_chat_stream_route(body: AgentChatRequest, user: CurrentUser) -> 
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/pi/threads")
+def get_pi_threads(user: CurrentUser) -> dict:
+    return {"threads": list_pi_threads(user["id"])}
+
+
+@app.get("/api/pi/threads/{thread_id}")
+def get_pi_thread_route(thread_id: str, user: CurrentUser) -> dict:
+    thread = get_pi_thread(user["id"], thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return thread
+
+
+@app.post("/api/pi/threads")
+def create_pi_thread_route(body: PiThreadCreateRequest, user: CurrentUser) -> dict:
+    return create_pi_thread(user["id"], title=body.title)
+
+
+@app.put("/api/pi/threads/{thread_id}")
+def update_pi_thread_route(
+    thread_id: str, body: PiThreadUpdateRequest, user: CurrentUser
+) -> dict:
+    thread = upsert_pi_thread(
+        user["id"],
+        thread_id,
+        title=body.title,
+        history=body.history,
+    )
+    if not thread:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return thread
+
+
+@app.delete("/api/pi/threads/{thread_id}")
+def delete_pi_thread_route(thread_id: str, user: CurrentUser) -> dict:
+    if not delete_pi_thread(user["id"], thread_id):
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return {"ok": True}
+
+
+@app.post("/api/pi/threads/sync")
+def sync_pi_threads_route(body: PiThreadSyncRequest, user: CurrentUser) -> dict:
+    result = sync_pi_threads_from_client(user["id"], body.threads)
+    if body.active_thread_id:
+        result["active_thread_id"] = body.active_thread_id
+    return result
 
 
 @app.post("/api/lookup/parse")

@@ -151,7 +151,7 @@ let llmConfigured = false;
 let currentUserId = null;
 const PI_CHAT_STORAGE_VERSION = "v1";
 const PI_THREADS_STORAGE_VERSION = "v2";
-const PI_CHAT_MAX_STORED = 40;
+const PI_CHAT_MAX_STORED = 200;
 const PI_THREADS_MAX = 30;
 let piThreads = [];
 let activePiThreadId = null;
@@ -1431,22 +1431,8 @@ function renderPiThreadList() {
 }
 
 function savePiThreadsStore() {
-  if (!currentUserId) return;
-  syncActivePiThreadHistory();
-  try {
-    localStorage.setItem(
-      piThreadsStorageKey(currentUserId),
-      JSON.stringify({
-        activeThreadId: activePiThreadId,
-        threads: piThreads.slice(0, PI_THREADS_MAX),
-        updatedAt: Date.now(),
-      }),
-    );
-    renderPiThreadList();
-    updatePiChatHistoryHint();
-  } catch {
-    // ignore quota errors
-  }
+  savePiThreadsStoreLocal();
+  persistActivePiThread().catch(() => {});
 }
 
 function migratePiChatV1ToThreads(userId) {
@@ -1510,6 +1496,130 @@ function recoverLegacyPiHistory(userId) {
   }
   savePiThreadsStore();
   return true;
+}
+
+function mapServerPiThreadSummary(row) {
+  return {
+    id: row.id,
+    title: row.title || "",
+    history: [],
+    createdAt: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
+    updatedAt: row.updated_at ? Date.parse(row.updated_at) || Date.now() : Date.now(),
+  };
+}
+
+function mapServerPiThreadFull(row) {
+  return {
+    id: row.id,
+    title: row.title || "",
+    history: normalizeHistoryItems(row.history),
+    createdAt: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
+    updatedAt: row.updated_at ? Date.parse(row.updated_at) || Date.now() : Date.now(),
+  };
+}
+
+async function fetchActivePiThreadHistory() {
+  if (!activePiThreadId) return;
+  try {
+    const thread = await api(`/api/pi/threads/${encodeURIComponent(activePiThreadId)}`);
+    const mapped = mapServerPiThreadFull(thread);
+    const index = piThreads.findIndex((item) => item.id === mapped.id);
+    if (index >= 0) {
+      piThreads[index] = { ...piThreads[index], ...mapped };
+    }
+    piChatHistory = mapped.history;
+  } catch {
+    const active = getActivePiThread();
+    piChatHistory = normalizeHistoryItems(active?.history);
+  }
+}
+
+async function syncPiThreadsToServer() {
+  if (!currentUserId) return;
+  syncActivePiThreadHistory();
+  await api("/api/pi/threads/sync", {
+    method: "POST",
+    body: JSON.stringify({
+      threads: piThreads.map((thread) => ({
+        id: thread.id,
+        title: thread.title || "",
+        history: thread.history || [],
+      })),
+      active_thread_id: activePiThreadId,
+    }),
+  });
+}
+
+async function persistActivePiThread() {
+  if (!activePiThreadId) return;
+  syncActivePiThreadHistory();
+  const thread = getActivePiThread();
+  if (!thread) return;
+  await api(`/api/pi/threads/${encodeURIComponent(activePiThreadId)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      title: thread.title || "",
+      history: thread.history || [],
+    }),
+  });
+}
+
+async function loadPiChatFromServer(userId) {
+  piThreads = [];
+  activePiThreadId = null;
+  piChatHistory = [];
+  try {
+    const data = await api("/api/pi/threads");
+    piThreads = Array.isArray(data.threads)
+      ? data.threads.map(mapServerPiThreadSummary).slice(0, PI_THREADS_MAX)
+      : [];
+  } catch {
+    loadPiThreadsFromStorage(userId);
+    restorePiChatUi();
+    return;
+  }
+
+  if (!piThreads.length) {
+    loadPiThreadsFromStorage(userId);
+    if (piThreads.length) {
+      try {
+        await syncPiThreadsToServer();
+      } catch {
+        // keep local copy if sync fails
+      }
+    } else {
+      beginPiThread();
+      return;
+    }
+  } else {
+    recoverLegacyPiHistory(userId);
+  }
+
+  if (!activePiThreadId || !piThreads.some((thread) => thread.id === activePiThreadId)) {
+    activePiThreadId = piThreads[0]?.id || null;
+  }
+  await fetchActivePiThreadHistory();
+  restorePiChatUi();
+  savePiThreadsStoreLocal();
+}
+
+function savePiThreadsStoreLocal() {
+  if (!currentUserId) return;
+  syncActivePiThreadHistory();
+  try {
+    localStorage.setItem(
+      piThreadsStorageKey(currentUserId),
+      JSON.stringify({
+        activeThreadId: activePiThreadId,
+        threads: piThreads.slice(0, PI_THREADS_MAX),
+        updatedAt: Date.now(),
+      }),
+    );
+    renderPiThreadList();
+    updatePiChatHistoryHint();
+  } catch {
+    // ignore quota errors
+  }
 }
 
 function loadPiThreadsFromStorage(userId) {
@@ -1586,26 +1696,31 @@ function createPiThread(title) {
   return thread;
 }
 
-function switchPiThread(threadId) {
+async function switchPiThread(threadId) {
   if (threadId === activePiThreadId) return;
   if (piChatBusy) {
     alert(t("pi.busySwitch"));
     return;
   }
   syncActivePiThreadHistory();
+  savePiThreadsStoreLocal();
   activePiThreadId = threadId;
-  const active = getActivePiThread();
-  piChatHistory = normalizeHistoryItems(active?.history);
+  await fetchActivePiThreadHistory();
   restorePiChatUi();
-  savePiThreadsStore();
+  savePiThreadsStoreLocal();
 }
 
-function deletePiThread(threadId) {
+async function deletePiThread(threadId) {
   if (piChatBusy) {
     alert(t("pi.busySwitch"));
     return;
   }
   if (!window.confirm(t("pi.confirmDeleteThread"))) return;
+  try {
+    await api(`/api/pi/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+  } catch {
+    // still remove locally if server delete fails
+  }
   piThreads = piThreads.filter((thread) => thread.id !== threadId);
   if (!piThreads.length) {
     createPiThread();
@@ -1625,6 +1740,10 @@ function savePiChatHistory() {
 
 function loadPiChatHistoryFromStorage(userId) {
   loadPiThreadsFromStorage(userId);
+}
+
+async function loadPiChatForUser(userId) {
+  await loadPiChatFromServer(userId);
 }
 
 function restorePiChatToolEntry(item) {
@@ -2178,7 +2297,11 @@ async function sendPiChatMessage(message) {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history: piChatHistory.slice(0, -1) }),
+      body: JSON.stringify({
+        message: text,
+        history: piChatHistory.slice(0, -1),
+        thread_id: activePiThreadId,
+      }),
       signal: piChatController.signal,
     });
 
@@ -2844,8 +2967,7 @@ async function bootstrap() {
     const user = await api("/api/me");
     currentUserEl.textContent = user.username;
     currentUserId = user.id;
-    loadPiChatHistoryFromStorage(currentUserId);
-    restorePiChatUi();
+    await loadPiChatForUser(currentUserId);
   } catch {
     window.location.href = "/login";
     return;

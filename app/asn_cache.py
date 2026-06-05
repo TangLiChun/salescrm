@@ -1,4 +1,4 @@
-"""SQLite TTL cache for ASN RDAP lookup results."""
+"""PostgreSQL TTL cache for ASN RDAP lookup results."""
 
 from __future__ import annotations
 
@@ -24,47 +24,28 @@ def _cache_key(asn: int, rir: str | None = None) -> str:
     return str(asn)
 
 
-def _ensure_table() -> None:
-    with get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS asn_lookup_cache (
-                cache_key TEXT PRIMARY KEY,
-                asn INTEGER NOT NULL,
-                rir TEXT,
-                payload_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asn_lookup_cache_expires ON asn_lookup_cache(expires_at)"
-        )
-
-
 def _purge_expired(conn) -> None:
-    conn.execute("DELETE FROM asn_lookup_cache WHERE expires_at <= ?", (utc_now(),))
+    conn.execute("DELETE FROM asn_lookup_cache WHERE expires_at <= %s", (utc_now(),))
 
 
 def get_cached_rows(asn: int, *, rir: str | None = None) -> list[dict] | None:
-    _ensure_table()
     key = _cache_key(asn, rir)
     now = utc_now()
     with get_conn() as conn:
         _purge_expired(conn)
         row = conn.execute(
-            "SELECT payload_json FROM asn_lookup_cache WHERE cache_key = ? AND expires_at > ?",
+            "SELECT payload_json FROM asn_lookup_cache WHERE cache_key = %s AND expires_at > %s",
             (key, now),
         ).fetchone()
         if not row:
             return None
-        payload = json.loads(row["payload_json"])
+        payload = row["payload_json"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
         return payload if isinstance(payload, list) else None
 
 
 def set_cached_rows(asn: int, rows: list[dict], *, rir: str | None = None) -> None:
-    _ensure_table()
     key = _cache_key(asn, rir)
     created = utc_now()
     expires = (
@@ -82,12 +63,12 @@ def set_cached_rows(asn: int, rows: list[dict], *, rir: str | None = None) -> No
         conn.execute(
             """
             INSERT INTO asn_lookup_cache (cache_key, asn, rir, payload_json, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT(cache_key) DO UPDATE SET
-                rir = excluded.rir,
-                payload_json = excluded.payload_json,
-                created_at = excluded.created_at,
-                expires_at = excluded.expires_at
+                rir = EXCLUDED.rir,
+                payload_json = EXCLUDED.payload_json,
+                created_at = EXCLUDED.created_at,
+                expires_at = EXCLUDED.expires_at
             """,
             (key, asn, primary_rir, json.dumps(rows, ensure_ascii=False), created, expires),
         )

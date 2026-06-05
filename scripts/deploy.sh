@@ -479,6 +479,9 @@ print_summary() {
   elif [[ "${SKIP_PI}" != "1" ]]; then
     echo " Pi:      安装未完成，见上方 WARNING 或 integrations/pi/README.md"
   fi
+  echo " 数据库:  PostgreSQL (volume salescrm_pgdata)"
+  echo " 迁移:    旧 SQLite → 复制 data/salescrm.db 到服务器后执行:"
+  echo "          cd ${APP_DIR} && docker compose exec salescrm python scripts/migrate_sqlite_to_pg.py"
   echo " 日志:    cd ${APP_DIR} && docker compose logs -f"
   echo " 重启:    cd ${APP_DIR} && docker compose restart"
   echo " 停止:    cd ${APP_DIR} && docker compose down"

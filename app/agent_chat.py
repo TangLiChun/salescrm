@@ -27,11 +27,16 @@ from app.database import (
 from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
 from app.llm import LLMError, chat_completion_with_tools_stream
+from app.pi_chat_store import (
+    MAX_LLM_HISTORY_MESSAGES,
+    get_pi_thread,
+    history_for_llm,
+)
 from app.settings_store import get_setting, update_settings
 from app.sources import web_search
 
 MAX_TOOL_ROUNDS = 8
-MAX_HISTORY = 20
+MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
 
 AGENT_TOOLS: list[dict[str, Any]] = [
     {
@@ -419,14 +424,8 @@ class ToolEmitter:
         self._queue.put_nowait(("event", payload))
 
 
-def _trim_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
-    cleaned: list[dict[str, str]] = []
-    for item in history[-MAX_HISTORY:]:
-        role = item.get("role")
-        content = (item.get("content") or "").strip()
-        if role in ("user", "assistant") and content:
-            cleaned.append({"role": role, "content": content})
-    return cleaned
+def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return history_for_llm(history)
 
 
 async def _discover_leads_tool(
@@ -726,7 +725,13 @@ async def agent_chat_stream(
     user_id: int,
     message: str,
     history: list[dict[str, str]] | None = None,
+    *,
+    thread_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    if thread_id:
+        thread = get_pi_thread(user_id, thread_id)
+        if thread:
+            history = thread.get("history") or []
     history = _trim_history(history or [])
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)

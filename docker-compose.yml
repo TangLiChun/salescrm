@@ -1,15 +1,38 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: salescrm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-salescrm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salescrm}
+      POSTGRES_DB: ${POSTGRES_DB:-salescrm}
+    volumes:
+      - salescrm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-salescrm} -d ${POSTGRES_DB:-salescrm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   salescrm:
     build: .
     container_name: salescrm
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${APP_PORT:-8000}:8000"
     environment:
       PORT: "8000"
-      DATABASE_PATH: /app/data/salescrm.db
-    volumes:
-      - salescrm_data:/app/data
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-salescrm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salescrm}
+      POSTGRES_DB: ${POSTGRES_DB:-salescrm}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-salescrm}:${POSTGRES_PASSWORD:-salescrm}@postgres:5432/${POSTGRES_DB:-salescrm}
     healthcheck:
       test:
         - CMD
@@ -26,4 +49,4 @@ services:
       start_period: 40s
 
 volumes:
-  salescrm_data:
+  salescrm_pgdata:
