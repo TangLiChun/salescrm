@@ -360,7 +360,7 @@ export async function runLeadDiscovery() {
           }
           if (payload.import) {
             alert(formatImportResult(payload.import));
-            await loadContacts();
+            await deps.loadContacts?.();
           }
           if ((payload.leads || state.aiLeads).length === 0) {
             showLeadsEmpty();
@@ -406,7 +406,7 @@ export async function importAiLeads() {
       body: JSON.stringify({ rows: normalizeImportRows(rows) }),
     });
     alert(formatImportResult(result));
-    await loadContacts();
+    await deps.loadContacts?.();
     deps.switchView("contacts");
   } catch (error) {
     alert(error.message || t("msg.importFailed"));

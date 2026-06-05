@@ -41,6 +41,9 @@ import {
   syncContactsSelectAllCheckbox,
   closeAllContactActionMenus,
   positionContactActionMenu,
+  saveEmailTemplate,
+  editEmailTemplate,
+  deleteEmailTemplate,
 } from "./modules/contacts.js";
 import {
   runLeadDiscovery,
@@ -78,15 +81,13 @@ import {
 } from "./modules/schedules.js";
 import {
   saveSettings,
-  saveEmailTemplate,
-  editEmailTemplate,
-  deleteEmailTemplate,
   regenerateAgentToken,
   copyAgentToken,
   changePassword,
+  switchSettingsCat,
 } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
-import { switchView, refreshUiOnLanguageChange, switchSettingsCat } from "./modules/views.js";
+import { switchView, refreshUiOnLanguageChange } from "./modules/views.js";
 
 const {
   asnInput,

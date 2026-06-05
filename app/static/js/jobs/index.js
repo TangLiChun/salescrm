@@ -8,14 +8,13 @@ import {
   jobTypeLabel,
   jobStatusLabel,
   formatJobTime,
-  openJobsPanel,
-  loadJobsPanelList,
 } from "../core/toast.js";
 import { deps } from "../core/deps.js";
 
 const {
   backgroundJobsBar,
   jobsPanelEl,
+  jobsPanelListEl,
   progressEl,
   progressFill,
   progressText,
@@ -28,6 +27,42 @@ export const backgroundJobTrackers = new Map();
 
 let jobsEventSource = null;
 let jobsSseConnected = false;
+
+export function openJobsPanel() {
+  if (!jobsPanelEl) return;
+  jobsPanelEl.classList.remove("hidden");
+  loadJobsPanelList().catch(() => {});
+}
+
+export function closeJobsPanel() {
+  jobsPanelEl?.classList.add("hidden");
+}
+
+export async function loadJobsPanelList() {
+  if (!jobsPanelListEl) return;
+  const data = await api("/api/jobs");
+  const jobs = data.jobs || [];
+  if (!jobs.length) {
+    jobsPanelListEl.innerHTML = `<li class="jobs-panel-empty">${escapeHtml(t("jobs.emptyList"))}</li>`;
+    return;
+  }
+  jobsPanelListEl.innerHTML = jobs
+    .map((job) => {
+      const status = job.status || "pending";
+      const msg = job.message || backgroundJobLabel(job) || "";
+      const time = formatJobTime(job.updated_at || job.created_at);
+      return `
+        <li class="jobs-panel-item">
+          <div class="jobs-panel-item-head">
+            <span class="jobs-panel-item-type">${escapeHtml(jobTypeLabel(job.job_type))}</span>
+            <span class="jobs-panel-item-status ${escapeHtml(status)}">${escapeHtml(jobStatusLabel(status))}</span>
+          </div>
+          <div class="jobs-panel-item-msg">${escapeHtml(msg)}</div>
+          <div class="jobs-panel-item-time">${escapeHtml(time)}</div>
+        </li>`;
+    })
+    .join("");
+}
 
 export async function navigateForCompletedJob(job) {
   if (!job || job.status !== "done") return;

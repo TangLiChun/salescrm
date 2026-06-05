@@ -204,50 +204,6 @@ export async function runLookup() {
   }
 }
 
-export function formatImportResult(result) {
-  const filtered = result.filtered ? t("msg.importFiltered", { filtered: result.filtered }) : "";
-  return t("msg.importDone", {
-    imported: result.imported,
-    duplicates: result.duplicates,
-    skipped: result.skipped,
-    filtered,
-  });
-}
-
-export function normalizeImportRow(row) {
-  if (!row || typeof row !== "object") return row;
-  const roles = row.roles;
-  const normalized = {
-    asn: row.asn ?? null,
-    org: String(row.org || row.organization || row.company || row.network_name || "").trim(),
-    name: String(row.name || row.contact_name || row.contact || row.fn || "").trim(),
-    email: String(row.email || "").trim(),
-    roles: Array.isArray(roles) ? roles : String(roles || "").split(",").map((part) => part.trim()).filter(Boolean),
-    handle: row.handle || "",
-    rir: row.rir || "",
-    source: row.source || "",
-    notes: row.notes || "",
-    linkedin: String(row.linkedin || row.linkedin_url || "").trim(),
-    x: String(row.x || row.x_url || row.twitter || row.twitter_url || "").trim(),
-    facebook: String(row.facebook || row.facebook_url || "").trim(),
-    profile_url: String(row.profile_url || "").trim(),
-  };
-  const source = String(row.source || "").toLowerCase();
-  const profileUrl = normalized.profile_url;
-  if (profileUrl) {
-    if (source === "linkedin" && !normalized.linkedin) normalized.linkedin = profileUrl;
-    if (source === "x" && !normalized.x) normalized.x = profileUrl;
-    if (source === "facebook" && !normalized.facebook) normalized.facebook = profileUrl;
-  }
-  return normalized;
-}
-
-export function normalizeImportRows(rows) {
-  return (rows || []).map((row) => normalizeImportRow(row));
-}
-
-export let state.asnParseTimer = null;
-
 export function renderAsnPreview(data) {
   if (!asnParsePreviewEl) return;
   if (!data || !data.total) {
@@ -282,6 +238,17 @@ export async function refreshAsnPreview() {
   }
 }
 
+export function downloadCsv() {
+  if (!state.csvContent) return;
+  const blob = new Blob([state.csvContent], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `arin_asn_roles_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function importResults() {
   const rows = getSelectedImportableRows();
   if (rows.length === 0) {
@@ -296,8 +263,8 @@ export async function importResults() {
       body: JSON.stringify({ rows: normalizeImportRows(rows) }),
     });
     alert(formatImportResult(result));
-    await loadContacts();
-    deps.switchView("contacts");
+    await deps.loadContacts?.();
+    deps.switchView?.("contacts");
   } catch (error) {
     alert(error.message || t("msg.importFailed"));
   } finally {
