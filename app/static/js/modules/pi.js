@@ -1381,6 +1381,7 @@ export function sanitizePiAssistantDisplay(text) {
   if (!raw) return "";
   const lower = raw.toLowerCase();
   const markers = [
+    "[{",
     "[工具",
     "[tool",
     "tool_calls",
@@ -1390,13 +1391,26 @@ export function sanitizePiAssistantDisplay(text) {
     "```json",
     '{"query',
     '{"queries',
+    '"queries"',
+    '{"name"',
+    '{"function"',
+    '"name":',
+    '"arguments"',
+    '"function":',
+    '"type": "function"',
   ];
   let cutAt = raw.length;
   for (const marker of markers) {
     const idx = lower.indexOf(marker.toLowerCase());
     if (idx >= 0) cutAt = Math.min(cutAt, idx);
   }
-  return raw.slice(0, cutAt).trim();
+  if (cutAt === raw.length && raw.trim().startsWith("[")) {
+    cutAt = 0;
+  }
+  const trimmed = raw.slice(0, cutAt).trim();
+  if (!trimmed || /^[\[{(,]+$/.test(trimmed)) return "";
+  if (/^[\[{]/.test(trimmed) && trimmed.length < 24) return "";
+  return trimmed;
 }
 
 export function appendPiChatBubble(role, text) {
@@ -1609,6 +1623,13 @@ export async function sendPiChatMessage(message) {
 
         if (payload.type === "status") {
           piChatProgressText.textContent = payload.message || t("msg.piProcessingShort");
+          if (payload.message?.includes("正在重试")) {
+            if (activeAssistantEl) {
+              activeAssistantEl.remove();
+              activeAssistantEl = null;
+              assistantStreamText = "";
+            }
+          }
           if (
             activeToolEl?.classList.contains("pi-chat-tool-discover") &&
             payload.message?.includes("仍在执行")

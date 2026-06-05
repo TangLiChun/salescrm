@@ -723,45 +723,67 @@ def _trim_history(
     )
 
 
+_TOOL_CONTENT_MARKERS = (
+    "[{",
+    "[工具",
+    "[tool",
+    "tool_calls",
+    "tool_call",
+    "dsml",
+    "<|",
+    "```json",
+    '{"query',
+    '{"queries',
+    '"queries"',
+    '{"name"',
+    '{"function"',
+    '"name":',
+    '"arguments"',
+    '"function":',
+    '"type": "function"',
+)
+
+
 def _assistant_intro_before_tools(content: str) -> str:
     text = (content or "").strip()
     if not text:
         return ""
     lower = text.lower()
     cut_at = len(text)
-    for marker in (
-        "[工具",
-        "[tool",
-        "tool_calls",
-        "tool_call",
-        "dsml",
-        "<|",
-        "```json",
-        '{"query',
-        '{"queries',
-        '"queries"',
-    ):
+    for marker in _TOOL_CONTENT_MARKERS:
         idx = lower.find(marker.lower())
         if idx >= 0:
             cut_at = min(cut_at, idx)
+    if cut_at == len(text) and text.startswith("["):
+        cut_at = 0
     return text[:cut_at].strip()
 
 
 def _content_looks_like_tool_call(content: str) -> bool:
     lower = (content or "").lower()
-    return any(
-        marker in lower
-        for marker in (
-            "[工具",
-            "[tool",
-            "tool_calls",
-            "tool_call",
-            "dsml",
-            "<|",
-            '{"query',
-            '{"queries',
-        )
-    )
+    if any(marker in lower for marker in _TOOL_CONTENT_MARKERS):
+        return True
+    return bool(re.search(r'^\s*[\[{]', content or ""))
+
+
+def _content_is_tool_json_fragment(content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return False
+    if text in ("[", "{", "(", "[{", "({"):
+        return True
+    if re.fullmatch(r"[\[\{\(,]+", text):
+        return True
+    if re.match(r"^[\[\{]", text) and len(text) < 24:
+        return True
+    return False
+
+
+def _meaningful_assistant_content(content: str) -> str:
+    visible = _assistant_intro_before_tools(content)
+    if not visible or _content_is_tool_json_fragment(visible):
+        return ""
+    return visible
 
 
 def _extract_json_args(text: str) -> dict[str, Any]:
@@ -902,9 +924,95 @@ def _infer_tool_name(name: str, args: dict[str, Any]) -> str:
         return "get_contact"
     if "rows" in args:
         return "import_leads"
+    if "keywords" in args or "keyword" in args:
+        return "list_contacts"
     if "q" in args or ("limit" in args and "query" not in args and "queries" not in args):
         return "list_contacts"
     return cleaned or "unknown"
+
+
+def _coerce_list_contacts_args(args: dict[str, Any]) -> dict[str, Any]:
+    if "q" in args:
+        return args
+    for key in ("keywords", "keyword", "search", "query", "term", "filter"):
+        if key not in args:
+            continue
+        val = args[key]
+        if isinstance(val, list):
+            args["q"] = " ".join(str(item) for item in val if item)
+        else:
+            args["q"] = str(val)
+        break
+    return args
+
+
+def _normalize_raw_tool_entry(item: dict[str, Any]) -> dict[str, Any]:
+    fn = item.get("function")
+    if isinstance(fn, str):
+        try:
+            fn = json.loads(fn)
+        except json.JSONDecodeError:
+            fn = {}
+    if isinstance(fn, dict) and fn.get("name"):
+        args = fn.get("arguments")
+        if isinstance(args, dict):
+            args_str = json.dumps(args, ensure_ascii=False)
+        else:
+            args_str = str(args or "{}")
+        return {
+            "id": str(item.get("id") or f"inline-{uuid.uuid4().hex[:8]}"),
+            "type": "function",
+            "function": {"name": str(fn["name"]), "arguments": args_str},
+        }
+    name = str(item.get("name") or "").strip()
+    raw_args = item.get("arguments")
+    if isinstance(raw_args, dict):
+        args_str = json.dumps(raw_args, ensure_ascii=False)
+    elif raw_args is not None:
+        args_str = str(raw_args)
+    else:
+        args_str = "{}"
+    return {
+        "id": str(item.get("id") or f"inline-{uuid.uuid4().hex[:8]}"),
+        "type": "function",
+        "function": {"name": name, "arguments": args_str},
+    }
+
+
+def _extract_tool_calls_from_content(text: str) -> list[dict[str, Any]]:
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    start = text.find("[")
+    if start >= 0:
+        blob = text[start:]
+        for end in range(len(blob), 0, -1):
+            if blob[end - 1] not in "}]":
+                continue
+            try:
+                parsed = json.loads(blob[:end])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, list):
+                calls = [item for item in parsed if isinstance(item, dict)]
+                if calls:
+                    return [_normalize_raw_tool_entry(item) for item in calls]
+
+    args = _extract_json_args(text)
+    if args:
+        name = _infer_tool_name("", args)
+        if name != "unknown":
+            return [_normalize_raw_tool_entry({"name": name, "arguments": args})]
+
+    name_match = re.search(r'"name"\s*:\s*"([a-zA-Z0-9_]+)"', text)
+    if name_match:
+        return [
+            _normalize_raw_tool_entry(
+                {"name": name_match.group(1), "arguments": _extract_json_args(text)}
+            )
+        ]
+    return []
 
 
 def _parse_tool_call(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
@@ -932,7 +1040,33 @@ def _parse_tool_call(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]] | 
     if not isinstance(args, dict):
         args = {}
 
+    if (not name or name == "unknown") and isinstance(raw_args, str) and raw_args.strip():
+        name_match = re.search(r'"name"\s*:\s*"([a-zA-Z0-9_]+)"', raw_args)
+        if name_match:
+            name = name_match.group(1)
+        try:
+            nested = json.loads(raw_args)
+        except json.JSONDecodeError:
+            nested = None
+        if isinstance(nested, dict):
+            if nested.get("name"):
+                name = str(nested["name"])
+            nested_args = nested.get("arguments")
+            if isinstance(nested_args, dict):
+                args = nested_args
+            elif isinstance(nested_args, str):
+                try:
+                    parsed_args = json.loads(nested_args)
+                    if isinstance(parsed_args, dict):
+                        args = parsed_args
+                except json.JSONDecodeError:
+                    pass
+            elif "name" not in nested:
+                args = nested
+
     name = _infer_tool_name(name, args)
+    if name == "list_contacts":
+        args = _coerce_list_contacts_args(args)
     if name == "unknown":
         return None
     return name, args
@@ -1591,6 +1725,7 @@ async def agent_chat_stream(
             assistant = None
             content_buffer = ""
             streamed_reply = False
+            last_streamed_visible = ""
 
             async for event in _iter_llm_stream(messages, AGENT_TOOLS):
                 event_type = event.get("type")
@@ -1602,10 +1737,15 @@ async def agent_chat_stream(
                     piece = str(event.get("text") or "")
                     if piece:
                         content_buffer += piece
-                        if not streamed_reply:
-                            streamed_reply = True
-                            yield {"type": "assistant_start"}
-                        yield {"type": "assistant_delta", "text": piece}
+                        visible = _meaningful_assistant_content(content_buffer)
+                        if visible and len(visible) > len(last_streamed_visible):
+                            delta = visible[len(last_streamed_visible) :]
+                            last_streamed_visible = visible
+                            if delta:
+                                if not streamed_reply:
+                                    streamed_reply = True
+                                    yield {"type": "assistant_start"}
+                                yield {"type": "assistant_delta", "text": delta}
                 elif event_type == "status":
                     yield {"type": "status", "message": event.get("message") or "Pi 助手处理中…"}
                 elif event_type == "message":
@@ -1622,13 +1762,14 @@ async def agent_chat_stream(
                 return
 
             tool_calls = (assistant or {}).get("tool_calls") or []
-            content = ((assistant or {}).get("content") or content_buffer or "").strip()
+            raw_content = ((assistant or {}).get("content") or content_buffer or "").strip()
+            content = _meaningful_assistant_content(raw_content)
 
-            if not tool_calls and content:
-                intro, inline_calls = _parse_inline_tool_calls(content)
+            if not tool_calls and raw_content:
+                intro, inline_calls = _parse_inline_tool_calls(raw_content)
                 if inline_calls:
                     tool_calls = inline_calls
-                    content = intro
+                    content = _meaningful_assistant_content(intro)
                     assistant = {**(assistant or {}), "tool_calls": tool_calls, "content": intro or None}
 
             if content and not tool_calls:
@@ -1650,6 +1791,15 @@ async def agent_chat_stream(
                 return
 
             prepared_calls = _prepare_tool_calls(tool_calls)
+            if not prepared_calls and raw_content:
+                extracted = _extract_tool_calls_from_content(raw_content)
+                if extracted:
+                    prepared_calls = _prepare_tool_calls(extracted)
+                if not prepared_calls:
+                    intro, inline_calls = _parse_inline_tool_calls(raw_content)
+                    if inline_calls:
+                        prepared_calls = _prepare_tool_calls(inline_calls)
+                        content = _meaningful_assistant_content(intro)
             if not prepared_calls:
                 if content:
                     if not streamed_reply:
@@ -1673,13 +1823,13 @@ async def agent_chat_stream(
             yield {"type": "done"}
             return
 
-        intro = _assistant_intro_before_tools(content or content_buffer)
+        intro = _meaningful_assistant_content(content or _assistant_intro_before_tools(content_buffer))
         if intro:
             if not streamed_reply:
                 yield {"type": "assistant_start"}
             yield {"type": "assistant_done", "text": intro}
         elif streamed_reply:
-            visible = _assistant_intro_before_tools(content_buffer.strip())
+            visible = _meaningful_assistant_content(content_buffer.strip())
             if visible:
                 yield {"type": "assistant_done", "text": visible}
 
