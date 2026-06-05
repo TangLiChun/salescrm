@@ -22,6 +22,7 @@ const piChatInput = document.getElementById("pi-chat-input");
 const piChatSendBtn = document.getElementById("pi-chat-send");
 const piChatStopBtn = document.getElementById("pi-chat-stop");
 const piChatClearBtn = document.getElementById("pi-chat-clear");
+const piChatHistoryHintEl = document.getElementById("pi-chat-history-hint");
 const piChatProgressEl = document.getElementById("pi-chat-progress");
 const piChatProgressFill = document.getElementById("pi-chat-progress-fill");
 const piChatProgressText = document.getElementById("pi-chat-progress-text");
@@ -96,6 +97,7 @@ const llmStatusEl = document.getElementById("llm-status");
 const minScoreInput = document.getElementById("min-score");
 const autoImportInput = document.getElementById("auto-import");
 const discoverBtn = document.getElementById("discover-btn");
+const discoverViaPiBtn = document.getElementById("discover-via-pi-btn");
 const aiPlanEl = document.getElementById("ai-plan");
 const aiSourcesEl = document.getElementById("ai-sources");
 const aiProgressEl = document.getElementById("ai-progress");
@@ -138,13 +140,16 @@ const CHANNEL_DEFS = [
   { key: "web_search", name: "搜索引擎" },
   { key: "web_regex", name: "网页解析" },
   { key: "llm_extract", name: "LLM 提取" },
-  { key: "arin", name: "ARIN RDAP" },
+  { key: "arin", name: "全球 RDAP" },
   { key: "scoring", name: "LLM 评分" },
 ];
 let channelState = {};
 let discoverController = null;
 let lastDiscoverQuery = "";
 let llmConfigured = false;
+let currentUserId = null;
+const PI_CHAT_STORAGE_VERSION = "v1";
+const PI_CHAT_MAX_STORED = 40;
 let piChatHistory = [];
 let piChatController = null;
 let piChatBusy = false;
@@ -171,7 +176,7 @@ async function api(url, options = {}) {
     let detail = "请求失败";
     try {
       const error = await response.json();
-      detail = error.detail || detail;
+      detail = formatApiDetail(error.detail) || detail;
     } catch {
       // ignore
     }
@@ -180,6 +185,31 @@ async function api(url, options = {}) {
 
   if (response.status === 204) return null;
   return response.json();
+}
+
+function formatApiDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item?.msg) return item.msg;
+        return JSON.stringify(item);
+      })
+      .join("; ");
+  }
+  if (typeof detail === "object") {
+    return detail.message || detail.msg || JSON.stringify(detail);
+  }
+  return String(detail);
+}
+
+function errorMessage(error, fallback) {
+  if (!error) return fallback;
+  if (typeof error === "string") return error;
+  if (error.message) return error.message;
+  return fallback;
 }
 
 function setLoading(isLoading) {
@@ -226,7 +256,7 @@ function renderRows() {
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="8">${allRows.length ? "当前筛选无结果" : "输入 ASN 列表后点击「开始查询」"}</td>`;
+    tr.innerHTML = `<td colspan="9">${allRows.length ? "当前筛选无结果" : "输入 ASN 列表后点击「开始查询」"}</td>`;
     resultsBody.appendChild(tr);
     updateStats();
     importBtn.disabled = getSelectedImportableRows().length === 0;
@@ -256,6 +286,7 @@ function renderRows() {
       <td>${escapeHtml(row.name || "—")}</td>
       <td>${emailCell}</td>
       <td class="mono">${escapeHtml(row.handle || "—")}</td>
+      <td>${escapeHtml(row.rir || "—")}</td>
       <td class="${statusClass}">${escapeHtml(statusText)}</td>
     `;
     resultsBody.appendChild(tr);
@@ -432,7 +463,7 @@ async function runLookup() {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.detail || "查询失败");
+      throw new Error(formatApiDetail(error.detail) || "查询失败");
     }
 
     const reader = response.body.getReader();
@@ -483,7 +514,7 @@ async function runLookup() {
       }
     }
   } catch (error) {
-    alert(error.message || "查询失败，请稍后重试");
+    alert(errorMessage(error, "查询失败，请稍后重试"));
     progressText.textContent = "查询失败";
   } finally {
     setLoading(false);
@@ -1205,6 +1236,311 @@ async function loadStats() {
   renderDashboard(await api("/api/stats"));
 }
 
+function piChatStorageKey(userId) {
+  return `salescrm:pi-chat:${PI_CHAT_STORAGE_VERSION}:${userId}`;
+}
+
+function savePiChatHistory() {
+  if (!currentUserId) return;
+  try {
+    localStorage.setItem(
+      piChatStorageKey(currentUserId),
+      JSON.stringify({
+        history: piChatHistory.slice(-PI_CHAT_MAX_STORED),
+        updatedAt: Date.now(),
+      }),
+    );
+    updatePiChatHistoryHint();
+  } catch {
+    // ignore quota errors
+  }
+}
+
+function loadPiChatHistoryFromStorage(userId) {
+  try {
+    const raw = localStorage.getItem(piChatStorageKey(userId));
+    if (!raw) {
+      piChatHistory = [];
+      return;
+    }
+    const data = JSON.parse(raw);
+    piChatHistory = Array.isArray(data.history)
+      ? data.history.filter((item) => item?.role && item?.content)
+      : [];
+  } catch {
+    piChatHistory = [];
+  }
+}
+
+function restorePiChatUi() {
+  piChatMessagesEl.innerHTML = "";
+  if (!piChatHistory.length) {
+    piChatMessagesEl.innerHTML =
+      '<div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「找美国 ISP 的 peering 联系人」或「查 AS15169 并导入 CRM」</div>';
+    updatePiChatHistoryHint();
+    return;
+  }
+  for (const item of piChatHistory) {
+    if (item.role === "user" || item.role === "assistant") {
+      appendPiChatBubble(item.role, item.content);
+    }
+  }
+  updatePiChatHistoryHint();
+}
+
+function updatePiChatHistoryHint() {
+  if (!piChatHistoryHintEl) return;
+  const count = piChatHistory.length;
+  if (!count) {
+    piChatHistoryHintEl.textContent = "对话保存在本浏览器";
+    return;
+  }
+  piChatHistoryHintEl.textContent = `已保存 ${count} 条消息 · 本浏览器`;
+}
+
+function buildPiLeadMessage() {
+  const query = leadQueryInput.value.trim();
+  if (!query) return "";
+  const minScore = Number(minScoreInput.value) || 60;
+  const lines = [`请帮我找销售线索：${query}`, `最低匹配分 ${minScore}`];
+  if (autoImportInput.checked) {
+    lines.push("找到合适的线索后自动导入 CRM");
+  }
+  return lines.join("\n");
+}
+
+async function openPiAgentForLeads() {
+  const message = buildPiLeadMessage();
+  if (!message) {
+    alert("请先描述你要找的销售线索");
+    return;
+  }
+  if (!llmConfigured) {
+    alert("LLM 未配置，无法使用 Pi 助手");
+    return;
+  }
+  switchView("pi-agent");
+  await sendPiChatMessage(message);
+}
+
+function formatPiToolSummary(name, result) {
+  if (!result || typeof result !== "object") return "";
+  if (result.error) return String(result.error);
+  if (name === "discover_leads") {
+    const parts = [`共 ${result.lead_count ?? 0} 条线索`];
+    if (result.import) {
+      parts.push(formatImportResult(result.import));
+    } else if (result.message) {
+      parts.push(result.message);
+    }
+    return parts.join(" · ");
+  }
+  if (name === "lookup_asns") {
+    return `识别 ${result.asns?.length ?? 0} 个 ASN · ${result.email_count ?? 0} 条邮箱（全球 RIR 自动路由）`;
+  }
+  if (name === "list_contacts") {
+    return `返回 ${result.contacts?.length ?? 0} 条（总计 ${result.total ?? 0}）`;
+  }
+  if (name === "update_contact") {
+    return result.contact ? `已更新 #${result.contact.id} ${result.contact.email || ""}` : "";
+  }
+  if (name === "mark_contact_sent") {
+    return result.ok ? `联系人 #${result.contact_id} ${result.sent ? "已标记已发" : "已取消已发"}` : "";
+  }
+  if (name === "delete_contacts") {
+    return `已删除 ${result.deleted ?? 0} / ${result.requested ?? 0} 条`;
+  }
+  if (name === "add_contact_note") {
+    return result.ok ? "备注已添加" : "";
+  }
+  if (name === "dedupe_contacts") {
+    return `去重完成：删除 ${result.removed ?? 0} 条，剩余 ${result.total_contacts ?? result.total ?? 0} 条`;
+  }
+  if (name === "import_leads") {
+    return formatImportResult(result);
+  }
+  if (name === "get_stats") {
+    return `联系人 ${result.total ?? 0} · 已发 ${result.sent ?? 0}`;
+  }
+  return "";
+}
+
+function appendPiChatLookupTool(name) {
+  const el = appendPiChatTool(name);
+  el.classList.add("pi-chat-tool-lookup");
+  const lookupWrap = document.createElement("div");
+  lookupWrap.className = "pi-chat-leads hidden";
+  lookupWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>RIR</th>
+          <th>ASN</th>
+          <th>组织</th>
+          <th>Role</th>
+          <th>邮箱</th>
+        </tr>
+      </thead>
+      <tbody class="pi-chat-lookup-body"></tbody>
+    </table>
+  `;
+  const actionsEl = document.createElement("div");
+  actionsEl.className = "pi-chat-leads-actions hidden";
+  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-lookup">导入选中邮箱</button>`;
+  el.appendChild(lookupWrap);
+  el.appendChild(actionsEl);
+  el._piLookupRows = [];
+  return el;
+}
+
+function appendPiChatLookupRow(toolEl, row) {
+  if (!toolEl || !row?.email) return;
+  const wrap = toolEl.querySelector(".pi-chat-leads");
+  const body = toolEl.querySelector(".pi-chat-lookup-body");
+  if (!wrap || !body) return;
+  wrap.classList.remove("hidden");
+  toolEl._piLookupRows = toolEl._piLookupRows || [];
+  const index = toolEl._piLookupRows.length;
+  toolEl._piLookupRows.push(row);
+  const roles = (row.roles || []).join(", ");
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td>${escapeHtml(row.rir || "—")}</td>
+    <td class="mono">AS${row.asn}</td>
+    <td>${escapeHtml(row.org || "—")}</td>
+    <td>${escapeHtml(roles || "—")}</td>
+    <td><a class="email-link" href="mailto:${row.email}">${escapeHtml(row.email)}</a></td>
+  `;
+  tr.dataset.index = String(index);
+  tr.classList.add("selected");
+  tr.title = "点击切换选中";
+  tr.addEventListener("click", () => tr.classList.toggle("selected"));
+  body.appendChild(tr);
+  toolEl.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
+}
+
+async function importPiChatLookup(toolEl) {
+  const selectedRows = toolEl?.querySelectorAll("tr.selected") || [];
+  const allRows = toolEl?._piLookupRows || [];
+  const rows =
+    selectedRows.length > 0
+      ? Array.from(selectedRows).map((row) => allRows[Number(row.dataset.index)])
+      : allRows;
+  const payload = rows.filter((row) => row?.email).map((row) => ({
+    ...row,
+    source: row.source || "rdap",
+    roles: Array.isArray(row.roles) ? row.roles.join(",") : row.roles || "",
+  }));
+  if (!payload.length) {
+    alert("没有可导入的邮箱");
+    return;
+  }
+  try {
+    const result = await api("/api/contacts/import", {
+      method: "POST",
+      body: JSON.stringify({ rows: payload }),
+    });
+    alert(formatImportResult(result));
+    await loadContacts();
+  } catch (error) {
+    alert(errorMessage(error, "导入失败"));
+  }
+}
+
+function appendPiChatDiscoverTool(name) {
+  const el = appendPiChatTool(name);
+  el.classList.add("pi-chat-tool-discover");
+  const planEl = document.createElement("div");
+  planEl.className = "pi-chat-tool-plan hidden";
+  const leadsWrap = document.createElement("div");
+  leadsWrap.className = "pi-chat-leads hidden";
+  leadsWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>分数</th>
+          <th>组织</th>
+          <th>邮箱</th>
+          <th>来源</th>
+        </tr>
+      </thead>
+      <tbody class="pi-chat-leads-body"></tbody>
+    </table>
+  `;
+  const actionsEl = document.createElement("div");
+  actionsEl.className = "pi-chat-leads-actions hidden";
+  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-leads">导入选中线索</button>`;
+  el.appendChild(planEl);
+  el.appendChild(leadsWrap);
+  el.appendChild(actionsEl);
+  el._piLeads = [];
+  return el;
+}
+
+function appendPiChatLeadRow(toolEl, lead) {
+  if (!toolEl) return;
+  const leadsWrap = toolEl.querySelector(".pi-chat-leads");
+  const body = toolEl.querySelector(".pi-chat-leads-body");
+  if (!leadsWrap || !body) return;
+  leadsWrap.classList.remove("hidden");
+  toolEl._piLeads = toolEl._piLeads || [];
+  const index = toolEl._piLeads.length;
+  toolEl._piLeads.push(lead);
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><span class="score-badge">${lead.lead_score || 0}</span></td>
+    <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
+    <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a></td>
+    <td>${escapeHtml(formatSource(lead))}</td>
+  `;
+  tr.dataset.index = String(index);
+  tr.classList.add("selected");
+  tr.title = "点击切换选中";
+  tr.addEventListener("click", () => {
+    tr.classList.toggle("selected");
+  });
+  body.appendChild(tr);
+  toolEl.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
+}
+
+function renderPiChatPlan(toolEl, plan) {
+  if (!toolEl || !plan) return;
+  const planEl = toolEl.querySelector(".pi-chat-tool-plan");
+  if (!planEl) return;
+  planEl.classList.remove("hidden");
+  planEl.innerHTML = `<p><strong>策略：</strong>${escapeHtml(plan.summary || "")}</p>`;
+}
+
+async function importPiChatLeads(toolEl) {
+  const selectedRows = toolEl?.querySelectorAll("tr.selected") || [];
+  const allLeads = toolEl?._piLeads || [];
+  const rows =
+    selectedRows.length > 0
+      ? Array.from(selectedRows).map((row) => allLeads[Number(row.dataset.index)])
+      : allLeads;
+  const payload = rows
+    .filter((lead) => lead?.email)
+    .map((lead) => ({
+      ...lead,
+      source: "ai-lead",
+      notes: `AI评分 ${lead.lead_score || 0} · ${lead.lead_reason || ""}`.trim(" ·"),
+    }));
+  if (!payload.length) {
+    alert("没有可导入的线索");
+    return;
+  }
+  try {
+    const result = await api("/api/contacts/import", {
+      method: "POST",
+      body: JSON.stringify({ rows: payload }),
+    });
+    alert(formatImportResult(result));
+    await loadContacts();
+  } catch (error) {
+    alert(errorMessage(error, "导入失败"));
+  }
+}
+
 function updatePiAgentStatus() {
   if (!piAgentStatusEl) return;
   const enabled = llmConfigured;
@@ -1224,11 +1560,87 @@ function clearPiChatEmpty() {
   if (empty) empty.remove();
 }
 
+function renderMarkdown(text) {
+  if (!text) return "";
+
+  const codeBlocks = [];
+  const body = String(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _lang, code) => {
+    const index = codeBlocks.length;
+    codeBlocks.push(escapeHtml(code.replace(/\n$/, "")));
+    return `\x00CB${index}\x00`;
+  });
+
+  function inlineMarkdown(line) {
+    let html = escapeHtml(line);
+    html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
+    html = html.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    );
+    return html;
+  }
+
+  const lines = body.split("\n");
+  const out = [];
+  let listTag = null;
+
+  function closeList() {
+    if (!listTag) return;
+    out.push(listTag === "ul" ? "</ul>" : "</ol>");
+    listTag = null;
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    const codeBlockMatch = trimmed.trim().match(/^\x00CB(\d+)\x00$/);
+    if (codeBlockMatch) {
+      closeList();
+      out.push(`<pre><code>${codeBlocks[Number(codeBlockMatch[1])]}</code></pre>`);
+      continue;
+    }
+
+    const ulMatch = trimmed.match(/^[-*]\s+(.+)/);
+    const olMatch = trimmed.match(/^\d+\.\s+(.+)/);
+    if (ulMatch) {
+      if (listTag !== "ul") {
+        closeList();
+        out.push("<ul>");
+        listTag = "ul";
+      }
+      out.push(`<li>${inlineMarkdown(ulMatch[1])}</li>`);
+      continue;
+    }
+    if (olMatch) {
+      if (listTag !== "ol") {
+        closeList();
+        out.push("<ol>");
+        listTag = "ol";
+      }
+      out.push(`<li>${inlineMarkdown(olMatch[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    if (trimmed === "") continue;
+    out.push(`<p>${inlineMarkdown(trimmed)}</p>`);
+  }
+
+  closeList();
+  return out.join("");
+}
+
 function appendPiChatBubble(role, text) {
   clearPiChatEmpty();
   const el = document.createElement("div");
   el.className = `pi-chat-bubble ${role}`;
-  el.textContent = text;
+  if (role === "assistant") {
+    el.classList.add("markdown");
+    el.innerHTML = renderMarkdown(text);
+  } else {
+    el.textContent = text;
+  }
   piChatMessagesEl.appendChild(el);
   piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
   return el;
@@ -1269,14 +1681,14 @@ function setPiChatBusy(busy) {
   }
 }
 
-async function sendPiChat(event) {
-  event.preventDefault();
-  const message = piChatInput.value.trim();
-  if (!message || piChatBusy || !llmConfigured) return;
+async function sendPiChatMessage(message) {
+  const text = String(message || "").trim();
+  if (!text || piChatBusy || !llmConfigured) return;
 
   piChatInput.value = "";
-  appendPiChatBubble("user", message);
-  piChatHistory.push({ role: "user", content: message });
+  appendPiChatBubble("user", text);
+  piChatHistory.push({ role: "user", content: text });
+  savePiChatHistory();
 
   setPiChatBusy(true);
   piChatProgressFill.style.width = "12%";
@@ -1290,7 +1702,7 @@ async function sendPiChat(event) {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history: piChatHistory.slice(0, -1) }),
+      body: JSON.stringify({ message: text, history: piChatHistory.slice(0, -1) }),
       signal: piChatController.signal,
     });
 
@@ -1300,7 +1712,7 @@ async function sendPiChat(event) {
     }
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.detail || "Pi 助手请求失败");
+      throw new Error(formatApiDetail(error.detail) || "Pi 助手请求失败");
     }
 
     const reader = response.body.getReader();
@@ -1322,7 +1734,12 @@ async function sendPiChat(event) {
         if (payload.type === "status") {
           piChatProgressText.textContent = payload.message || "处理中…";
         } else if (payload.type === "tool_start") {
-          activeToolEl = appendPiChatTool(payload.name || "tool");
+          activeToolEl =
+            payload.name === "discover_leads"
+              ? appendPiChatDiscoverTool(payload.name)
+              : payload.name === "lookup_asns"
+                ? appendPiChatLookupTool(payload.name)
+                : appendPiChatTool(payload.name || "tool");
           piChatProgressText.textContent = `调用 ${payload.name}…`;
           piChatProgressFill.style.width = "35%";
         } else if (payload.type === "tool_progress") {
@@ -1331,18 +1748,64 @@ async function sendPiChat(event) {
           }
           piChatProgressText.textContent = payload.message || piChatProgressText.textContent;
           piChatProgressFill.style.width = "65%";
+        } else if (payload.type === "tool_event") {
+          const event = payload.event || {};
+          if (payload.name === "discover_leads" && activeToolEl) {
+            if (event.kind === "plan") {
+              renderPiChatPlan(activeToolEl, event.plan);
+            } else if (event.kind === "lead") {
+              appendPiChatLeadRow(activeToolEl, event.lead);
+            }
+          }
         } else if (payload.type === "tool_result") {
           if (activeToolEl) {
             activeToolEl.querySelector(".pi-chat-tool-head").classList.add("done");
             const pre = activeToolEl.querySelector(".pi-chat-tool-result");
-            pre.classList.remove("hidden");
-            pre.textContent = JSON.stringify(payload.result, null, 2);
+            const summary = formatPiToolSummary(payload.name, payload.result);
+            if (payload.name === "discover_leads") {
+              pre.classList.add("hidden");
+              if (summary) {
+                activeToolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
+              }
+              const importBtn = activeToolEl.querySelector(".pi-chat-import-leads");
+              if (importBtn && !importBtn.dataset.bound) {
+                importBtn.dataset.bound = "1";
+                importBtn.addEventListener("click", () => {
+                  importPiChatLeads(activeToolEl).catch((error) => alert(errorMessage(error, "导入失败")));
+                });
+              }
+              if (payload.result?.import) {
+                activeToolEl.querySelector(".pi-chat-leads-actions")?.classList.add("hidden");
+              }
+            } else if (payload.name === "lookup_asns") {
+              pre.classList.add("hidden");
+              if (summary) {
+                activeToolEl.querySelector(".pi-chat-tool-progress").textContent = summary;
+              }
+              for (const row of payload.result?.rows || payload.result?.preview || []) {
+                appendPiChatLookupRow(activeToolEl, row);
+              }
+              const importBtn = activeToolEl.querySelector(".pi-chat-import-lookup");
+              if (importBtn && !importBtn.dataset.bound) {
+                importBtn.dataset.bound = "1";
+                importBtn.addEventListener("click", () => {
+                  importPiChatLookup(activeToolEl).catch((error) => alert(errorMessage(error, "导入失败")));
+                });
+              }
+            } else if (summary) {
+              pre.classList.remove("hidden");
+              pre.textContent = summary;
+            } else {
+              pre.classList.remove("hidden");
+              pre.textContent = JSON.stringify(payload.result, null, 2);
+            }
           }
           activeToolEl = null;
           piChatProgressFill.style.width = "85%";
         } else if (payload.type === "assistant") {
           appendPiChatBubble("assistant", payload.text || "");
           piChatHistory.push({ role: "assistant", content: payload.text || "" });
+          savePiChatHistory();
           piChatProgressFill.style.width = "100%";
         } else if (payload.type === "error") {
           appendPiChatStatus(payload.message || "发生错误");
@@ -1353,7 +1816,7 @@ async function sendPiChat(event) {
     }
   } catch (error) {
     if (error.name !== "AbortError") {
-      appendPiChatStatus(error.message || "Pi 助手请求失败");
+      appendPiChatStatus(errorMessage(error, "Pi 助手请求失败"));
     } else {
       appendPiChatStatus("已停止");
     }
@@ -1363,6 +1826,12 @@ async function sendPiChat(event) {
   }
 }
 
+async function sendPiChat(event) {
+  event.preventDefault();
+  const message = piChatInput.value.trim();
+  await sendPiChatMessage(message);
+}
+
 function stopPiChat() {
   if (piChatController) {
     piChatController.abort();
@@ -1370,9 +1839,16 @@ function stopPiChat() {
 }
 
 function clearPiChat() {
+  if (piChatHistory.length && !window.confirm("确定清空对话？本地保存的聊天历史也会被删除。")) {
+    return;
+  }
   piChatHistory = [];
+  if (currentUserId) {
+    localStorage.removeItem(piChatStorageKey(currentUserId));
+  }
   piChatMessagesEl.innerHTML =
-    '<div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「查 AS15169 的 abuse 邮箱并导入 CRM」</div>';
+    '<div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「找美国 ISP 的 peering 联系人」或「查 AS15169 并导入 CRM」</div>';
+  updatePiChatHistoryHint();
   updatePiAgentStatus();
 }
 
@@ -1390,14 +1866,14 @@ function switchView(view) {
   statsView.classList.toggle("hidden", view !== "stats");
 
   if (view === "lookup") {
-    pageTitle.textContent = "ARIN ASN Role 邮箱查询";
-    pageSubtitle.textContent = "批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱";
+    pageTitle.textContent = "ASN Role 邮箱查询";
+    pageSubtitle.textContent = "批量查询全球 RIR（ARIN / RIPE / APNIC 等）ASN 的 role 邮箱";
   } else if (view === "ai-leads") {
     pageTitle.textContent = "AI 线索发现";
-    pageSubtitle.textContent = "AI 自动通过搜索引擎、PeeringDB、ARIN RDAP 等多渠道搜索并评分筛选销售线索";
+    pageSubtitle.textContent = "AI 自动通过搜索引擎、PeeringDB、全球 RDAP 等多渠道搜索并评分筛选销售线索";
   } else if (view === "pi-agent") {
     pageTitle.textContent = "Pi 助手";
-    pageSubtitle.textContent = "对话式调用 CRM Agent：查 ASN、找线索、导入联系人，实时显示工具进度";
+    pageSubtitle.textContent = "对话式 CRM Agent：AI 找线索、查 ASN、导入联系人，与「AI 线索发现」共用引擎，历史保存在浏览器";
     updatePiAgentStatus();
   } else if (view === "schedules") {
     pageTitle.textContent = "定时任务";
@@ -1522,7 +1998,7 @@ function formatSource(lead) {
   const source = lead.source || "unknown";
   const map = {
     "web-search": "搜索引擎",
-    "arin-rdap": "ARIN RDAP",
+    "arin-rdap": "全球 RDAP",
     peeringdb: "PeeringDB",
     "ai-lead": "AI",
   };
@@ -1575,7 +2051,7 @@ function renderAiSources(channels) {
   aiSourcesEl.classList.remove("hidden");
   const web = (channels.web_search || []).join(", ") || "duckduckgo";
   aiSourcesEl.innerHTML = `
-    <p><strong>已启用渠道：</strong>搜索引擎(${escapeHtml(web)}) · PeeringDB · ARIN RDAP · LLM 提取/评分</p>
+    <p><strong>已启用渠道：</strong>搜索引擎(${escapeHtml(web)}) · PeeringDB · 全球 RDAP · LLM 提取/评分</p>
   `;
 }
 
@@ -1617,19 +2093,22 @@ async function loadLlmStatus() {
     if (llmConfigured) {
       llmStatusEl.className = "llm-status ok";
       const web = (config.search_channels?.web_search || []).join(", ") || "duckduckgo";
-      llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）· 搜索渠道：${web} + PeeringDB + ARIN`;
+      llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）· 搜索渠道：${web} + PeeringDB + RDAP`;
       discoverBtn.disabled = false;
+      if (discoverViaPiBtn) discoverViaPiBtn.disabled = false;
       hideLeadsState();
     } else {
       llmStatusEl.className = "llm-status warn";
       llmStatusEl.textContent = "LLM 未配置：请在「系统设置」填写 API Key。搜索引擎默认 DuckDuckGo";
       discoverBtn.disabled = true;
+      if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
       showLeadsNeedLlm();
     }
   } catch {
     llmStatusEl.className = "llm-status warn";
     llmStatusEl.textContent = "无法读取 LLM 配置";
     discoverBtn.disabled = true;
+    if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
   }
   updatePiAgentStatus();
 }
@@ -1639,11 +2118,13 @@ function setDiscoverRunning(running) {
     discoverBtn.textContent = "取消";
     discoverBtn.classList.add("danger-btn");
     discoverBtn.disabled = false;
+    if (discoverViaPiBtn) discoverViaPiBtn.disabled = true;
     retryDiscoverBtn.classList.add("hidden");
   } else {
-    discoverBtn.textContent = "AI 开始找线索";
+    discoverBtn.textContent = "直接运行（表格视图）";
     discoverBtn.classList.remove("danger-btn");
     discoverBtn.disabled = !llmConfigured;
+    if (discoverViaPiBtn) discoverViaPiBtn.disabled = !llmConfigured;
   }
 }
 
@@ -1830,6 +2311,9 @@ async function bootstrap() {
   try {
     const user = await api("/api/me");
     currentUserEl.textContent = user.username;
+    currentUserId = user.id;
+    loadPiChatHistoryFromStorage(currentUserId);
+    restorePiChatUi();
   } catch {
     window.location.href = "/login";
     return;
@@ -1857,6 +2341,9 @@ asnInput.addEventListener("input", () => {
 exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
+discoverViaPiBtn?.addEventListener("click", () => {
+  openPiAgentForLeads().catch((error) => alert(errorMessage(error, "Pi 助手启动失败")));
+});
 retryDiscoverBtn.addEventListener("click", () => {
   if (lastDiscoverQuery) {
     leadQueryInput.value = lastDiscoverQuery;

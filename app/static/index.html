@@ -11,8 +11,8 @@
     <header class="header topbar">
       <div>
         <p class="eyebrow">Sales CRM</p>
-        <h1 id="page-title">ARIN ASN Role 邮箱查询</h1>
-        <p id="page-subtitle" class="subtitle">批量查询 ARIN 管辖 ASN 的 abuse / technical / administrative / routing 等 role 邮箱</p>
+        <h1 id="page-title">ASN Role 邮箱查询</h1>
+        <p id="page-subtitle" class="subtitle">批量查询全球 RIR（ARIN / RIPE / APNIC / LACNIC / AFRINIC）ASN 的 abuse / technical / administrative 等 role 邮箱</p>
       </div>
       <div class="topbar-actions">
         <span id="current-user" class="user-badge"></span>
@@ -88,12 +88,13 @@
                 <th>名称</th>
                 <th>邮箱</th>
                 <th>Handle</th>
+                <th>RIR</th>
                 <th>状态</th>
               </tr>
             </thead>
             <tbody id="results-body">
               <tr class="empty-row">
-                <td colspan="8">输入 ASN 列表后点击「开始查询」</td>
+                <td colspan="9">输入 ASN 列表后点击「开始查询」</td>
               </tr>
             </tbody>
           </table>
@@ -121,8 +122,10 @@
             <input id="auto-import" type="checkbox">
             <span>自动导入联系人</span>
           </label>
-          <button id="discover-btn" type="button">AI 开始找线索</button>
+          <button id="discover-via-pi-btn" type="button">在 Pi 助手中找线索</button>
+          <button id="discover-btn" type="button" class="secondary-btn">直接运行（表格视图）</button>
         </div>
+        <p class="stats hint">推荐用 Pi 助手：同一套 AI 引擎，可对话追问、查 ASN、导入联系人，并保留聊天历史。</p>
 
         <div id="ai-sources" class="ai-sources hidden"></div>
         <div id="ai-plan" class="ai-plan hidden"></div>
@@ -191,12 +194,12 @@
       <div class="pi-chat-header">
         <div>
           <h2>Pi 助手</h2>
-          <p class="settings-desc">在网页里用对话操作 CRM：查 ASN、AI 找线索、搜索/导入联系人。与终端 Pi 扩展使用相同工具，进度实时显示。</p>
+          <p class="settings-desc">在网页里用对话操作 CRM：查 ASN、AI 找线索、搜索/导入联系人。与「AI 线索发现」共用同一引擎，聊天历史保存在浏览器中。</p>
         </div>
         <p id="pi-agent-status" class="llm-status">检查 LLM 配置中…</p>
       </div>
       <div id="pi-chat-messages" class="pi-chat-messages" aria-live="polite">
-        <div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「查 AS15169 的 abuse 邮箱并导入 CRM」</div>
+        <div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「查 AS22541 AS201341 的 abuse 邮箱并导入」或「搜索并标记已发邮件的联系人」</div>
       </div>
       <div id="pi-chat-progress" class="progress hidden">
         <div class="progress-bar"><div id="pi-chat-progress-fill"></div></div>
@@ -210,6 +213,7 @@
           <button type="submit" id="pi-chat-send" disabled>发送</button>
           <button type="button" id="pi-chat-stop" class="secondary-btn hidden">停止</button>
           <button type="button" id="pi-chat-clear" class="secondary-btn">清空对话</button>
+          <span id="pi-chat-history-hint" class="stats hint"></span>
         </div>
       </form>
     </section>

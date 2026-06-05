@@ -102,7 +102,7 @@ async def discover_leads_stream(
 
     yield {
         "type": "status",
-        "message": f"多渠道搜索中：搜索引擎({', '.join(channels['web_search'])}) · PeeringDB · ARIN RDAP",
+        "message": f"多渠道搜索中：搜索引擎({', '.join(channels['web_search'])}) · PeeringDB · 全球 RDAP",
     }
 
     peeringdb_task = asyncio.to_thread(peeringdb_source.discover_asns, keywords, max_asns=max_asns)
@@ -169,7 +169,7 @@ async def discover_leads_stream(
             "total": total,
             "asn": asn,
             "network": network.get("name") or "",
-            "message": f"ARIN 查询 AS{asn}",
+            "message": f"RDAP 查询 AS{asn}",
         }
 
         rows = await asyncio.to_thread(lookup_asn, asn)
@@ -178,7 +178,7 @@ async def discover_leads_stream(
 
         for candidate in candidates:
             candidate["source"] = "arin-rdap"
-            candidate["source_detail"] = f"ARIN RDAP · {network.get('name') or ''}".strip(" ·")
+            candidate["source_detail"] = f"RDAP · {network.get('name') or ''}".strip(" ·")
             candidate["network_name"] = network.get("name") or ""
             candidate["matched_keyword"] = network.get("keyword") or ""
 

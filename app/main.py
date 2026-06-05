@@ -82,7 +82,7 @@ async def lifespan(_: FastAPI):
     await stop_scheduler()
 
 
-app = FastAPI(title="Sales CRM — ARIN ASN Lookup", lifespan=lifespan)
+app = FastAPI(title="Sales CRM — ASN RDAP Lookup", lifespan=lifespan)
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret(),

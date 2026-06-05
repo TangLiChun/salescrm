@@ -19,6 +19,9 @@
 #   SKIP_PULL=1     跳过 git pull（仅重建容器）
 #   FORCE_REBUILD=1 构建镜像时使用 --no-cache
 #   SKIP_PI=1       跳过 Pi Coding Agent 安装与配置
+#   DEPLOY_WAIT_CONTAINER_SEC  等待容器 running（默认 90）
+#   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health（默认 120）
+#   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 20）
 #
 # 部署验证（失败则 exit 1 并打印日志）：
 #   1. docker build 阶段导入 app（Dockerfile）— 捕获启动语法/路由错误
@@ -34,6 +37,9 @@ APP_PORT="${APP_PORT:-8000}"
 SKIP_PULL="${SKIP_PULL:-0}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 SKIP_PI="${SKIP_PI:-0}"
+DEPLOY_WAIT_CONTAINER_SEC="${DEPLOY_WAIT_CONTAINER_SEC:-90}"
+DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-120}"
+DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-20}"
 PI_ENV_FILE=""
 PI_SETUP_OK=0
 
@@ -156,40 +162,80 @@ show_failure_logs() {
   echo "      cd ${APP_DIR} && docker compose logs -f"
 }
 
-wait_healthy() {
-  log "等待服务就绪并验证..."
-  sleep 5
-  local i ok_streak=0
-  for i in $(seq 1 60); do
-    if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
-      ok_streak=$((ok_streak + 1))
-      if [[ "${ok_streak}" -ge 2 ]]; then
-        log "HTTP 就绪，运行完整检查..."
-        if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet; then
-          log "健康检查通过"
-          return 0
-        fi
-        ok_streak=0
-      fi
-    else
-      ok_streak=0
+container_state() {
+  $SUDO docker inspect -f '{{.State.Status}}|{{.State.Restarting}}|{{.State.ExitCode}}' salescrm 2>/dev/null || echo "missing|false|0"
+}
+
+wait_for_container() {
+  log "等待容器 running（最多 ${DEPLOY_WAIT_CONTAINER_SEC}s）..."
+  local i status restarting
+  for i in $(seq 1 "${DEPLOY_WAIT_CONTAINER_SEC}"); do
+    IFS='|' read -r status restarting _ <<< "$(container_state)"
+    if [[ "${status}" == "running" && "${restarting}" != "true" ]]; then
+      log "容器已 running（${i}s）"
+      return 0
     fi
+    if [[ "${status}" == "exited" || "${status}" == "dead" ]]; then
+      echo "ERROR: 容器状态 ${status}，启动失败" >&2
+      show_failure_logs
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "ERROR: 容器在 ${DEPLOY_WAIT_CONTAINER_SEC}s 内未进入 running" >&2
+  show_failure_logs
+  exit 1
+}
+
+wait_for_http() {
+  log "等待 HTTP /health（最多 ${DEPLOY_WAIT_HTTP_SEC}s）..."
+  local i
+  for i in $(seq 1 "${DEPLOY_WAIT_HTTP_SEC}"); do
+    if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
+      log "HTTP 就绪（${i}s）"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "ERROR: HTTP 健康检查超时（${DEPLOY_WAIT_HTTP_SEC}s）" >&2
+  APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick || true
+  show_failure_logs
+  exit 1
+}
+
+run_full_check() {
+  APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet
+}
+
+wait_healthy() {
+  wait_for_container
+  # 给 uvicorn / init_db 一点缓冲
+  sleep 2
+  wait_for_http
+  # HTTP 已通，再等应用完全就绪后跑冒烟
+  sleep 3
+
+  log "运行完整检查（最多重试 ${DEPLOY_FULL_RETRIES} 次）..."
+  local retry last_phase="full"
+  for retry in $(seq 1 "${DEPLOY_FULL_RETRIES}"); do
+    if run_full_check; then
+      log "健康检查通过（第 ${retry} 次完整检查）"
+      return 0
+    fi
+    last_phase="full retry ${retry}/${DEPLOY_FULL_RETRIES}"
     sleep 2
   done
 
-  log "等待超时，最后重试完整检查..."
-  local retry
-  for retry in $(seq 1 5); do
-    if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet; then
-      log "健康检查通过（重试 ${retry}/5）"
-      return 0
-    fi
-    sleep 3
-  done
+  # 完整检查失败时，若 HTTP 仍正常，给出更明确的提示（常见于慢 VPS / 冒烟瞬时失败）
+  if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
+    warn "HTTP /health 正常，但完整检查（含 API 冒烟）未通过"
+  fi
 
   echo ""
-  echo "ERROR: 部署完成但服务未正常运行（等待与重试均未通过）" >&2
+  echo "ERROR: 部署完成但服务未通过完整健康检查（${last_phase}）" >&2
+  echo "提示: 若浏览器可访问且 ./scripts/check.sh 已通过，可忽略此次超时并手动确认" >&2
   APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" || true
+  show_failure_logs
   exit 1
 }
 

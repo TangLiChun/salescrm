@@ -1179,6 +1179,59 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   align-self: flex-start;
   background: var(--surface);
   border: 1px solid var(--line);
+  white-space: normal;
+}
+
+.pi-chat-bubble.markdown p {
+  margin: 0 0 0.55em;
+}
+
+.pi-chat-bubble.markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.pi-chat-bubble.markdown ul,
+.pi-chat-bubble.markdown ol {
+  margin: 0.2em 0 0.55em;
+  padding-left: 1.25em;
+}
+
+.pi-chat-bubble.markdown li {
+  margin: 0.12em 0;
+}
+
+.pi-chat-bubble.markdown code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--surface-sunk);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+.pi-chat-bubble.markdown pre {
+  margin: 0.45em 0;
+  padding: 0.65em 0.75em;
+  background: var(--surface-sunk);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.pi-chat-bubble.markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.pi-chat-bubble.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.pi-chat-bubble.markdown strong {
+  font-weight: 600;
 }
 
 .pi-chat-tool {
@@ -1226,6 +1279,54 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   font-family: var(--mono);
   font-size: 11px;
   max-height: 160px;
+}
+
+.pi-chat-tool-result.hidden {
+  display: none;
+}
+
+.pi-chat-tool-plan {
+  margin: var(--space-2) 0;
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.pi-chat-tool-plan.hidden {
+  display: none;
+}
+
+.pi-chat-leads {
+  margin-top: var(--space-2);
+  overflow-x: auto;
+}
+
+.pi-chat-leads.hidden {
+  display: none;
+}
+
+.pi-chat-leads table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.pi-chat-leads th,
+.pi-chat-leads td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.pi-chat-leads tr.selected {
+  background: var(--accent-soft);
+}
+
+.pi-chat-leads-actions {
+  margin-top: var(--space-2);
+}
+
+.pi-chat-leads-actions.hidden {
+  display: none;
 }
 
 .pi-chat-status {
