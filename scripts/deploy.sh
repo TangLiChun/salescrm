@@ -158,17 +158,38 @@ show_failure_logs() {
 
 wait_healthy() {
   log "等待服务就绪并验证..."
-  local i
-  for i in $(seq 1 45); do
-    if APP_PORT="${APP_PORT}" "${SCRIPT_DIR}/check.sh" --quiet 2>/dev/null; then
-      log "健康检查通过"
-      return 0
+  sleep 5
+  local i ok_streak=0
+  for i in $(seq 1 60); do
+    if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
+      ok_streak=$((ok_streak + 1))
+      if [[ "${ok_streak}" -ge 2 ]]; then
+        log "HTTP 就绪，运行完整检查..."
+        if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet; then
+          log "健康检查通过"
+          return 0
+        fi
+        ok_streak=0
+      fi
+    else
+      ok_streak=0
     fi
     sleep 2
   done
+
+  log "等待超时，最后重试完整检查..."
+  local retry
+  for retry in $(seq 1 5); do
+    if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quiet; then
+      log "健康检查通过（重试 ${retry}/5）"
+      return 0
+    fi
+    sleep 3
+  done
+
   echo ""
-  echo "ERROR: 部署完成但服务未正常运行（超时 ${i}×2s）" >&2
-  APP_PORT="${APP_PORT}" "${SCRIPT_DIR}/check.sh" || true
+  echo "ERROR: 部署完成但服务未正常运行（等待与重试均未通过）" >&2
+  APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" || true
   exit 1
 }
 

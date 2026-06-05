@@ -3,11 +3,19 @@
 #
 #   ./scripts/check.sh          详细输出，失败时 exit 1
 #   ./scripts/check.sh --quiet  仅 exit code，无输出
+#   ./scripts/check.sh --quick    仅容器 + HTTP（deploy 等待用）
+#   ./scripts/check.sh --quick --quiet
 
 set -euo pipefail
 
 QUIET=0
-[[ "${1:-}" == "--quiet" ]] && QUIET=1
+QUICK=0
+for arg in "$@"; do
+  case "${arg}" in
+    --quiet) QUIET=1 ;;
+    --quick) QUICK=1 ;;
+  esac
+done
 
 APP_PORT="${APP_PORT:-8000}"
 CONTAINER="${CONTAINER:-salescrm}"
@@ -133,8 +141,10 @@ main() {
   cd "${APP_DIR}"
   check_container
   check_health_http
-  check_smoke
-  check_docker_health
+  if [[ "$QUICK" -eq 0 ]]; then
+    check_smoke
+    check_docker_health
+  fi
   [[ "$QUIET" -eq 0 ]] && echo "" && echo "OK: Sales CRM 运行正常"
 }
 
