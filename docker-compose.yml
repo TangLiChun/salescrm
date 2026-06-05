@@ -11,7 +11,15 @@ services:
     volumes:
       - salescrm_data:/app/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3); exit(0 if b'\"ok\": true' in r.read() or b'\"ok\":true' in r.read() else 1)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, urllib.request
+          r = urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+          d = json.loads(r.read())
+          raise SystemExit(0 if d.get("ok") and d.get("db") else 1)
       interval: 30s
       timeout: 5s
       retries: 3
