@@ -378,6 +378,14 @@
                   </select></label>
               </fieldset>
               <fieldset>
+                <legend data-i18n="settings.brightdataSerp">Bright Data Google SERP</legend>
+                <p class="stats" data-i18n="settings.brightdataSerpHint">使用 Bright Data SERP API（format=raw HTML）。需在 Bright Data 控制台创建 SERP zone 并获取 API Key。</p>
+                <label class="field"><span data-i18n="settings.brightdataApiKey">Bright Data API Key</span>
+                  <input id="setting-brightdata-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
+                <label class="field"><span data-i18n="settings.brightdataSerpZone">SERP Zone 名称</span>
+                  <input id="setting-brightdata-serp-zone" type="text" placeholder="serp_api1"></label>
+              </fieldset>
+              <fieldset>
                 <legend data-i18n="settings.searchApiOptional">其他搜索引擎 API（可选）</legend>
                 <label class="field"><span>Tavily API Key</span>
                   <input id="setting-tavily-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>

@@ -5,18 +5,36 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from html import unescape
 from typing import Any
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 ASN_RE = re.compile(r"\bAS[N]?[\s\-]?(\d{1,10})\b", re.IGNORECASE)
-
+GOOGLE_H3_LINK_RE = re.compile(
+    r'<a\s+[^>]*href="([^"]+)"[^>]*>\s*(?:<[^>]+>\s*)*<h3[^>]*>(.*?)</h3>',
+    re.IGNORECASE | re.DOTALL,
+)
+GOOGLE_SNIPPET_RE = re.compile(
+    r'class="[^"]*(?:VwiC3b|yXK7lf|MUxGbd|IsZvec)[^"]*"[^>]*>(.*?)</',
+    re.IGNORECASE | re.DOTALL,
+)
+GOOGLE_HREF_RE = re.compile(r'href="(/url\?[^"]+|https?://[^"]+)"', re.IGNORECASE)
 
 from app.settings_store import get_setting
 
-
 ZHIPU_WEB_SEARCH_URL = "https://open.bigmodel.cn/api/paas/v4/web_search"
+BRIGHTDATA_REQUEST_URL = "https://api.brightdata.com/request"
 ZHIPU_SEARCH_ENGINES = frozenset(
     {"search_std", "search_pro", "search_pro_sogou", "search_pro_quark"}
+)
+GOOGLE_JUNK_URL_PARTS = (
+    "google.com/search",
+    "google.com/url?",
+    "webcache.googleusercontent.com",
+    "accounts.google.com",
+    "support.google.com",
+    "policies.google.com",
+    "maps.google.com",
 )
 
 
@@ -34,10 +52,18 @@ def zhipu_search_configured() -> bool:
     return bool(_zhipu_api_key())
 
 
+def brightdata_serp_configured() -> bool:
+    return bool(get_setting("brightdata_api_key", "").strip()) and bool(
+        get_setting("brightdata_serp_zone", "").strip()
+    )
+
+
 def available_backends() -> list[str]:
     backends: list[str] = []
     if zhipu_search_configured():
         backends.append("zhipu")
+    if brightdata_serp_configured():
+        backends.append("brightdata")
     if get_setting("tavily_api_key", "").strip():
         backends.append("tavily")
     if get_setting("serpapi_key", "").strip():
@@ -72,8 +98,15 @@ def get_search_config() -> dict[str, Any]:
             "uses_dedicated_key": bool(zhipu_key),
             "reuses_llm_key": bool(not zhipu_key and "bigmodel.cn" in llm_base),
         },
+        "brightdata_serp": {
+            "configured": brightdata_serp_configured(),
+            "endpoint": BRIGHTDATA_REQUEST_URL,
+            "zone": get_setting("brightdata_serp_zone", "").strip(),
+            "response_format": "raw_html",
+        },
         "keys_configured": {
             "zhipu": zhipu_search_configured(),
+            "brightdata": brightdata_serp_configured(),
             "tavily": bool(get_setting("tavily_api_key", "").strip()),
             "serpapi": bool(get_setting("serpapi_key", "").strip()),
             "brave": bool(get_setting("brave_search_key", "").strip()),
@@ -159,6 +192,8 @@ def _is_noise_email(email: str) -> bool:
 def _search_with_backend(backend: str, query: str, *, max_results: int) -> list[dict[str, str]]:
     if backend == "zhipu":
         return _search_zhipu(query, max_results=max_results)
+    if backend == "brightdata":
+        return _search_brightdata_serp(query, max_results=max_results)
     if backend == "tavily":
         return _search_tavily(query, max_results=max_results)
     if backend == "serpapi":
@@ -168,6 +203,136 @@ def _search_with_backend(backend: str, query: str, *, max_results: int) -> list[
     if backend == "duckduckgo":
         return _search_duckduckgo(query, max_results=max_results)
     return []
+
+
+def _strip_html(text: str) -> str:
+    cleaned = unescape(re.sub(r"<[^>]+>", " ", text or ""))
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _unwrap_google_href(href: str) -> str:
+    raw = unescape((href or "").strip())
+    if raw.startswith("/url?"):
+        parsed = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
+        for key in ("q", "url"):
+            values = parsed.get(key) or []
+            if values and values[0].startswith("http"):
+                return values[0]
+        return ""
+    return raw
+
+
+def _is_junk_google_url(url: str) -> bool:
+    lowered = (url or "").lower()
+    if not lowered.startswith("http"):
+        return True
+    return any(part in lowered for part in GOOGLE_JUNK_URL_PARTS)
+
+
+def _parse_brightdata_json(data: dict[str, Any], *, query: str, max_results: int) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for item in data.get("organic") or []:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            _normalize_result(
+                str(item.get("title") or ""),
+                str(item.get("link") or ""),
+                str(item.get("description") or ""),
+                backend="brightdata",
+                query=query,
+            )
+        )
+        if len(rows) >= max_results:
+            break
+    return rows
+
+
+def _parse_google_serp_html(html: str, *, query: str, max_results: int) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for match in GOOGLE_H3_LINK_RE.finditer(html):
+        url = _unwrap_google_href(match.group(1))
+        title = _strip_html(match.group(2))
+        if not url or not title or _is_junk_google_url(url) or url in seen_urls:
+            continue
+        snippet = ""
+        tail = html[match.end() : match.end() + 1200]
+        snippet_match = GOOGLE_SNIPPET_RE.search(tail)
+        if snippet_match:
+            snippet = _strip_html(snippet_match.group(1))
+        seen_urls.add(url)
+        rows.append(
+            _normalize_result(title, url, snippet, backend="brightdata", query=query)
+        )
+        if len(rows) >= max_results:
+            return rows
+
+    for match in GOOGLE_HREF_RE.finditer(html):
+        url = _unwrap_google_href(match.group(1))
+        if not url or _is_junk_google_url(url) or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        rows.append(_normalize_result(url, url, "", backend="brightdata", query=query))
+        if len(rows) >= max_results:
+            break
+
+    return rows
+
+
+def _parse_brightdata_response(body: str, *, query: str, max_results: int) -> list[dict[str, str]]:
+    text = (body or "").strip()
+    if not text:
+        return []
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            parsed = _parse_brightdata_json(data, query=query, max_results=max_results)
+            if parsed:
+                return parsed
+    return _parse_google_serp_html(text, query=query, max_results=max_results)
+
+
+def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, str]]:
+    api_key = get_setting("brightdata_api_key", "").strip()
+    zone = get_setting("brightdata_serp_zone", "").strip()
+    if not api_key or not zone:
+        return []
+
+    count = max(1, min(max_results, 20))
+    google_url = (
+        "https://www.google.com/search?"
+        + urllib.parse.urlencode({"q": query, "num": count, "hl": "en", "gl": "us"})
+    )
+    payload = {
+        "zone": zone,
+        "url": google_url,
+        "format": "raw",
+    }
+    req = urllib.request.Request(
+        BRIGHTDATA_REQUEST_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Bright Data SERP HTTP {exc.code}: {detail[:300]}") from exc
+
+    rows = _parse_brightdata_response(body, query=query, max_results=max_results)
+    if not rows:
+        raise RuntimeError("Bright Data SERP 返回 HTML 但未解析到有效结果")
+    return rows
 
 
 def _search_tavily(query: str, *, max_results: int) -> list[dict[str, str]]:

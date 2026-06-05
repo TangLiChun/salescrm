@@ -1138,6 +1138,7 @@ async function loadSettingsForm() {
   setInputValue("setting-llm-base-url", data.llm_base_url);
   setInputValue("setting-llm-model", data.llm_model);
   setInputValue("setting-zhipu-search-engine", data.zhipu_search_engine || "search_pro");
+  setInputValue("setting-brightdata-serp-zone", data.brightdata_serp_zone || "");
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
 
@@ -1154,6 +1155,7 @@ async function loadSettingsForm() {
     ["setting-session-secret", data.session_secret, data.session_secret_configured],
     ["setting-llm-api-key", data.llm_api_key, data.llm_api_key_configured],
     ["setting-tavily-api-key", data.tavily_api_key, data.tavily_api_key_configured],
+    ["setting-brightdata-api-key", data.brightdata_api_key, data.brightdata_api_key_configured],
     ["setting-serpapi-key", data.serpapi_key, data.serpapi_key_configured],
     ["setting-brave-search-key", data.brave_search_key, data.brave_search_key_configured],
     ["setting-zhipu-api-key", data.zhipu_api_key, data.zhipu_api_key_configured],
@@ -1174,6 +1176,7 @@ async function saveSettings(event) {
     llm_base_url: document.getElementById("setting-llm-base-url").value.trim(),
     llm_model: document.getElementById("setting-llm-model").value.trim(),
     zhipu_search_engine: document.getElementById("setting-zhipu-search-engine").value.trim(),
+    brightdata_serp_zone: document.getElementById("setting-brightdata-serp-zone").value.trim(),
     scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
   };
@@ -1183,6 +1186,7 @@ async function saveSettings(event) {
     ["session_secret", "setting-session-secret"],
     ["llm_api_key", "setting-llm-api-key"],
     ["tavily_api_key", "setting-tavily-api-key"],
+    ["brightdata_api_key", "setting-brightdata-api-key"],
     ["serpapi_key", "setting-serpapi-key"],
     ["brave_search_key", "setting-brave-search-key"],
     ["zhipu_api_key", "setting-zhipu-api-key"],
@@ -1927,8 +1931,12 @@ function formatPiToolSummary(name, result) {
   if (name === "get_search_config") {
     const active = result.active_web_backend || "duckduckgo";
     const zhipu = result.zhipu_web_search || {};
+    const bright = result.brightdata_serp || {};
     if (active === "zhipu") {
       return `当前联网搜索：智谱 ${zhipu.engine || "search_pro"}（${zhipu.configured ? "已配置" : "未配置"}）`;
+    }
+    if (active === "brightdata") {
+      return `当前联网搜索：Bright Data Google SERP（zone ${bright.zone || "未配置"}）`;
     }
     return `当前联网搜索：${active} · 优先级 ${(result.web_backend_priority || []).join(" > ")}`;
   }

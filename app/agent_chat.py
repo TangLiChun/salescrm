@@ -105,7 +105,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "discover_leads",
-            "description": "使用 CRM 内置 AI 多渠道线索发现（LLM 规划 → 联网搜索[智谱/Tavily/SerpAPI/Brave/DuckDuckGo 按优先级] → PeeringDB → 全球 RDAP → LLM 评分）",
+            "description": "使用 CRM 内置 AI 多渠道线索发现（LLM 规划 → 联网搜索[智谱/Bright Data/Tavily/SerpAPI/Brave/DuckDuckGo 按优先级] → PeeringDB → 全球 RDAP → LLM 评分）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -256,7 +256,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_search_config",
-            "description": "查看当前联网搜索配置：启用的搜索引擎、优先级、智谱 Web Search 引擎档位（search_pro 等）、各 API Key 是否已配置",
+            "description": "查看当前联网搜索配置：启用的搜索引擎、优先级、智谱/Bright Data SERP 等 API Key 是否已配置",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -298,7 +298,7 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - lookup_asns：全球 RIR（ARIN/RIPE/APNIC/LACNIC/AFRINIC）RDAP 查 ASN role 邮箱
 - discover_leads：AI 多渠道找线索（联网搜索 + PeeringDB + RDAP + LLM 评分）
 - web_search：直接联网搜索（不跑完整线索流程）
-- get_search_config：查看当前联网搜索用哪个引擎（智谱 zhipu / Tavily / SerpAPI / Brave / DuckDuckGo）及优先级
+- get_search_config：查看当前联网搜索用哪个引擎（智谱 zhipu / Bright Data Google SERP / Tavily / SerpAPI / Brave / DuckDuckGo）及优先级
 - enrich_contact：为已有联系人扩展更多联系方式，可 auto_import
 - get_contact / list_contacts / import_leads：读取、搜索、导入联系人
 - update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理联系人
@@ -306,7 +306,7 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - get_import_filters / update_import_filters：导入黑名单/白名单（设置页同源）
 - list_schedules：定时线索任务
 
-联网搜索说明：系统设置 → AI 与搜索 中配置。默认优先级 zhipu(智谱 Web Search API) > tavily > serpapi > brave > duckduckgo。
+联网搜索说明：系统设置 → AI 与搜索 中配置。默认优先级 zhipu(智谱) > brightdata(Bright Data Google SERP, raw HTML) > tavily > serpapi > brave > duckduckgo。
 用户问「AI 搜索用的什么 / 怎么调用 / 有哪些渠道」时，先调用 get_search_config 再回答，不要猜测。
 
 规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。"""

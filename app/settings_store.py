@@ -10,6 +10,7 @@ SECRET_KEYS = {
     "tavily_api_key",
     "serpapi_key",
     "brave_search_key",
+    "brightdata_api_key",
     "zhipu_api_key",
     "session_secret",
     "default_admin_password",
@@ -27,6 +28,8 @@ DEFAULTS: dict[str, str] = {
     "tavily_api_key": "",
     "serpapi_key": "",
     "brave_search_key": "",
+    "brightdata_api_key": "",
+    "brightdata_serp_zone": "",
     "zhipu_api_key": "",
     "zhipu_search_engine": "search_pro",
     "scheduler_enabled": "1",
@@ -153,6 +156,10 @@ def get_public_settings() -> dict[str, Any]:
             "tavily": bool(values.get("tavily_api_key", "").strip()),
             "serpapi": bool(values.get("serpapi_key", "").strip()),
             "brave": bool(values.get("brave_search_key", "").strip()),
+            "brightdata": bool(
+                values.get("brightdata_api_key", "").strip()
+                and values.get("brightdata_serp_zone", "").strip()
+            ),
             "duckduckgo": True,
         },
     }
