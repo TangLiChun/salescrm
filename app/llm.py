@@ -149,6 +149,7 @@ def _consume_stream_chunk(
     reasoning_parts: list[str],
     tool_calls: dict[int, dict[str, Any]],
     emit_content_delta: bool,
+    tool_status_emitted: list[bool],
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for choice in chunk.get("choices") or [{}]:
@@ -162,9 +163,15 @@ def _consume_stream_chunk(
         reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning")
         if reasoning_piece:
             reasoning_parts.append(str(reasoning_piece))
+            if not tool_status_emitted[0] and not content_parts:
+                tool_status_emitted[0] = True
+                events.append({"type": "status", "message": "模型推理中…"})
 
         for tool_delta in delta.get("tool_calls") or []:
             if isinstance(tool_delta, dict):
+                if not tool_status_emitted[0]:
+                    tool_status_emitted[0] = True
+                    events.append({"type": "status", "message": "正在准备工具调用…"})
                 _merge_tool_call_delta(tool_calls, tool_delta)
 
         message = choice.get("message")
@@ -256,6 +263,8 @@ def chat_completion_with_tools_stream(
         yield {"type": "error", "message": f"无法连接 LLM 服务: {exc.reason}"}
         return
 
+    tool_status_emitted = [False]
+
     for chunk in _parse_sse_or_json_lines(raw_body):
         for event in _consume_stream_chunk(
             chunk,
@@ -263,6 +272,7 @@ def chat_completion_with_tools_stream(
             reasoning_parts=reasoning_parts,
             tool_calls=tool_calls,
             emit_content_delta=True,
+            tool_status_emitted=tool_status_emitted,
         ):
             yield event
 

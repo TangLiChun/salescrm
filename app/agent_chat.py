@@ -1605,6 +1605,8 @@ async def agent_chat_stream(
                             streamed_reply = True
                             yield {"type": "assistant_start"}
                         yield {"type": "assistant_delta", "text": piece}
+                elif event_type == "status":
+                    yield {"type": "status", "message": event.get("message") or "Pi 助手处理中…"}
                 elif event_type == "message":
                     assistant = event.get("message")
 
