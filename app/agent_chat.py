@@ -51,7 +51,7 @@ SOCIAL_PROFILE_TOOLS: dict[str, bs.SocialChannelSpec] = {
     "collect_facebook_profiles": FACEBOOK,
 }
 
-MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 12
 MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
 MAX_WEB_SEARCH_QUERIES = 4
 TOOL_HEARTBEAT_SECONDS = 12
@@ -1187,7 +1187,7 @@ async def _run_tool(
 
 async def _iter_llm_stream(
     messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
 ) -> AsyncIterator[dict[str, Any]]:
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -1209,6 +1209,26 @@ async def _iter_llm_stream(
         if item is None:
             break
         yield item
+
+
+async def _stream_text_reply(
+    messages: list[dict[str, Any]],
+) -> tuple[str, bool]:
+    """One text-only LLM turn (no tools). Returns (text, ok)."""
+    assistant: dict[str, Any] | None = None
+    content_buffer = ""
+    async for event in _iter_llm_stream(messages, None):
+        event_type = event.get("type")
+        if event_type == "error":
+            return "", False
+        if event_type == "content_delta":
+            piece = str(event.get("text") or "")
+            if piece:
+                content_buffer += piece
+        elif event_type == "message":
+            assistant = event.get("message")
+    content = (assistant.get("content") if assistant else content_buffer or "").strip()
+    return content, bool(content)
 
 
 async def agent_chat_stream(
@@ -1345,7 +1365,18 @@ async def agent_chat_stream(
             )
 
         if round_index == MAX_TOOL_ROUNDS - 1:
-            final_text = "已达到最大工具调用轮次，请简化问题后重试。"
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "（系统）本轮工具调用已达上限。请根据已有工具结果直接给出总结与下一步建议，"
+                        "不要再调用任何工具。"
+                    ),
+                }
+            )
+            final_text, ok = await _stream_text_reply(messages)
+            if not ok:
+                final_text = "已达到最大工具调用轮次，请简化问题后重试。"
             yield {"type": "assistant_start"}
             yield {"type": "assistant_delta", "text": final_text}
             yield {"type": "assistant_done", "text": final_text}
