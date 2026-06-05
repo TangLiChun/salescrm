@@ -882,6 +882,33 @@ function setInputValue(id, value) {
   if (el) el.value = value ?? "";
 }
 
+const SETTINGS_FORM_CATS = new Set(["account", "ai", "import", "automation"]);
+let activeSettingsCat = "account";
+
+function switchSettingsCat(cat) {
+  activeSettingsCat = cat;
+  document.querySelectorAll(".settings-rail-item").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.settingsCat === cat);
+  });
+  document.querySelectorAll(".settings-pane").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.settingsPane !== cat);
+  });
+  const footer = document.getElementById("settings-footer");
+  footer.classList.toggle("hidden", !SETTINGS_FORM_CATS.has(cat));
+}
+
+function updateSettingsRailDots(data) {
+  const aiDot = document.getElementById("rail-dot-ai");
+  const aiOn = Boolean(data.llm_api_key_configured);
+  aiDot.classList.toggle("on", aiOn);
+  aiDot.title = aiOn ? "LLM 已配置" : "LLM 未配置";
+
+  const autoDot = document.getElementById("rail-dot-automation");
+  const autoOn = data.scheduler_enabled === "1";
+  autoDot.classList.toggle("on", autoOn);
+  autoDot.title = autoOn ? "定时任务已启用" : "定时任务未启用";
+}
+
 async function loadSettingsForm() {
   const data = await api("/api/settings");
   setInputValue("setting-default-admin-user", data.default_admin_user);
@@ -904,6 +931,7 @@ async function loadSettingsForm() {
     el.placeholder = configured ? `已配置 ${masked}，留空则不修改` : "未配置";
   }
   settingsStatusEl.textContent = "";
+  updateSettingsRailDots(data);
 }
 
 async function saveSettings(event) {
@@ -1098,6 +1126,7 @@ function switchView(view) {
     pageTitle.textContent = "系统设置";
     pageSubtitle.textContent = "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理";
     loadSettingsForm().catch((error) => alert(error.message));
+    switchSettingsCat(activeSettingsCat);
     loadEmailTemplates().catch((error) => alert(error.message));
   } else if (view === "stats") {
     pageTitle.textContent = "统计概览";
@@ -1510,6 +1539,10 @@ logoutBtn.addEventListener("click", async () => {
 
 tabs.forEach((tab) => {
   tab.addEventListener("click", () => switchView(tab.dataset.view));
+});
+
+document.querySelectorAll(".settings-rail-item").forEach((btn) => {
+  btn.addEventListener("click", () => switchSettingsCat(btn.dataset.settingsCat));
 });
 
 contactNoteForm.addEventListener("submit", (event) => {
