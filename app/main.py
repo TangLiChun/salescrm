@@ -578,6 +578,17 @@ async def run_schedule_now(job_id: int, user: CurrentUser) -> dict:
     return await run_scheduled_job(job)
 
 
+@app.post("/api/lookup/parse")
+def lookup_parse(body: LookupRequest, _: CurrentUser) -> dict:
+    asns = parse_asns_from_text(body.text)
+    return {
+        "asns": asns,
+        "total": len(asns),
+        "max": MAX_ASNS,
+        "over_limit": len(asns) > MAX_ASNS,
+    }
+
+
 @app.post("/api/lookup")
 def lookup_batch(body: LookupRequest, _: CurrentUser) -> dict:
     asns = parse_asns_from_text(body.text)
@@ -614,6 +625,7 @@ async def lookup_stream(body: LookupRequest, _: CurrentUser) -> StreamingRespons
 
     async def event_generator():
         total = len(asns)
+        yield f"data: {json.dumps({'type': 'parsed', 'asns': asns, 'total': total}, ensure_ascii=False)}\n\n"
         for index, asn in enumerate(asns):
             rows = await asyncio.to_thread(lookup_asn, asn, body.timeout)
             payload = {

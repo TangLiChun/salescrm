@@ -14,6 +14,8 @@ from typing import Iterable
 
 ARIN_RDAP = "https://rdap.arin.net/registry/autnum/{asn}"
 ROLE_PRIORITY = ("abuse", "administrative", "technical", "routing", "noc", "registrant")
+MAX_ASN = 4294967295
+ASN_PREFIX_RE = re.compile(r"\bAS[N]?\s*[-#]?\s*(\d{1,10})\b", re.IGNORECASE)
 
 
 @dataclass
@@ -45,18 +47,53 @@ def parse_asn(value: str) -> int | None:
     if not value or value.startswith("#"):
         return None
     match = re.search(r"\d+", value)
-    return int(match.group()) if match else None
+    if not match:
+        return None
+    asn = int(match.group())
+    return asn if 1 <= asn <= MAX_ASN else None
+
+
+def _add_asn(asn: int, seen: set[int], ordered: list[int]) -> None:
+    if 1 <= asn <= MAX_ASN and asn not in seen:
+        seen.add(asn)
+        ordered.append(asn)
 
 
 def parse_asns_from_text(text: str) -> list[int]:
+    """Extract unique ASNs from free-form text (order preserved).
+
+    Supports AS/ASN prefixes, one-per-line numbers, and delimited lists
+    such as ``15169, 7922`` or ``AS15169 7922`` on a single line.
+    """
+    if not text or not text.strip():
+        return []
+
     seen: set[int] = set()
-    asns: list[int] = []
+    ordered: list[int] = []
+
     for line in text.splitlines():
-        asn = parse_asn(line)
-        if asn is not None and asn not in seen:
-            seen.add(asn)
-            asns.append(asn)
-    return asns
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "#" in stripped:
+            stripped = stripped.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+
+        for match in ASN_PREFIX_RE.finditer(stripped):
+            _add_asn(int(match.group(1)), seen, ordered)
+
+        parts = [part.strip().strip("'\"") for part in re.split(r"[\s,;|]+", stripped) if part.strip()]
+        for part in parts:
+            if re.fullmatch(r"\d{1,10}", part):
+                _add_asn(int(part), seen, ordered)
+                continue
+            if len(parts) == 1:
+                asn = parse_asn(part)
+                if asn is not None:
+                    _add_asn(asn, seen, ordered)
+
+    return ordered
 
 
 def load_asns(path: str | None) -> list[int]:

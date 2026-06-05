@@ -35,8 +35,9 @@
         <textarea
           id="asn-input"
           rows="12"
-          placeholder="每行一个 ASN，例如：&#10;15169&#10;AS7922&#10;7922"
+          placeholder="支持多种格式，自动去重：&#10;15169&#10;AS7922, 13335&#10;混排文本中的 ASN 8075 也会被识别"
         ></textarea>
+        <p id="asn-parse-preview" class="stats hint"></p>
 
         <div class="controls">
           <label class="field">

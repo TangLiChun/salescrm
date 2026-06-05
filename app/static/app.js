@@ -1,4 +1,5 @@
 const asnInput = document.getElementById("asn-input");
+const asnParsePreviewEl = document.getElementById("asn-parse-preview");
 const delayInput = document.getElementById("delay");
 const lookupBtn = document.getElementById("lookup-btn");
 const exportBtn = document.getElementById("export-btn");
@@ -437,6 +438,16 @@ async function runLookup() {
         if (!line.startsWith("data: ")) continue;
         const payload = JSON.parse(line.slice(6));
 
+        if (payload.type === "parsed") {
+          progressText.textContent = `已去重，共 ${payload.total} 个 ASN，开始查询…`;
+          renderAsnPreview({
+            asns: payload.asns,
+            total: payload.total,
+            max: 200,
+            over_limit: payload.total > 200,
+          });
+        }
+
         if (payload.type === "progress") {
           for (const row of payload.rows) {
             ensureRowSelected(row);
@@ -475,6 +486,37 @@ function formatImportResult(result) {
     parts.push(`过滤 ${result.filtered} 条`);
   }
   return `导入完成：${parts.join("，")}`;
+}
+
+let asnParseTimer = null;
+
+function renderAsnPreview(data) {
+  if (!asnParsePreviewEl) return;
+  if (!data || !data.total) {
+    asnParsePreviewEl.textContent = data ? "未识别到有效 ASN" : "";
+    return;
+  }
+  const sample = (data.asns || []).slice(0, 8).map((asn) => `AS${asn}`).join(", ");
+  const suffix = data.total > 8 ? ` … 共 ${data.total} 个` : "";
+  const limitNote = data.over_limit ? `（超过上限 ${data.max}，查询时将截断）` : "";
+  asnParsePreviewEl.textContent = `已识别 ${data.total} 个 ASN（去重后）：${sample}${suffix}${limitNote}`;
+}
+
+async function refreshAsnPreview() {
+  const text = asnInput.value.trim();
+  if (!text) {
+    renderAsnPreview(null);
+    return;
+  }
+  try {
+    const data = await api("/api/lookup/parse", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    renderAsnPreview(data);
+  } catch {
+    asnParsePreviewEl.textContent = "";
+  }
 }
 
 async function importResults() {
@@ -1611,6 +1653,12 @@ async function bootstrap() {
 }
 
 lookupBtn.addEventListener("click", runLookup);
+asnInput.addEventListener("input", () => {
+  clearTimeout(asnParseTimer);
+  asnParseTimer = setTimeout(() => {
+    refreshAsnPreview().catch(() => {});
+  }, 350);
+});
 exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
