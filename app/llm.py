@@ -11,6 +11,7 @@ from app.settings_store import get_setting
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
 REQUEST_TIMEOUT = 60.0
+AGENT_REQUEST_TIMEOUT = 180.0
 
 
 class LLMError(RuntimeError):
@@ -31,13 +32,32 @@ def _settings() -> tuple[str, str, str]:
 
 
 def chat_completion(messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
+    message = chat_completion_with_tools(messages, tools=None, temperature=temperature, json_mode=True)
+    content = message.get("content")
+    if not content:
+        raise LLMError("LLM 返回空内容")
+    return content
+
+
+def chat_completion_with_tools(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    temperature: float = 0.2,
+    json_mode: bool = False,
+) -> dict[str, Any]:
     api_key, base_url, model = _settings()
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
         "messages": messages,
-        "response_format": {"type": "json_object"},
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    elif json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
     req = urllib.request.Request(
         f"{base_url}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -47,8 +67,9 @@ def chat_completion(messages: list[dict[str, str]], *, temperature: float = 0.2)
         },
         method="POST",
     )
+    timeout = AGENT_REQUEST_TIMEOUT if tools else REQUEST_TIMEOUT
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.load(resp)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -57,7 +78,7 @@ def chat_completion(messages: list[dict[str, str]], *, temperature: float = 0.2)
         raise LLMError(f"无法连接 LLM 服务: {exc.reason}") from exc
 
     try:
-        return data["choices"][0]["message"]["content"]
+        return data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError("LLM 返回格式异常") from exc
 

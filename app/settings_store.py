@@ -133,6 +133,7 @@ def get_public_settings() -> dict[str, Any]:
         "default_username": values.get("default_admin_user", "admin"),
         "default_password_hint": values.get("default_admin_password", "admin123"),
         "llm_configured": bool(values.get("llm_api_key", "").strip()),
+        "agent_chat_enabled": bool(values.get("llm_api_key", "").strip()),
         "llm_model": values.get("llm_model", DEFAULTS["llm_model"]),
         "llm_base_url": values.get("llm_base_url", DEFAULTS["llm_base_url"]),
         "scheduler_enabled": values.get("scheduler_enabled", "1") != "0",

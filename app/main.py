@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.agent_chat import agent_chat_stream
 from app.agent_routes import router as agent_router
 from app.auth import (
     SESSION_USER_KEY,
@@ -188,6 +189,11 @@ class EmailTemplateUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     subject: str | None = Field(default=None, max_length=500)
     body: str | None = Field(default=None, max_length=10000)
+
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 
 def render_page(filename: str) -> HTMLResponse:
@@ -576,6 +582,25 @@ async def run_schedule_now(job_id: int, user: CurrentUser) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="定时任务不存在")
     return await run_scheduled_job(job)
+
+
+@app.post("/api/agent/chat/stream")
+async def agent_chat_stream_route(body: AgentChatRequest, user: CurrentUser) -> StreamingResponse:
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 LLM API Key，请在系统设置中填写",
+        )
+
+    async def event_generator():
+        async for event in agent_chat_stream(user["id"], body.message, body.history):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/lookup/parse")

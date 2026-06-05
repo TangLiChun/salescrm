@@ -23,6 +23,7 @@
     <nav class="tabs">
       <button type="button" class="tab active" data-view="lookup">ASN 查询</button>
       <button type="button" class="tab" data-view="ai-leads">AI 线索发现</button>
+      <button type="button" class="tab" data-view="pi-agent">Pi 助手</button>
       <button type="button" class="tab" data-view="schedules">定时任务</button>
       <button type="button" class="tab" data-view="settings">系统设置</button>
       <button type="button" class="tab" data-view="contacts">联系人列表</button>
@@ -184,6 +185,33 @@
           </label>
         </div>
       </div>
+    </section>
+
+    <section id="pi-agent-view" class="panel pi-agent-panel hidden">
+      <div class="pi-chat-header">
+        <div>
+          <h2>Pi 助手</h2>
+          <p class="settings-desc">在网页里用对话操作 CRM：查 ASN、AI 找线索、搜索/导入联系人。与终端 Pi 扩展使用相同工具，进度实时显示。</p>
+        </div>
+        <p id="pi-agent-status" class="llm-status">检查 LLM 配置中…</p>
+      </div>
+      <div id="pi-chat-messages" class="pi-chat-messages" aria-live="polite">
+        <div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「查 AS15169 的 abuse 邮箱并导入 CRM」</div>
+      </div>
+      <div id="pi-chat-progress" class="progress hidden">
+        <div class="progress-bar"><div id="pi-chat-progress-fill"></div></div>
+        <p id="pi-chat-progress-text">准备中…</p>
+      </div>
+      <form id="pi-chat-form" class="pi-chat-form">
+        <label class="field" for="pi-chat-input"><span>消息</span>
+          <textarea id="pi-chat-input" rows="3" placeholder="描述你想让 Pi 助手完成的任务…" disabled></textarea>
+        </label>
+        <div class="controls">
+          <button type="submit" id="pi-chat-send" disabled>发送</button>
+          <button type="button" id="pi-chat-stop" class="secondary-btn hidden">停止</button>
+          <button type="button" id="pi-chat-clear" class="secondary-btn">清空对话</button>
+        </div>
+      </form>
     </section>
 
     <section id="schedules-view" class="panel contacts-panel hidden">

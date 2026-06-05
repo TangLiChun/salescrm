@@ -14,6 +14,17 @@ const currentUserEl = document.getElementById("current-user");
 const logoutBtn = document.getElementById("logout-btn");
 const lookupView = document.getElementById("lookup-view");
 const aiLeadsView = document.getElementById("ai-leads-view");
+const piAgentView = document.getElementById("pi-agent-view");
+const piAgentStatusEl = document.getElementById("pi-agent-status");
+const piChatMessagesEl = document.getElementById("pi-chat-messages");
+const piChatForm = document.getElementById("pi-chat-form");
+const piChatInput = document.getElementById("pi-chat-input");
+const piChatSendBtn = document.getElementById("pi-chat-send");
+const piChatStopBtn = document.getElementById("pi-chat-stop");
+const piChatClearBtn = document.getElementById("pi-chat-clear");
+const piChatProgressEl = document.getElementById("pi-chat-progress");
+const piChatProgressFill = document.getElementById("pi-chat-progress-fill");
+const piChatProgressText = document.getElementById("pi-chat-progress-text");
 const schedulesView = document.getElementById("schedules-view");
 const contactsView = document.getElementById("contacts-view");
 const statsView = document.getElementById("stats-view");
@@ -134,6 +145,9 @@ let channelState = {};
 let discoverController = null;
 let lastDiscoverQuery = "";
 let llmConfigured = false;
+let piChatHistory = [];
+let piChatController = null;
+let piChatBusy = false;
 let emailTemplates = [];
 let editingTemplateId = null;
 let contactSearchTimer = null;
@@ -1191,6 +1205,177 @@ async function loadStats() {
   renderDashboard(await api("/api/stats"));
 }
 
+function updatePiAgentStatus() {
+  if (!piAgentStatusEl) return;
+  const enabled = llmConfigured;
+  piChatInput.disabled = !enabled || piChatBusy;
+  piChatSendBtn.disabled = !enabled || piChatBusy;
+  if (enabled) {
+    piAgentStatusEl.className = "llm-status ok";
+    piAgentStatusEl.textContent = "Pi 助手已就绪（使用系统设置中的 LLM）";
+  } else {
+    piAgentStatusEl.className = "llm-status warn";
+    piAgentStatusEl.textContent = "请先在「系统设置 → AI 与搜索」配置 LLM API Key";
+  }
+}
+
+function clearPiChatEmpty() {
+  const empty = piChatMessagesEl.querySelector(".pi-chat-empty");
+  if (empty) empty.remove();
+}
+
+function appendPiChatBubble(role, text) {
+  clearPiChatEmpty();
+  const el = document.createElement("div");
+  el.className = `pi-chat-bubble ${role}`;
+  el.textContent = text;
+  piChatMessagesEl.appendChild(el);
+  piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+  return el;
+}
+
+function appendPiChatStatus(text) {
+  clearPiChatEmpty();
+  const el = document.createElement("div");
+  el.className = "pi-chat-status";
+  el.textContent = text;
+  piChatMessagesEl.appendChild(el);
+  piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+  return el;
+}
+
+function appendPiChatTool(name) {
+  clearPiChatEmpty();
+  const el = document.createElement("div");
+  el.className = "pi-chat-tool";
+  el.innerHTML = `
+    <div class="pi-chat-tool-head"><span class="dot"></span><span class="pi-chat-tool-name">${escapeHtml(name)}</span></div>
+    <p class="pi-chat-tool-progress"></p>
+    <pre class="pi-chat-tool-result hidden"></pre>
+  `;
+  piChatMessagesEl.appendChild(el);
+  piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+  return el;
+}
+
+function setPiChatBusy(busy) {
+  piChatBusy = busy;
+  piChatStopBtn.classList.toggle("hidden", !busy);
+  updatePiAgentStatus();
+  piChatProgressEl.classList.toggle("hidden", !busy);
+  if (!busy) {
+    piChatProgressFill.style.width = "0%";
+    piChatProgressText.textContent = "";
+  }
+}
+
+async function sendPiChat(event) {
+  event.preventDefault();
+  const message = piChatInput.value.trim();
+  if (!message || piChatBusy || !llmConfigured) return;
+
+  piChatInput.value = "";
+  appendPiChatBubble("user", message);
+  piChatHistory.push({ role: "user", content: message });
+
+  setPiChatBusy(true);
+  piChatProgressFill.style.width = "12%";
+  piChatProgressText.textContent = "Pi 助手处理中…";
+  piChatController = new AbortController();
+
+  let activeToolEl = null;
+
+  try {
+    const response = await fetch("/api/agent/chat/stream", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history: piChatHistory.slice(0, -1) }),
+      signal: piChatController.signal,
+    });
+
+    if (response.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Pi 助手请求失败");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() || "";
+
+      for (const chunk of chunks) {
+        const line = chunk.trim();
+        if (!line.startsWith("data: ")) continue;
+        const payload = JSON.parse(line.slice(6));
+
+        if (payload.type === "status") {
+          piChatProgressText.textContent = payload.message || "处理中…";
+        } else if (payload.type === "tool_start") {
+          activeToolEl = appendPiChatTool(payload.name || "tool");
+          piChatProgressText.textContent = `调用 ${payload.name}…`;
+          piChatProgressFill.style.width = "35%";
+        } else if (payload.type === "tool_progress") {
+          if (activeToolEl) {
+            activeToolEl.querySelector(".pi-chat-tool-progress").textContent = payload.message || "";
+          }
+          piChatProgressText.textContent = payload.message || piChatProgressText.textContent;
+          piChatProgressFill.style.width = "65%";
+        } else if (payload.type === "tool_result") {
+          if (activeToolEl) {
+            activeToolEl.querySelector(".pi-chat-tool-head").classList.add("done");
+            const pre = activeToolEl.querySelector(".pi-chat-tool-result");
+            pre.classList.remove("hidden");
+            pre.textContent = JSON.stringify(payload.result, null, 2);
+          }
+          activeToolEl = null;
+          piChatProgressFill.style.width = "85%";
+        } else if (payload.type === "assistant") {
+          appendPiChatBubble("assistant", payload.text || "");
+          piChatHistory.push({ role: "assistant", content: payload.text || "" });
+          piChatProgressFill.style.width = "100%";
+        } else if (payload.type === "error") {
+          appendPiChatStatus(payload.message || "发生错误");
+        } else if (payload.type === "done") {
+          piChatProgressText.textContent = "完成";
+        }
+      }
+    }
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      appendPiChatStatus(error.message || "Pi 助手请求失败");
+    } else {
+      appendPiChatStatus("已停止");
+    }
+  } finally {
+    piChatController = null;
+    setPiChatBusy(false);
+  }
+}
+
+function stopPiChat() {
+  if (piChatController) {
+    piChatController.abort();
+  }
+}
+
+function clearPiChat() {
+  piChatHistory = [];
+  piChatMessagesEl.innerHTML =
+    '<div class="pi-chat-empty">配置 LLM 后，在此输入需求，例如「查 AS15169 的 abuse 邮箱并导入 CRM」</div>';
+  updatePiAgentStatus();
+}
+
 function switchView(view) {
   tabs.forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.view === view);
@@ -1198,6 +1383,7 @@ function switchView(view) {
 
   lookupView.classList.toggle("hidden", view !== "lookup");
   aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
+  piAgentView.classList.toggle("hidden", view !== "pi-agent");
   schedulesView.classList.toggle("hidden", view !== "schedules");
   settingsView.classList.toggle("hidden", view !== "settings");
   contactsView.classList.toggle("hidden", view !== "contacts");
@@ -1209,6 +1395,10 @@ function switchView(view) {
   } else if (view === "ai-leads") {
     pageTitle.textContent = "AI 线索发现";
     pageSubtitle.textContent = "AI 自动通过搜索引擎、PeeringDB、ARIN RDAP 等多渠道搜索并评分筛选销售线索";
+  } else if (view === "pi-agent") {
+    pageTitle.textContent = "Pi 助手";
+    pageSubtitle.textContent = "对话式调用 CRM Agent：查 ASN、找线索、导入联系人，实时显示工具进度";
+    updatePiAgentStatus();
   } else if (view === "schedules") {
     pageTitle.textContent = "定时任务";
     pageSubtitle.textContent = "按设定间隔自动运行 AI 线索发现，并自动导入联系人（按邮箱去重）";
@@ -1441,6 +1631,7 @@ async function loadLlmStatus() {
     llmStatusEl.textContent = "无法读取 LLM 配置";
     discoverBtn.disabled = true;
   }
+  updatePiAgentStatus();
 }
 
 function setDiscoverRunning(running) {
@@ -1653,6 +1844,11 @@ async function bootstrap() {
 }
 
 lookupBtn.addEventListener("click", runLookup);
+piChatForm?.addEventListener("submit", (event) => {
+  sendPiChat(event).catch((error) => appendPiChatStatus(error.message));
+});
+piChatStopBtn?.addEventListener("click", stopPiChat);
+piChatClearBtn?.addEventListener("click", clearPiChat);
 asnInput.addEventListener("input", () => {
   clearTimeout(asnParseTimer);
   asnParseTimer = setTimeout(() => {

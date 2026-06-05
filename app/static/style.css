@@ -1118,6 +1118,132 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 }
 .default-account code { color: var(--ink); font-weight: 600; }
 
+/* ----- Pi Agent chat ------------------------------------------------------- */
+
+.pi-agent-panel {
+  max-width: 920px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 70vh;
+}
+
+.pi-chat-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.pi-chat-messages {
+  flex: 1;
+  min-height: 320px;
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-sunk);
+}
+
+.pi-chat-empty {
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+  margin: auto;
+  max-width: 28rem;
+}
+
+.pi-chat-bubble {
+  max-width: 88%;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--r-md);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pi-chat-bubble.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.pi-chat-bubble.assistant {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.pi-chat-tool {
+  align-self: stretch;
+  padding: var(--space-3);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: var(--text-xs);
+}
+
+.pi-chat-tool-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--mono);
+  color: var(--ink-soft);
+  margin-bottom: var(--space-2);
+}
+
+.pi-chat-tool-head .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.pi-chat-tool-head.done .dot {
+  animation: none;
+  background: var(--ok);
+}
+
+.pi-chat-tool-progress {
+  color: var(--ink-muted);
+  margin: 0 0 var(--space-2);
+}
+
+.pi-chat-tool-result {
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunk);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  max-height: 160px;
+}
+
+.pi-chat-status {
+  align-self: center;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
+.pi-chat-form textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
 /* ----- Utility ------------------------------------------------------------- */
 
 .hidden { display: none !important; }
