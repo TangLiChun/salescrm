@@ -1836,7 +1836,6 @@ async function bootstrap() {
   }
 
   await loadLlmStatus();
-  asnInput.value = "15169\n7922\n3320";
   leadQueryInput.value = "找美国大型 ISP 和有线电视运营商，优先 networking / peering 相关联系人";
   scheduleQueryInput.value = leadQueryInput.value;
   await loadContacts();

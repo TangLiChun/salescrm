@@ -108,7 +108,6 @@ check_smoke() {
   fi
   say "冒烟: scripts/smoke_check.py — ok"
 }
-}
 
 check_docker_health() {
   local h
