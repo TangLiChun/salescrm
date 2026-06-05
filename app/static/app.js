@@ -1805,6 +1805,17 @@ function formatPiToolSummary(name, result) {
   if (name === "get_stats") {
     return `联系人 ${result.total ?? 0} · 已发 ${result.sent ?? 0}`;
   }
+  if (name === "get_search_config") {
+    const active = result.active_web_backend || "duckduckgo";
+    const zhipu = result.zhipu_web_search || {};
+    if (active === "zhipu") {
+      return `当前联网搜索：智谱 ${zhipu.engine || "search_pro"}（${zhipu.configured ? "已配置" : "未配置"}）`;
+    }
+    return `当前联网搜索：${active} · 优先级 ${(result.web_backend_priority || []).join(" > ")}`;
+  }
+  if (name === "web_search") {
+    return `${result.backend_used || "search"} · ${result.result_count ?? 0} 条结果 · 邮箱 ${result.emails_found?.length ?? 0} · ASN ${result.asns_found?.length ?? 0}`;
+  }
   return "";
 }
 

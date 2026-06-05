@@ -28,6 +28,7 @@ from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
 from app.llm import LLMError, chat_completion_with_tools_stream
 from app.settings_store import get_setting, update_settings
+from app.sources import web_search
 
 MAX_TOOL_ROUNDS = 8
 MAX_HISTORY = 20
@@ -99,7 +100,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "discover_leads",
-            "description": "使用 CRM 内置 AI 多渠道线索发现（搜索+PeeringDB+全球 RDAP）",
+            "description": "使用 CRM 内置 AI 多渠道线索发现（LLM 规划 → 联网搜索[智谱/Tavily/SerpAPI/Brave/DuckDuckGo 按优先级] → PeeringDB → 全球 RDAP → LLM 评分）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -249,6 +250,36 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_search_config",
+            "description": "查看当前联网搜索配置：启用的搜索引擎、优先级、智谱 Web Search 引擎档位（search_pro 等）、各 API Key 是否已配置",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "直接调用 CRM 联网搜索（与 discover_leads 内嵌的搜索引擎相同，按系统设置优先级自动选智谱/Tavily 等）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "单个搜索词"},
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "多个搜索词（与 query 二选一）",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "每个 query 最多返回条数，默认 8",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_schedules",
             "description": "列出定时 AI 线索发现任务",
             "parameters": {"type": "object", "properties": {}},
@@ -259,16 +290,21 @@ AGENT_TOOLS: list[dict[str, Any]] = [
 SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作网络运营商联系人库。
 
 能力：
-- lookup_asns：全球 RIR（ARIN/RIPE/APNIC/LACNIC/AFRINIC）RDAP 查 ASN role 邮箱，非 ARIN 会自动查对应注册局
-- discover_leads：AI 多渠道找线索（与「AI 线索发现」相同）
-- enrich_contact：为已有联系人扩展更多联系方式（RDAP/搜索/PeeringDB），可 auto_import
+- lookup_asns：全球 RIR（ARIN/RIPE/APNIC/LACNIC/AFRINIC）RDAP 查 ASN role 邮箱
+- discover_leads：AI 多渠道找线索（联网搜索 + PeeringDB + RDAP + LLM 评分）
+- web_search：直接联网搜索（不跑完整线索流程）
+- get_search_config：查看当前联网搜索用哪个引擎（智谱 zhipu / Tavily / SerpAPI / Brave / DuckDuckGo）及优先级
+- enrich_contact：为已有联系人扩展更多联系方式，可 auto_import
 - get_contact / list_contacts / import_leads：读取、搜索、导入联系人
-- update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理已有联系人
+- update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理联系人
 - get_stats / dedupe_contacts：统计与去重
-- get_import_filters / update_import_filters：读取或修改设置里的导入黑名单/白名单（import_leads 与自动导入均会遵守）
-- list_schedules：查看定时线索任务
+- get_import_filters / update_import_filters：导入黑名单/白名单（设置页同源）
+- list_schedules：定时线索任务
 
-规则：用简洁中文回复；用户说「找更多联系方式」时用 enrich_contact；用户要求屏蔽某域名时用 update_import_filters 写入黑名单，不要只在对话里「记住」；导入前查重；不要编造数据。"""
+联网搜索说明：系统设置 → AI 与搜索 中配置。默认优先级 zhipu(智谱 Web Search API) > tavily > serpapi > brave > duckduckgo。
+用户问「AI 搜索用的什么 / 怎么调用 / 有哪些渠道」时，先调用 get_search_config 再回答，不要猜测。
+
+规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。"""
 
 
 async def _stream_lead_events(
@@ -617,6 +653,45 @@ async def _run_tool(
     if name == "list_schedules":
         schedules = list_scheduled_jobs(user_id)
         return {"schedules": schedules, "count": len(schedules)}
+
+    if name == "get_search_config":
+        return web_search.get_search_config()
+
+    if name == "web_search":
+        query = str(args.get("query") or "").strip()
+        queries = [str(item).strip() for item in (args.get("queries") or []) if str(item).strip()]
+        if query:
+            queries = [query, *queries]
+        if not queries:
+            return {"error": "请提供 query 或 queries"}
+        max_results = max(1, min(int(args.get("max_results") or 8), 20))
+        emit.progress(f"联网搜索：{', '.join(queries[:3])}{'…' if len(queries) > 3 else ''}")
+        results = await asyncio.to_thread(
+            web_search.search_web_many,
+            queries,
+            max_results_per_query=max_results,
+        )
+        backend = results[0].get("backend") if results else web_search.get_search_config()["active_web_backend"]
+        signals = web_search.extract_signals_from_results(results)
+        preview = [
+            {
+                "title": item.get("title"),
+                "url": item.get("url"),
+                "snippet": (item.get("snippet") or "")[:240],
+                "backend": item.get("backend"),
+                "query": item.get("query"),
+            }
+            for item in results[:15]
+        ]
+        return {
+            "backend_used": backend,
+            "config": web_search.get_search_config(),
+            "query_count": len(queries),
+            "result_count": len(results),
+            "results": preview,
+            "emails_found": signals.get("emails") or [],
+            "asns_found": signals.get("asns") or [],
+        }
 
     return {"error": f"未知工具: {name}"}
 

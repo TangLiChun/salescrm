@@ -48,6 +48,44 @@ def available_backends() -> list[str]:
     return backends
 
 
+def get_search_config() -> dict[str, Any]:
+    backends = available_backends()
+    zhipu_key = get_setting("zhipu_api_key", "").strip()
+    llm_base = get_setting("llm_base_url", "").lower()
+    zhipu_engine = get_setting("zhipu_search_engine", "search_pro") or "search_pro"
+    if zhipu_engine not in ZHIPU_SEARCH_ENGINES:
+        zhipu_engine = "search_pro"
+    return {
+        "active_web_backend": backends[0] if backends else "duckduckgo",
+        "web_backend_priority": backends,
+        "channels": {
+            "web_search": backends,
+            "peeringdb": True,
+            "arin_rdap": True,
+            "llm_extract": True,
+            "llm_scoring": True,
+        },
+        "zhipu_web_search": {
+            "configured": zhipu_search_configured(),
+            "engine": zhipu_engine,
+            "endpoint": ZHIPU_WEB_SEARCH_URL,
+            "uses_dedicated_key": bool(zhipu_key),
+            "reuses_llm_key": bool(not zhipu_key and "bigmodel.cn" in llm_base),
+        },
+        "keys_configured": {
+            "zhipu": zhipu_search_configured(),
+            "tavily": bool(get_setting("tavily_api_key", "").strip()),
+            "serpapi": bool(get_setting("serpapi_key", "").strip()),
+            "brave": bool(get_setting("brave_search_key", "").strip()),
+            "duckduckgo": True,
+        },
+        "usage": (
+            "discover_leads / enrich_contact 会自动按 web_backend_priority 选第一个可用引擎；"
+            "也可直接调用 web_search 工具做联网检索"
+        ),
+    }
+
+
 def _normalize_result(title: str, url: str, snippet: str, *, backend: str, query: str) -> dict[str, str]:
     return {
         "title": title.strip(),
