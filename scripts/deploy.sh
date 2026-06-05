@@ -20,7 +20,7 @@
 #   FORCE_REBUILD=1 构建镜像时使用 --no-cache
 #   SKIP_PI=1       跳过 Pi Coding Agent 安装与配置
 #   DEPLOY_WAIT_CONTAINER_SEC  等待容器 running（默认 90）
-#   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health（默认 120）
+#   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health 秒数（默认 300，慢 VPS 可加大）
 #   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 20）
 #   DEPLOY_FINAL_GRACE_SEC       全部重试失败后的最终缓冲秒数（默认 90）
 #   DEPLOY_REEXEC=1              内部用：git pull 后重新执行脚本，勿手动设置
@@ -40,7 +40,7 @@ SKIP_PULL="${SKIP_PULL:-0}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 SKIP_PI="${SKIP_PI:-0}"
 DEPLOY_WAIT_CONTAINER_SEC="${DEPLOY_WAIT_CONTAINER_SEC:-90}"
-DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-120}"
+DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-300}"
 DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-20}"
 DEPLOY_FINAL_GRACE_SEC="${DEPLOY_FINAL_GRACE_SEC:-90}"
 PI_ENV_FILE=""
@@ -201,16 +201,43 @@ wait_for_container() {
   exit 1
 }
 
+health_body_valid() {
+  local body="$1"
+  [[ -n "${body}" ]] \
+    && echo "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true' \
+    && echo "${body}" | grep -q '"db"[[:space:]]*:[[:space:]]*true' \
+    && echo "${body}" | grep -q '"schema"[[:space:]]*:[[:space:]]*true'
+}
+
+probe_health_http() {
+  local body
+  body="$(curl -fsS --max-time 5 "http://127.0.0.1:${APP_PORT}/health" 2>/dev/null)" && health_body_valid "${body}" && return 0
+  body="$($SUDO docker exec salescrm python -c \
+    'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5).read().decode())' \
+    2>/dev/null)" && health_body_valid "${body}" && return 0
+  return 1
+}
+
 wait_for_http() {
-  log "等待 HTTP /health（最多 ${DEPLOY_WAIT_HTTP_SEC}s）..."
+  log "等待 HTTP /health（最多 ${DEPLOY_WAIT_HTTP_SEC}s，含容器内探测）..."
   local i
   for i in $(seq 1 "${DEPLOY_WAIT_HTTP_SEC}"); do
-    if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
+    if probe_health_http; then
       log "HTTP 就绪（${i}s）"
       return 0
     fi
+    if (( i % 30 == 0 )); then
+      log "仍在等待 uvicorn 启动… (${i}/${DEPLOY_WAIT_HTTP_SEC}s)"
+    fi
     sleep 1
   done
+
+  log "最后尝试 HTTP 检查..."
+  if APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick --quiet; then
+    warn "HTTP 在最终尝试时通过（应用慢启动，继续部署）"
+    return 0
+  fi
+
   echo "ERROR: HTTP 健康检查超时（${DEPLOY_WAIT_HTTP_SEC}s）" >&2
   APP_PORT="${APP_PORT}" bash "${SCRIPT_DIR}/check.sh" --quick || true
   show_failure_logs
@@ -223,8 +250,8 @@ run_full_check() {
 
 wait_healthy() {
   wait_for_container
-  # 给 uvicorn / init_db 一点缓冲
-  sleep 2
+  # 容器 running != uvicorn 已监听；慢 VPS 上 import 可能需数十秒
+  sleep 5
   wait_for_http
   # HTTP 已通，再等应用完全就绪后跑冒烟（慢 VPS 上 import / 首次 DB 查询较慢）
   sleep 8

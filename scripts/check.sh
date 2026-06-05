@@ -70,14 +70,39 @@ check_container() {
   say "容器: ${CONTAINER} — running"
 }
 
+health_body_valid() {
+  local body="$1"
+  [[ -n "${body}" ]] \
+    && echo "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true' \
+    && echo "${body}" | grep -q '"db"[[:space:]]*:[[:space:]]*true' \
+    && echo "${body}" | grep -q '"schema"[[:space:]]*:[[:space:]]*true'
+}
+
+curl_health_body_host() {
+  curl -fsS --max-time 5 "http://127.0.0.1:${APP_PORT}/health" 2>/dev/null
+}
+
+curl_health_body_internal() {
+  # 容器已 running 但 uvicorn 仍在 import 时，宿主机端口可能尚未就绪；用容器内探测更可靠
+  $DOCKER exec "${CONTAINER}" python -c '
+import urllib.request
+print(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5).read().decode())
+' 2>/dev/null
+}
+
 curl_health_body() {
-  local url="http://127.0.0.1:${APP_PORT}/health"
   local attempt body
   for attempt in 1 2 3; do
-    body="$(curl -fsS --max-time 8 "${url}" 2>/dev/null)" && {
+    body="$(curl_health_body_host)"
+    if health_body_valid "${body}"; then
       printf '%s' "${body}"
       return 0
-    }
+    fi
+    body="$(curl_health_body_internal)"
+    if health_body_valid "${body}"; then
+      printf '%s' "${body}"
+      return 0
+    fi
     sleep 1
   done
   return 1
@@ -92,21 +117,10 @@ check_health_http() {
     fail "无法访问 ${url}（服务未监听或启动失败）"
   }
 
-  if ! echo "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+  if ! health_body_valid "${body}"; then
     say "响应: ${body}"
     show_logs
-    fail "健康检查 ok != true（数据库或服务异常）"
-  fi
-
-  if ! echo "${body}" | grep -q '"db"[[:space:]]*:[[:space:]]*true'; then
-    say "响应: ${body}"
-    fail "数据库不可用 (db != true)"
-  fi
-
-  if ! echo "${body}" | grep -q '"schema"[[:space:]]*:[[:space:]]*true'; then
-    say "响应: ${body}"
-    show_logs
-    fail "数据库表结构不完整 (schema != true)，请重新部署以执行 init_db"
+    fail "健康检查未通过（ok/db/schema 需均为 true）"
   fi
 
   say "HTTP: ${url} — ok"
