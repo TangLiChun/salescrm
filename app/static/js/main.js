@@ -1,6 +1,6 @@
 import { initI18n, t } from "../i18n.js";
 import * as dom from "./core/dom.js";
-import * as state from "./core/state.js";
+import { state } from "./core/state.js";
 import { api, errorMessage } from "./core/utils.js";
 import { registerDeps } from "./core/deps.js";
 import {

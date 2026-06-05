@@ -1,7 +1,6 @@
 import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
-import * as state from "../core/state.js";
-import { activeSettingsCat, SETTINGS_FORM_CATS } from "../core/state.js";
+import { state, SETTINGS_FORM_CATS } from "../core/state.js";
 import { api, setInputValue } from "../core/utils.js";
 import { loadLlmStatus } from "./leads.js";
 

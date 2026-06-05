@@ -1,6 +1,6 @@
 import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
-import * as state from "../core/state.js";
+import { state } from "../core/state.js";
 import { switchSettingsCat } from "./settings.js";
 import { loadSchedules, startSchedulesAutoRefresh, stopSchedulesAutoRefresh } from "./schedules.js";
 import { loadStats } from "./stats.js";
@@ -13,7 +13,7 @@ import { renderSchedules } from "./schedules.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
 
 const { tabs, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
-const { llmConfigured } = state;
+
 export function switchView(view) {
   tabs.forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.view === view);
@@ -72,7 +72,7 @@ export function refreshUiOnLanguageChange() {
     updateStats();
   }
   refreshAsnPreview().catch(() => {});
-  if (llmConfigured) {
+  if (state.llmConfigured) {
     loadLlmStatus().catch(() => {});
   } else {
     updatePiAgentStatus();

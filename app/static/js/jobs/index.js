@@ -1,6 +1,6 @@
 import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
-import * as state from "../core/state.js";
+import { state } from "../core/state.js";
 import { api, escapeHtml, errorMessage } from "../core/utils.js";
 import {
   notifySuccess,
