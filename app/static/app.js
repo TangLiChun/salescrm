@@ -217,12 +217,12 @@ function renderRows() {
 
     tr.innerHTML = `
       <td class="col-select">${selectCell}</td>
-      <td>AS${row.asn}</td>
+      <td class="mono">AS${row.asn}</td>
       <td>${escapeHtml(row.org || "—")}</td>
       <td>${roles || "—"}</td>
       <td>${escapeHtml(row.name || "—")}</td>
       <td>${emailCell}</td>
-      <td>${escapeHtml(row.handle || "—")}</td>
+      <td class="mono">${escapeHtml(row.handle || "—")}</td>
       <td class="${statusClass}">${escapeHtml(statusText)}</td>
     `;
     resultsBody.appendChild(tr);
@@ -272,10 +272,10 @@ function renderContacts() {
       <td>${escapeHtml(contact.name || "—")}</td>
       <td><a class="email-link" href="mailto:${contact.email}">${escapeHtml(contact.email)}</a></td>
       <td>${roles || "—"}</td>
-      <td>${contact.asn ? `AS${contact.asn}` : "—"}</td>
+      <td class="mono">${contact.asn ? `AS${contact.asn}` : "—"}</td>
       <td>${escapeHtml(contact.source || "arin")}</td>
       <td>${escapeHtml(contact.notes || "—")}</td>
-      <td>${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
+      <td class="mono">${escapeHtml(formatTime(contact.email_sent ? contact.email_sent_at : contact.created_at))}</td>
       <td class="action-cell">
         <button type="button" class="link-btn action-edit" data-id="${contact.id}">编辑</button>
         <button type="button" class="link-btn action-notes" data-id="${contact.id}">时间线</button>
@@ -794,10 +794,10 @@ function renderSchedules() {
       : `<span class="status-badge unsent">停用</span>`;
     tr.innerHTML = `
       <td>${escapeHtml(job.name)}</td>
-      <td>${job.interval_hours} 小时</td>
+      <td class="mono">${job.interval_hours} 小时</td>
       <td>${enabledBadge}</td>
-      <td>${escapeHtml(formatTime(job.last_run_at))}</td>
-      <td>${escapeHtml(formatTime(job.next_run_at))}</td>
+      <td class="mono">${escapeHtml(formatTime(job.last_run_at))}</td>
+      <td class="mono">${escapeHtml(formatTime(job.next_run_at))}</td>
       <td>${escapeHtml(job.last_run_message || job.last_run_status || "—")}</td>
       <td class="action-cell">
         <button type="button" class="link-btn schedule-run" data-id="${job.id}">立即运行</button>
@@ -1053,7 +1053,7 @@ function renderDashboard(data) {
       { key: "sent", count: data.sent },
       { key: "unsent", count: data.unsent },
     ],
-    { getLabel: (key) => (key === "sent" ? "已发" : "未发"), colors: ["#059669", "#64748b"] },
+    { getLabel: (key) => (key === "sent" ? "已发" : "未发"), colors: ["var(--chart-pos)", "var(--chart-neutral)"] },
   );
   renderBarChart(
     chartSourceEl,
@@ -1157,7 +1157,7 @@ function renderAiLeads() {
       <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
       <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email)}</a></td>
       <td>${roles || "—"}</td>
-      <td>${lead.asn ? `AS${lead.asn}` : "—"}</td>
+      <td class="mono">${lead.asn ? `AS${lead.asn}` : "—"}</td>
       <td>${escapeHtml(lead.lead_reason || lead.source_detail || "—")}</td>
     `;
     aiLeadsBody.appendChild(tr);
