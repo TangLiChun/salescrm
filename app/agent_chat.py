@@ -862,9 +862,26 @@ _TOOL_NAME_ALIASES = {
     "bulk_delete_contacts": "delete_contacts",
 }
 
+_EMPTY_RESPONSE_NUDGE = (
+    "（系统）请用中文回复用户，并调用合适的 CRM 工具完成任务，"
+    "例如 list_contacts（搜索联系人）、delete_contacts（删除联系人）。"
+)
+
+
+def _normalize_tool_name(name: str) -> str:
+    cleaned = (name or "").strip().lower()
+    for prefix in ("functions.", "function.", "tool.", "tools."):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :]
+    if "." in cleaned and cleaned not in KNOWN_TOOL_NAMES:
+        tail = cleaned.rsplit(".", 1)[-1]
+        if tail in KNOWN_TOOL_NAMES or tail in _TOOL_NAME_ALIASES:
+            cleaned = tail
+    return cleaned
+
 
 def _infer_tool_name(name: str, args: dict[str, Any]) -> str:
-    cleaned = (name or "").strip().lower()
+    cleaned = _normalize_tool_name(name)
     if cleaned in KNOWN_TOOL_NAMES:
         return cleaned
     if cleaned in _TOOL_NAME_ALIASES:
@@ -953,6 +970,17 @@ def _prepare_tool_calls(
         tool_call["type"] = tool_call.get("type") or "function"
         prepared.append((tool_call, name, args))
     return prepared
+
+
+def _assistant_response_empty(assistant: dict[str, Any] | None, content_buffer: str) -> bool:
+    if not assistant:
+        return True
+    content = (assistant.get("content") or content_buffer or "").strip()
+    tool_calls = assistant.get("tool_calls") or []
+    if content or tool_calls:
+        return False
+    reasoning = str(assistant.get("reasoning_content") or "").strip()
+    return not reasoning
 
 
 def _parse_inline_tool_calls(content: str) -> tuple[str, list[dict[str, Any]]]:
@@ -1554,58 +1582,88 @@ async def agent_chat_stream(
         assistant: dict[str, Any] | None = None
         content_buffer = ""
         streamed_reply = False
+        nudged_empty_response = False
+        tool_calls: list[Any] = []
+        content = ""
+        prepared_calls: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
 
-        async for event in _iter_llm_stream(messages, AGENT_TOOLS):
-            event_type = event.get("type")
-            if event_type == "error":
-                yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
+        while True:
+            assistant = None
+            content_buffer = ""
+            streamed_reply = False
+
+            async for event in _iter_llm_stream(messages, AGENT_TOOLS):
+                event_type = event.get("type")
+                if event_type == "error":
+                    yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
+                    return
+                if event_type == "content_delta":
+                    piece = str(event.get("text") or "")
+                    if piece:
+                        content_buffer += piece
+                        if not streamed_reply:
+                            streamed_reply = True
+                            yield {"type": "assistant_start"}
+                        yield {"type": "assistant_delta", "text": piece}
+                elif event_type == "message":
+                    assistant = event.get("message")
+
+            if _assistant_response_empty(assistant, content_buffer):
+                if not nudged_empty_response:
+                    nudged_empty_response = True
+                    messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
+                    yield {"type": "status", "message": "模型未响应，正在重试…"}
+                    continue
+                yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
                 return
-            if event_type == "content_delta":
-                piece = str(event.get("text") or "")
-                if piece:
-                    content_buffer += piece
-                    if not streamed_reply:
-                        streamed_reply = True
-                        yield {"type": "assistant_start"}
-                    yield {"type": "assistant_delta", "text": piece}
-            elif event_type == "message":
-                assistant = event.get("message")
 
-        if not assistant:
-            yield {"type": "error", "message": "模型未返回有效回复"}
-            return
+            tool_calls = (assistant or {}).get("tool_calls") or []
+            content = ((assistant or {}).get("content") or content_buffer or "").strip()
 
-        tool_calls = assistant.get("tool_calls") or []
-        content = (assistant.get("content") or content_buffer or "").strip()
+            if not tool_calls and content:
+                intro, inline_calls = _parse_inline_tool_calls(content)
+                if inline_calls:
+                    tool_calls = inline_calls
+                    content = intro
+                    assistant = {**(assistant or {}), "tool_calls": tool_calls, "content": intro or None}
 
-        if not tool_calls and content:
-            intro, inline_calls = _parse_inline_tool_calls(content)
-            if inline_calls:
-                tool_calls = inline_calls
-                content = intro
-                assistant = {**assistant, "tool_calls": tool_calls, "content": intro or None}
-
-        if content and not tool_calls:
-            if not streamed_reply:
-                yield {"type": "assistant_start"}
-                yield {"type": "assistant_delta", "text": content}
-            yield {"type": "assistant_done", "text": content}
-            yield {"type": "done"}
-            return
-
-        if not tool_calls:
-            yield {"type": "error", "message": "模型未返回有效回复"}
-            return
-
-        prepared_calls = _prepare_tool_calls(tool_calls)
-        if not prepared_calls:
-            if content:
-                yield {"type": "assistant_start"}
-                yield {"type": "assistant_delta", "text": content}
+            if content and not tool_calls:
+                if not streamed_reply:
+                    yield {"type": "assistant_start"}
+                    yield {"type": "assistant_delta", "text": content}
                 yield {"type": "assistant_done", "text": content}
                 yield {"type": "done"}
                 return
-            yield {"type": "error", "message": "模型未返回有效回复"}
+
+            if not tool_calls:
+                if not nudged_empty_response:
+                    nudged_empty_response = True
+                    messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
+                    yield {"type": "status", "message": "模型未调用工具，正在重试…"}
+                    continue
+                yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+                return
+
+            prepared_calls = _prepare_tool_calls(tool_calls)
+            if not prepared_calls:
+                if content:
+                    if not streamed_reply:
+                        yield {"type": "assistant_start"}
+                        yield {"type": "assistant_delta", "text": content}
+                    yield {"type": "assistant_done", "text": content}
+                    yield {"type": "done"}
+                    return
+                if not nudged_empty_response:
+                    nudged_empty_response = True
+                    messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
+                    yield {"type": "status", "message": "工具调用无效，正在重试…"}
+                    continue
+                yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+                return
+            break
+
+        if not assistant:
+            yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
             return
 
         intro = _assistant_intro_before_tools(content)

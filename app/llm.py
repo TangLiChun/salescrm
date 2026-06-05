@@ -32,6 +32,152 @@ def _settings() -> tuple[str, str, str]:
     return api_key, base_url, model
 
 
+def _merge_tool_call_delta(
+    tool_calls: dict[int, dict[str, Any]],
+    tool_delta: dict[str, Any],
+) -> None:
+    index = int(tool_delta.get("index") or 0)
+    slot = tool_calls.setdefault(
+        index,
+        {
+            "id": "",
+            "type": "function",
+            "function": {"name": "", "arguments": ""},
+        },
+    )
+    if tool_delta.get("id"):
+        slot["id"] = tool_delta["id"]
+    fn = tool_delta.get("function")
+    if isinstance(fn, str):
+        try:
+            fn = json.loads(fn)
+        except json.JSONDecodeError:
+            fn = {}
+    if not isinstance(fn, dict):
+        fn = {}
+    if fn.get("name"):
+        slot["function"]["name"] += str(fn["name"])
+    elif tool_delta.get("name"):
+        slot["function"]["name"] += str(tool_delta["name"])
+    if fn.get("arguments"):
+        slot["function"]["arguments"] += str(fn["arguments"])
+    elif tool_delta.get("arguments"):
+        piece = tool_delta["arguments"]
+        slot["function"]["arguments"] += (
+            piece if isinstance(piece, str) else json.dumps(piece, ensure_ascii=False)
+        )
+
+
+def _apply_complete_message(
+    *,
+    content_parts: list[str],
+    reasoning_parts: list[str],
+    tool_calls: dict[int, dict[str, Any]],
+    message: dict[str, Any],
+) -> None:
+    content = message.get("content")
+    if content:
+        full = str(content)
+        joined = "".join(content_parts)
+        if not joined:
+            content_parts.append(full)
+        elif len(full) > len(joined):
+            content_parts[:] = [full]
+
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    if reasoning:
+        full_reasoning = str(reasoning)
+        joined_reasoning = "".join(reasoning_parts)
+        if not joined_reasoning:
+            reasoning_parts.append(full_reasoning)
+        elif len(full_reasoning) > len(joined_reasoning):
+            reasoning_parts[:] = [full_reasoning]
+
+    for index, raw in enumerate(message.get("tool_calls") or []):
+        if not isinstance(raw, dict):
+            continue
+        slot = tool_calls.setdefault(
+            index,
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        if raw.get("id"):
+            slot["id"] = raw["id"]
+        fn = raw.get("function")
+        if isinstance(fn, dict):
+            if fn.get("name"):
+                slot["function"]["name"] = str(fn["name"])
+            args = fn.get("arguments")
+            if args is not None:
+                slot["function"]["arguments"] = (
+                    args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+                )
+
+
+def _parse_sse_or_json_lines(raw_body: bytes) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    text = raw_body.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line == "data: [DONE]":
+            continue
+        payload = line[5:].strip() if line.startswith("data:") else line
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            chunks.append(json.loads(payload))
+        except json.JSONDecodeError:
+            continue
+    if chunks:
+        return chunks
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, dict):
+        return [parsed]
+    return []
+
+
+def _consume_stream_chunk(
+    chunk: dict[str, Any],
+    *,
+    content_parts: list[str],
+    reasoning_parts: list[str],
+    tool_calls: dict[int, dict[str, Any]],
+    emit_content_delta: bool,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for choice in chunk.get("choices") or [{}]:
+        delta = choice.get("delta") or {}
+        piece = delta.get("content")
+        if piece:
+            content_parts.append(str(piece))
+            if emit_content_delta:
+                events.append({"type": "content_delta", "text": str(piece)})
+
+        reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning")
+        if reasoning_piece:
+            reasoning_parts.append(str(reasoning_piece))
+
+        for tool_delta in delta.get("tool_calls") or []:
+            if isinstance(tool_delta, dict):
+                _merge_tool_call_delta(tool_calls, tool_delta)
+
+        message = choice.get("message")
+        if isinstance(message, dict):
+            _apply_complete_message(
+                content_parts=content_parts,
+                reasoning_parts=reasoning_parts,
+                tool_calls=tool_calls,
+                message=message,
+            )
+    return events
+
+
 def chat_completion(messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
     message = chat_completion_with_tools(messages, tools=None, temperature=temperature, json_mode=True)
     content = message.get("content")
@@ -101,60 +247,7 @@ def chat_completion_with_tools_stream(
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data or data == "[DONE]":
-                    continue
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-                choice = (chunk.get("choices") or [{}])[0]
-                delta = choice.get("delta") or {}
-                piece = delta.get("content")
-                if piece:
-                    content_parts.append(piece)
-                    yield {"type": "content_delta", "text": piece}
-
-                reasoning_piece = delta.get("reasoning_content")
-                if reasoning_piece:
-                    reasoning_parts.append(reasoning_piece)
-
-                for tool_delta in delta.get("tool_calls") or []:
-                    index = int(tool_delta.get("index") or 0)
-                    slot = tool_calls.setdefault(
-                        index,
-                        {
-                            "id": "",
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        },
-                    )
-                    if tool_delta.get("id"):
-                        slot["id"] = tool_delta["id"]
-                    fn = tool_delta.get("function")
-                    if isinstance(fn, str):
-                        try:
-                            fn = json.loads(fn)
-                        except json.JSONDecodeError:
-                            fn = {}
-                    if not isinstance(fn, dict):
-                        fn = {}
-                    if fn.get("name"):
-                        slot["function"]["name"] += fn["name"]
-                    elif tool_delta.get("name"):
-                        slot["function"]["name"] += str(tool_delta["name"])
-                    if fn.get("arguments"):
-                        slot["function"]["arguments"] += fn["arguments"]
-                    elif tool_delta.get("arguments"):
-                        piece = tool_delta["arguments"]
-                        slot["function"]["arguments"] += (
-                            piece if isinstance(piece, str) else json.dumps(piece, ensure_ascii=False)
-                        )
+            raw_body = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         yield {"type": "error", "message": f"LLM 请求失败 ({exc.code}): {detail[:300]}"}
@@ -162,6 +255,16 @@ def chat_completion_with_tools_stream(
     except urllib.error.URLError as exc:
         yield {"type": "error", "message": f"无法连接 LLM 服务: {exc.reason}"}
         return
+
+    for chunk in _parse_sse_or_json_lines(raw_body):
+        for event in _consume_stream_chunk(
+            chunk,
+            content_parts=content_parts,
+            reasoning_parts=reasoning_parts,
+            tool_calls=tool_calls,
+            emit_content_delta=True,
+        ):
+            yield event
 
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
     if reasoning_parts:
