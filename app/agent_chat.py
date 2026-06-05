@@ -20,6 +20,7 @@ from app.database import (
     get_contact,
     get_contact_stats,
     import_contacts,
+    list_contact_notes,
     list_contacts,
     list_scheduled_jobs,
     mark_contact_sent,
@@ -28,6 +29,7 @@ from app.database import (
     update_contact_follow_up_status,
     update_scheduled_job,
 )
+from app.lead_preferences import get_prefs, preference_hints_for_llm, reset_prefs
 from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
 from app.llm import LLMError, chat_completion_with_tools_stream
@@ -63,6 +65,9 @@ KNOWN_TOOL_NAMES = {
     "mark_contact_sent",
     "delete_contacts",
     "add_contact_note",
+    "list_contact_notes",
+    "get_lead_preferences",
+    "reset_lead_preferences",
     "dedupe_contacts",
     "get_import_filters",
     "update_import_filters",
@@ -284,6 +289,37 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "list_contact_notes",
+            "description": "读取联系人的跟进备注时间线（按时间倒序）；写 outreach 或继续跟进前应先查看历史备注",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_id": {"type": "integer"},
+                    "limit": {"type": "integer", "description": "最多返回条数，默认 20"},
+                },
+                "required": ["contact_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_lead_preferences",
+            "description": "查看当前用户从导入/跟进/删除等行为中学到的线索偏好（角色、关键词、避开域名/组织、min_score 倾向等）；discover_leads/enrich_contact 已自动应用",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reset_lead_preferences",
+            "description": "清空当前用户的线索偏好记忆，恢复默认筛选行为",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "dedupe_contacts",
             "description": "按邮箱去重联系人，保留最早记录",
             "parameters": {"type": "object", "properties": {}},
@@ -463,7 +499,8 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - shodan_search：Shodan 资产搜索（org/asn filter），discover_leads 已自动接入
 - enrich_contact：为已有联系人扩展更多联系方式，可 auto_import
 - get_contact / list_contacts / import_leads：读取、搜索、导入联系人
-- update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理联系人
+- update_contact / mark_contact_sent / delete_contacts / add_contact_note / list_contact_notes：管理联系人与跟进备注
+- get_lead_preferences / reset_lead_preferences：查看或重置 AI 学到的线索偏好（discover_leads/enrich 已自动应用）
 - get_stats / dedupe_contacts：统计与去重
 - get_import_filters / update_import_filters：导入黑名单/白名单（设置页同源）
 - list_schedules / create_schedule / update_schedule：定时或持续自动找线索（≥60 分自动导入）
@@ -479,6 +516,9 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 社交媒体均走 Bright Data Scraper API（/datasets/v3/scrape），与 SERP 共用 API Key：
 已配置渠道 Dataset ID 见系统设置；未配置时不会启用对应社交抓取。
 用户问搜索引擎/数据渠道配置时，先 get_search_config 再回答。
+
+跟进工作流：写 outreach、续跟、总结下一步前，先 get_contact + list_contact_notes 了解历史；必要时 add_contact_note 记录结论。
+用户问「为什么搜得更严/避开某类域名」→ get_lead_preferences 解释；若要清空学习结果 → reset_lead_preferences（需用户明确同意）。
 
 规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。
 入库：lead_score ≥ 60 直接 import_leads 或 discover_leads auto_import，无需再问用户。
@@ -732,6 +772,16 @@ def tool_result_summary(name: str, result: Any) -> str:
         return f"已删除 {result.get('deleted', 0)} / {result.get('requested', 0)} 条"
     if name == "add_contact_note":
         return "已添加备注" if result.get("ok") else ""
+    if name == "list_contact_notes":
+        return f"联系人 #{result.get('contact_id', '')} · {result.get('count', 0)} 条备注"
+    if name == "get_lead_preferences":
+        summary = result.get("summary") or ""
+        if summary:
+            return summary.split("\n", 1)[0][:200]
+        stats = (result.get("preferences") or {}).get("stats") or {}
+        return f"偏好已加载 · 导入 {stats.get('imports', 0)} · 无效 {stats.get('invalid', 0)}"
+    if name == "reset_lead_preferences":
+        return "已重置线索偏好" if result.get("ok") else ""
     if name == "dedupe_contacts":
         return (
             f"去重完成：删除 {result.get('removed', 0)} 条，"
@@ -984,6 +1034,34 @@ async def _run_tool(
         if not note:
             return {"error": "联系人不存在或备注为空"}
         return {"ok": True, "note": note}
+
+    if name == "list_contact_notes":
+        contact_id = int(args.get("contact_id") or 0)
+        if contact_id <= 0:
+            return {"error": "contact_id 无效"}
+        limit = max(1, min(int(args.get("limit") or 20), 100))
+        notes = list_contact_notes(user_id, contact_id)
+        if notes is None:
+            return {"error": "联系人不存在"}
+        return {
+            "contact_id": contact_id,
+            "notes": notes[:limit],
+            "count": len(notes),
+            "limit": limit,
+        }
+
+    if name == "get_lead_preferences":
+        prefs = get_prefs(user_id)
+        summary = preference_hints_for_llm(prefs)
+        return {
+            "preferences": prefs,
+            "summary": summary,
+            "min_score_hint": prefs.get("min_score_hint"),
+        }
+
+    if name == "reset_lead_preferences":
+        prefs = reset_prefs(user_id)
+        return {"ok": True, "preferences": prefs, "message": "线索偏好已重置为默认"}
 
     if name == "dedupe_contacts":
         result = dedupe_contacts(user_id=user_id)

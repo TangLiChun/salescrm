@@ -251,35 +251,47 @@
     </section>
 
     <section id="pi-agent-view" class="panel pi-agent-panel hidden">
-      <div class="pi-chat-shell">
-        <aside class="pi-chat-sidebar" aria-label="Pi chat threads">
+      <p class="pi-agent-intro" data-i18n="pi.desc">在网页里用对话操作 CRM：查 ASN、AI 找线索、搜索/导入联系人。可开多个独立对话任务，历史保存在浏览器中。</p>
+      <div id="pi-llm-setup" class="pi-llm-setup hidden" role="status">
+        <p id="pi-llm-setup-text" data-i18n="pi.llmSetupHint">LLM 未配置，Pi 助手无法发送消息。请在设置中填写 API Key。</p>
+        <button type="button" id="pi-goto-llm-settings" class="secondary-btn" data-i18n="pi.gotoLlmSettings">去配置 API Key</button>
+      </div>
+      <div id="pi-chat-shell" class="pi-chat-shell pi-mobile-panel-chat">
+        <div class="pi-mobile-tabs" role="tablist" aria-label="Pi chat panels">
+          <button type="button" class="pi-mobile-tab active" role="tab" id="pi-mobile-tab-chat" aria-selected="true" aria-controls="pi-chat-main-panel" data-i18n="pi.mobileTabChat">消息</button>
+          <button type="button" class="pi-mobile-tab" role="tab" id="pi-mobile-tab-threads" aria-selected="false" aria-controls="pi-chat-sidebar" data-i18n="pi.mobileTabThreads">对话列表</button>
+        </div>
+        <aside id="pi-chat-sidebar" class="pi-chat-sidebar" aria-label="Pi chat threads">
           <div class="pi-chat-sidebar-head">
             <span data-i18n="pi.threads">对话</span>
             <button type="button" id="pi-thread-new" class="secondary-btn pi-thread-new-btn" data-i18n="pi.newThread">新对话</button>
           </div>
           <ul id="pi-thread-list" class="pi-thread-list"></ul>
         </aside>
-        <div class="pi-chat-main">
-          <div id="pi-chat-messages" class="pi-chat-messages" aria-live="polite">
-            <div class="pi-chat-empty" data-i18n="pi.emptyHint">输入任务开始对话</div>
-          </div>
-          <div id="pi-chat-progress" class="progress hidden">
+        <div id="pi-chat-main-panel" class="pi-chat-main" role="tabpanel" aria-labelledby="pi-mobile-tab-chat">
+          <div id="pi-chat-messages" class="pi-chat-messages" aria-live="polite"></div>
+          <div id="pi-chat-progress" class="progress hidden" aria-live="polite">
             <div class="progress-bar"><div id="pi-chat-progress-fill"></div></div>
             <p id="pi-chat-progress-text" data-i18n="common.preparing">准备中…</p>
           </div>
           <form id="pi-chat-form" class="pi-chat-form">
             <label class="field" for="pi-chat-input"><span data-i18n="pi.message">消息</span>
-              <textarea id="pi-chat-input" rows="3" data-i18n-placeholder="pi.inputPlaceholder" placeholder="描述你想让 Pi 助手完成的任务…" disabled></textarea>
+              <textarea id="pi-chat-input" rows="3" data-i18n-placeholder="pi.inputPlaceholder" placeholder="描述你想让 Pi 助手完成的任务…" disabled aria-describedby="pi-input-hint pi-llm-setup-text"></textarea>
             </label>
-            <div class="controls">
-              <label class="field checkbox-field">
-                <input id="pi-chat-background" type="checkbox">
-                <span data-i18n="jobs.runInBackground">后台运行（可关闭页面）</span>
-              </label>
-              <button type="submit" id="pi-chat-send" disabled data-i18n="pi.send">发送</button>
-              <button type="button" id="pi-chat-stop" class="secondary-btn hidden" data-i18n="pi.stop">停止</button>
-              <button type="button" id="pi-chat-clear" class="secondary-btn" data-i18n="pi.clear">清空当前对话</button>
-              <span id="pi-chat-history-hint" class="stats hint hidden" aria-hidden="true"></span>
+            <p id="pi-input-hint" class="pi-input-hint stats"></p>
+            <div class="pi-chat-controls">
+              <div class="pi-chat-controls-primary">
+                <button type="submit" id="pi-chat-send" disabled data-i18n="pi.send">发送</button>
+                <button type="button" id="pi-chat-stop" class="secondary-btn hidden" data-i18n="pi.stop">停止</button>
+                <button type="button" id="pi-chat-clear" class="secondary-btn" data-i18n="pi.clear">清空当前对话</button>
+              </div>
+              <div class="pi-chat-controls-secondary">
+                <label class="field checkbox-field">
+                  <input id="pi-chat-background" type="checkbox">
+                  <span data-i18n="jobs.runInBackground">后台运行（可关闭页面）</span>
+                </label>
+                <span id="pi-chat-history-hint" class="stats hint hidden"></span>
+              </div>
             </div>
           </form>
         </div>

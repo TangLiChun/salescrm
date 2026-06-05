@@ -70,6 +70,8 @@ import {
   appendPiChatStatus,
   fetchActivePiThreadHistory,
   restorePiChatUi,
+  initPiAgentUi,
+  handlePiChatInputKeydown,
 } from "./modules/pi.js";
 import {
   createSchedule,
@@ -100,6 +102,7 @@ const {
   currentUserEl,
   logoutBtn,
   piChatForm,
+  piChatInput,
   piChatStopBtn,
   piChatClearBtn,
   piThreadNewBtn,
@@ -183,6 +186,7 @@ lookupBtn.addEventListener("click", runLookup);
 piChatForm?.addEventListener("submit", (event) => {
   sendPiChat(event).catch((error) => appendPiChatStatus(error.message));
 });
+piChatInput?.addEventListener("keydown", handlePiChatInputKeydown);
 piChatStopBtn?.addEventListener("click", stopPiChat);
 piChatClearBtn?.addEventListener("click", clearPiChat);
 piThreadNewBtn?.addEventListener("click", () => createPiThread());
@@ -492,6 +496,7 @@ window.addEventListener("languagechange", refreshUiOnLanguageChange);
 
 async function bootstrap() {
   initI18n();
+  initPiAgentUi();
 
   let user;
   try {

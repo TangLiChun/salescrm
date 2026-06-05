@@ -16,12 +16,122 @@ import { notifyInfo } from "../core/toast.js";
 import { deps } from "../core/deps.js";
 import { trackBackgroundJob } from "../jobs/index.js";
 import { scoreBadgeClass, formatSource } from "./leads.js";
+import { switchSettingsCat } from "./settings.js";
 
 const {
   piChatMessagesEl, piChatForm, piChatInput, piChatSendBtn, piChatStopBtn, piChatClearBtn,
   piChatHistoryHintEl, piChatBackgroundInput, piThreadListEl, piChatProgressEl, piChatProgressFill,
   piChatProgressText, leadQueryInput, minScoreInput, autoImportInput,
+  piChatShellEl, piLlmSetupEl, piGotoLlmSettingsBtn, piInputHintEl,
+  piMobileTabChatBtn, piMobileTabThreadsBtn,
 } = dom;
+
+const PI_EXAMPLE_PROMPTS = [
+  { labelKey: "pi.exampleDiscover", messageKey: "pi.exampleDiscover" },
+  { labelKey: "pi.exampleLookup", messageKey: "pi.exampleLookup" },
+  { labelKey: "pi.examplePrefs", messageKey: "pi.examplePrefs" },
+];
+
+export function piSendModKey() {
+  return /Mac|iPhone|iPad/i.test(navigator.platform || "") ? "⌘" : "Ctrl";
+}
+
+export function formatPiToolLabel(name) {
+  const key = `pi.tool.${name}`;
+  const label = t(key);
+  return label !== key ? label : String(name || "tool").replace(/_/g, " ");
+}
+
+export function renderPiEmptyStateHtml() {
+  if (!state.llmConfigured) {
+    return `
+      <div class="pi-chat-empty pi-chat-empty-state">
+        <p class="pi-chat-empty-lead">${escapeHtml(t("pi.emptyHintAlt"))}</p>
+        <p class="pi-chat-empty-desc">${escapeHtml(t("pi.desc"))}</p>
+      </div>`;
+  }
+  const chips = PI_EXAMPLE_PROMPTS.map(
+    ({ labelKey, messageKey }) =>
+      `<button type="button" class="pi-example-chip" data-pi-example="${escapeHtml(t(messageKey))}">${escapeHtml(t(labelKey))}</button>`,
+  ).join("");
+  return `
+    <div class="pi-chat-empty pi-chat-empty-state">
+      <p class="pi-chat-empty-lead">${escapeHtml(t("pi.emptyHint"))}</p>
+      <p class="pi-chat-empty-desc">${escapeHtml(t("pi.desc"))}</p>
+      <div class="pi-example-prompts">
+        <span class="pi-example-label">${escapeHtml(t("pi.exampleLabel"))}</span>
+        <div class="pi-example-chips">${chips}</div>
+      </div>
+    </div>`;
+}
+
+export function mountPiEmptyState() {
+  if (!piChatMessagesEl) return;
+  piChatMessagesEl.innerHTML = renderPiEmptyStateHtml();
+}
+
+export function updatePiInputHint() {
+  if (!piInputHintEl) return;
+  piInputHintEl.textContent = t("pi.inputHint", { mod: piSendModKey() });
+}
+
+export function setPiMobilePanel(panel) {
+  if (!piChatShellEl) return;
+  const threads = panel === "threads";
+  piChatShellEl.classList.toggle("pi-mobile-panel-threads", threads);
+  piChatShellEl.classList.toggle("pi-mobile-panel-chat", !threads);
+  piMobileTabChatBtn?.classList.toggle("active", !threads);
+  piMobileTabThreadsBtn?.classList.toggle("active", threads);
+  piMobileTabChatBtn?.setAttribute("aria-selected", threads ? "false" : "true");
+  piMobileTabThreadsBtn?.setAttribute("aria-selected", threads ? "true" : "false");
+}
+
+export function refreshPiToolLabelsInDom() {
+  piChatMessagesEl?.querySelectorAll(".pi-chat-tool[data-tool-name]").forEach((el) => {
+    const labelEl = el.querySelector(".pi-chat-tool-name");
+    const name = el.dataset.toolName;
+    if (labelEl && name) labelEl.textContent = formatPiToolLabel(name);
+  });
+}
+
+export function refreshPiAgentChrome() {
+  updatePiInputHint();
+  piLlmSetupEl?.classList.toggle("hidden", state.llmConfigured);
+  if (piChatMessagesEl && !state.piChatHistory.length && !piChatMessagesEl.querySelector(".pi-chat-bubble")) {
+    mountPiEmptyState();
+  }
+  refreshPiToolLabelsInDom();
+  updatePiAgentStatus();
+}
+
+export function initPiAgentUi() {
+  updatePiInputHint();
+  piLlmSetupEl?.classList.toggle("hidden", state.llmConfigured);
+  if (piChatMessagesEl && !piChatMessagesEl.children.length) {
+    mountPiEmptyState();
+  }
+  piGotoLlmSettingsBtn?.addEventListener("click", () => {
+    deps.switchView?.("settings");
+    switchSettingsCat("ai");
+  });
+  piMobileTabChatBtn?.addEventListener("click", () => setPiMobilePanel("chat"));
+  piMobileTabThreadsBtn?.addEventListener("click", () => setPiMobilePanel("threads"));
+  piChatMessagesEl?.addEventListener("click", (event) => {
+    const chip = event.target.closest(".pi-example-chip");
+    if (!chip || !piChatInput || state.piChatBusy || !state.llmConfigured) return;
+    piChatInput.value = chip.dataset.piExample || chip.textContent || "";
+    piChatInput.focus();
+    setPiMobilePanel("chat");
+  });
+}
+
+export function handlePiChatInputKeydown(event) {
+  if (event.key !== "Enter") return;
+  if (!(event.metaKey || event.ctrlKey)) return;
+  event.preventDefault();
+  if (piChatSendBtn?.disabled) return;
+  piChatForm?.requestSubmit();
+}
 export function piChatStorageKey(userId) {
   return `salescrm:pi-chat:${PI_CHAT_STORAGE_VERSION}:${userId}`;
 }
@@ -411,6 +521,7 @@ export async function switchPiThread(threadId) {
   await fetchActivePiThreadHistory();
   restorePiChatUi();
   savePiThreadsStoreLocal();
+  setPiMobilePanel("chat");
 }
 
 export async function deletePiThread(threadId) {
@@ -496,7 +607,7 @@ export function restorePiChatUi() {
   if (!piChatMessagesEl) return;
   piChatMessagesEl.innerHTML = "";
   if (!state.piChatHistory.length) {
-    piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHint")}</div>`;
+    mountPiEmptyState();
     renderPiThreadList();
     updatePiChatHistoryHint();
     return;
@@ -634,6 +745,18 @@ export function formatPiToolSummary(name, result) {
   }
   if (name === "add_contact_note") {
     return result.ok ? t("pi.noteAdded") : "";
+  }
+  if (name === "list_contact_notes") {
+    return `联系人 #${result.contact_id ?? ""} · ${result.count ?? result.notes?.length ?? 0} 条备注`;
+  }
+  if (name === "get_lead_preferences") {
+    const summary = result.summary || "";
+    if (summary) return summary.split("\n")[0];
+    const stats = result.preferences?.stats || {};
+    return `偏好 · 导入 ${stats.imports ?? 0} · 无效 ${stats.invalid ?? 0}`;
+  }
+  if (name === "reset_lead_preferences") {
+    return result.ok ? "已重置线索偏好" : "";
   }
   if (name === "dedupe_contacts") {
     return `去重完成：删除 ${result.removed ?? 0} 条，剩余 ${result.total_contacts ?? result.total ?? 0} 条`;
@@ -1101,6 +1224,16 @@ export function updatePiAgentStatus() {
   const enabled = state.llmConfigured;
   piChatInput.disabled = !enabled || state.piChatBusy;
   piChatSendBtn.disabled = !enabled || state.piChatBusy;
+  piLlmSetupEl?.classList.toggle("hidden", enabled);
+  if (
+    enabled &&
+    piChatMessagesEl &&
+    !state.piChatHistory.length &&
+    !piChatMessagesEl.querySelector(".pi-chat-bubble") &&
+    !piChatMessagesEl.querySelector(".pi-chat-tool")
+  ) {
+    mountPiEmptyState();
+  }
 }
 
 export function clearPiChatEmpty() {
@@ -1245,9 +1378,10 @@ export function appendPiChatTool(name) {
   const el = document.createElement("div");
   el.className = "pi-chat-tool";
   el.dataset.toolName = name;
+  const label = formatPiToolLabel(name);
   el.innerHTML = `
-    <div class="pi-chat-tool-head"><span class="dot"></span><span class="pi-chat-tool-name">${escapeHtml(name)}</span></div>
-    <p class="pi-chat-tool-progress"></p>
+    <div class="pi-chat-tool-head"><span class="dot" aria-hidden="true"></span><span class="pi-chat-tool-name">${escapeHtml(label)}</span></div>
+    <p class="pi-chat-tool-progress" aria-live="polite" aria-atomic="true"></p>
     <pre class="pi-chat-tool-result hidden"></pre>
   `;
   piChatMessagesEl.appendChild(el);
@@ -1539,7 +1673,7 @@ export function clearPiChat() {
     thread.updatedAt = Date.now();
   }
   savePiThreadsStore();
-  piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHint")}</div>`;
+  mountPiEmptyState();
   updatePiChatHistoryHint();
   updatePiAgentStatus();
 }

@@ -9,7 +9,7 @@ import { loadContacts, renderContacts, renderMailTemplateSelect, renderEmailTemp
 import { loadSettingsForm } from "./settings.js";
 import { renderRows, refreshAsnPreview, updateStats } from "./lookup.js";
 import { renderAiLeads, updateAiLeadsStats, loadLlmStatus } from "./leads.js";
-import { updatePiAgentStatus, updatePiChatHistoryHint } from "./pi.js";
+import { updatePiAgentStatus, updatePiChatHistoryHint, refreshPiAgentChrome, setPiMobilePanel } from "./pi.js";
 import { renderSchedules } from "./schedules.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
 
@@ -52,6 +52,8 @@ export function switchView(view) {
     pageTitle.textContent = t("page.aiLeads.title");
   } else if (view === "pi-agent") {
     pageTitle.textContent = t("page.piAgent.title");
+    setPiMobilePanel("chat");
+    refreshPiAgentChrome();
     updatePiAgentStatus();
   } else if (view === "schedules") {
     pageTitle.textContent = t("page.schedules.title");
@@ -84,6 +86,7 @@ export function refreshUiOnLanguageChange() {
   renderMailTemplateSelect();
   renderEmailTemplatesList();
   updatePiChatHistoryHint();
+  refreshPiAgentChrome();
   updateAiLeadsStats();
   if (state.allRows.length === 0 && statsEl) {
     statsEl.textContent = t("common.notYetQueried");

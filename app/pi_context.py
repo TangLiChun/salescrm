@@ -117,6 +117,54 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
             )
         )
 
+    if name == "list_contact_notes":
+        notes = result.get("notes") or []
+        preview = []
+        for note in notes[:30]:
+            if not isinstance(note, dict):
+                continue
+            body = str(note.get("body") or "")
+            preview.append(
+                {
+                    "id": note.get("id"),
+                    "created_at": note.get("created_at"),
+                    "body": body[:600] + ("…" if len(body) > 600 else ""),
+                }
+            )
+        payload = {
+            "contact_id": result.get("contact_id"),
+            "count": result.get("count", len(notes)),
+            "notes_preview": preview,
+            "notes_omitted": max(0, int(result.get("count") or len(notes)) - len(preview)),
+        }
+        return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
+
+    if name == "get_lead_preferences":
+        prefs = result.get("preferences") or {}
+        payload = {
+            "min_score_hint": prefs.get("min_score_hint"),
+            "preferred_roles": (prefs.get("preferred_roles") or [])[:8],
+            "keyword_hints": (prefs.get("keyword_hints") or [])[:12],
+            "avoid_orgs": (prefs.get("avoid_orgs") or [])[:12],
+            "avoid_domains": (prefs.get("avoid_domains") or [])[:15],
+            "liked_orgs": (prefs.get("liked_orgs") or [])[:12],
+            "stats": prefs.get("stats") or {},
+            "summary": result.get("summary"),
+        }
+        return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
+
+    if name == "reset_lead_preferences":
+        return _truncate_json_text(
+            json.dumps(
+                {
+                    "ok": result.get("ok"),
+                    "message": result.get("message"),
+                    "min_score_hint": (result.get("preferences") or {}).get("min_score_hint"),
+                },
+                ensure_ascii=False,
+            )
+        )
+
     if name in ("shodan_search", "web_search"):
         networks = result.get("networks") or []
         web_results = result.get("web_results") or result.get("results") or []
