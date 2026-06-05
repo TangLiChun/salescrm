@@ -88,8 +88,24 @@ check_health_http() {
     fail "数据库不可用 (db != true)"
   fi
 
+  if ! echo "${body}" | grep -q '"schema"[[:space:]]*:[[:space:]]*true'; then
+    say "响应: ${body}"
+    show_logs
+    fail "数据库表结构不完整 (schema != true)，请重新部署以执行 init_db"
+  fi
+
   say "HTTP: ${url} — ok"
   say "响应: ${body}"
+}
+
+check_smoke() {
+  if ! $DOCKER exec "${CONTAINER}" python scripts/smoke_check.py >/dev/null 2>&1; then
+    say "API 冒烟测试失败："
+    $DOCKER exec "${CONTAINER}" python scripts/smoke_check.py 2>&1 || true
+    show_logs
+    fail "关键 API / 数据库查询异常（如缺表导致 500）"
+  fi
+  say "冒烟: scripts/smoke_check.py — ok"
 }
 
 check_docker_health() {
@@ -116,6 +132,7 @@ main() {
   cd "${APP_DIR}"
   check_container
   check_health_http
+  check_smoke
   check_docker_health
   [[ "$QUIET" -eq 0 ]] && echo "" && echo "OK: Sales CRM 运行正常"
 }

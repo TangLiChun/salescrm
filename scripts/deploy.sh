@@ -12,11 +12,18 @@
 #   APP_DIR=/opt/salescrm GIT_BRANCH=main ./scripts/deploy.sh
 #
 # 环境变量：
-#   APP_DIR      安装目录（默认：脚本所在仓库根目录，或 /opt/salescrm）
-#   APP_PORT     对外端口（默认 8000）
-#   GIT_REPO     仓库地址
-#   GIT_BRANCH   分支（默认 main）
-#   SKIP_PULL=1  跳过 git pull（仅重建容器）
+#   APP_DIR         安装目录（默认：脚本所在仓库根目录，或 /opt/salescrm）
+#   APP_PORT        对外端口（默认 8000）
+#   GIT_REPO        仓库地址
+#   GIT_BRANCH      分支（默认 main）
+#   SKIP_PULL=1     跳过 git pull（仅重建容器）
+#   FORCE_REBUILD=1 构建镜像时使用 --no-cache
+#
+# 部署验证（失败则 exit 1 并打印日志）：
+#   1. docker build 阶段导入 app（Dockerfile）— 捕获启动语法/路由错误
+#   2. 容器 running，非 crash loop
+#   3. GET /health — db + schema（缺表会失败）
+#   4. 容器内 smoke_check.py — 登录并探测 email-templates 等 API
 
 set -euo pipefail
 
@@ -24,6 +31,7 @@ GIT_REPO="${GIT_REPO:-https://github.com/TangLiChun/salescrm.git}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 APP_PORT="${APP_PORT:-8000}"
 SKIP_PULL="${SKIP_PULL:-0}"
+FORCE_REBUILD="${FORCE_REBUILD:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -112,9 +120,21 @@ ensure_repo() {
 }
 
 deploy_compose() {
-  log "构建并启动容器 (port ${APP_PORT})..."
+  log "构建镜像 (port ${APP_PORT})..."
   export APP_PORT
-  if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --build --remove-orphans; then
+  local build_args=()
+  if [[ "${FORCE_REBUILD}" == "1" ]]; then
+    build_args+=(--no-cache)
+    log "FORCE_REBUILD=1 — 无缓存构建"
+  fi
+  if ! $SUDO env APP_PORT="${APP_PORT}" docker compose build "${build_args[@]}"; then
+    echo "ERROR: docker compose build 失败" >&2
+    show_failure_logs
+    exit 1
+  fi
+
+  log "启动容器..."
+  if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --remove-orphans; then
     echo "ERROR: docker compose up 失败" >&2
     show_failure_logs
     exit 1

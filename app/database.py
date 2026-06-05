@@ -73,10 +73,36 @@ def _migrate_contacts(conn: sqlite3.Connection) -> None:
         )
 
 
+REQUIRED_TABLES = (
+    "users",
+    "contacts",
+    "scheduled_jobs",
+    "app_settings",
+    "contact_notes",
+    "job_runs",
+    "email_templates",
+)
+
+
 def check_db() -> bool:
     try:
         with get_conn() as conn:
             conn.execute("SELECT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def check_schema() -> bool:
+    try:
+        with get_conn() as conn:
+            for table in REQUIRED_TABLES:
+                row = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    (table,),
+                ).fetchone()
+                if not row:
+                    return False
         return True
     except sqlite3.Error:
         return False

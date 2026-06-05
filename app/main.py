@@ -23,6 +23,7 @@ from app.database import (
     bulk_delete_contacts,
     bulk_update_contacts,
     check_db,
+    check_schema,
     contacts_to_csv,
     count_contacts,
     create_contact_note,
@@ -202,7 +203,8 @@ def require_login(request: Request) -> dict | None:
 @app.get("/health")
 def health() -> dict:
     db_ok = check_db()
-    return {"ok": db_ok, "db": db_ok}
+    schema_ok = check_schema() if db_ok else False
+    return {"ok": db_ok and schema_ok, "db": db_ok, "schema": schema_ok}
 
 
 @app.get("/login", response_class=HTMLResponse, response_model=None)
