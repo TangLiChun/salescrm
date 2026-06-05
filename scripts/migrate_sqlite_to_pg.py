@@ -109,9 +109,16 @@ def main() -> int:
 
     with get_conn() as conn:
         user_count = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
-        if user_count:
-            print("PostgreSQL already has users; skipping migration.")
+        contact_count = conn.execute("SELECT COUNT(*) AS count FROM contacts").fetchone()["count"]
+        force = os.getenv("FORCE_MIGRATE", "").strip() in {"1", "true", "yes"}
+        if user_count and (contact_count or not force):
+            print("PostgreSQL already has data; skipping migration (set FORCE_MIGRATE=1 to replace).")
             return 0
+
+        if user_count:
+            for table, _ in reversed(TABLES):
+                conn.execute(f"TRUNCATE {table} RESTART IDENTITY CASCADE")
+            print("Cleared seed PostgreSQL data before import.")
 
         for table, columns in TABLES:
             if table not in {

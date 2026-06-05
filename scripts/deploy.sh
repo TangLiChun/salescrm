@@ -488,12 +488,30 @@ print_summary() {
   echo "=========================================="
 }
 
+migrate_legacy_sqlite() {
+  local sqlite="${APP_DIR}/data/salescrm.db"
+  if [[ ! -f "${sqlite}" ]]; then
+    return 0
+  fi
+  log "检测到 legacy SQLite，迁移到 PostgreSQL..."
+  cd "${APP_DIR}"
+  $SUDO docker compose cp "${sqlite}" salescrm:/app/data/salescrm.db 2>/dev/null || true
+  if $SUDO docker compose exec -T salescrm env PYTHONPATH=/app FORCE_MIGRATE=1 SQLITE_PATH=/app/data/salescrm.db \
+    python scripts/migrate_sqlite_to_pg.py; then
+    log "SQLite 迁移完成"
+    mv "${sqlite}" "${APP_DIR}/backup/salescrm.migrated.$(date +%Y%m%d_%H%M%S).db" 2>/dev/null || true
+  else
+    warn "SQLite 迁移失败（若 PG 已有业务数据可忽略）"
+  fi
+}
+
 main() {
   log "Sales CRM 部署脚本"
   install_docker
   ensure_repo
   deploy_compose
   wait_healthy
+  migrate_legacy_sqlite
   setup_pi_agent
   print_summary
 }
