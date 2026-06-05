@@ -2,7 +2,7 @@ import { initI18n, t } from "../i18n.js";
 import * as dom from "./core/dom.js";
 import { state } from "./core/state.js";
 import { api, errorMessage } from "./core/utils.js";
-import { notifyError, notifySuccess, notifyInfo, showApiError, showApiSuccess } from "./core/toast.js";
+import { showApiError, showApiSuccess } from "./core/api-feedback.js";
 import { handleModalKeydown } from "./core/modal.js";
 import {
   startJobEventStream,

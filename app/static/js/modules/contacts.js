@@ -4,7 +4,8 @@ import { state } from "../core/state.js";
 import { api, escapeHtml, errorMessage, formatTime } from "../core/utils.js";
 import { deps } from "../core/deps.js";
 import { closeModal, openModal } from "../core/modal.js";
-import { notifyError, notifyInfo, showApiError, showApiSuccess } from "../core/toast.js";
+import { notifyError, notifyInfo } from "../core/toast.js";
+import { showApiError, showApiSuccess } from "../core/api-feedback.js";
 
 const {
   contactsBody,

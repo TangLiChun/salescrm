@@ -1,8 +1,7 @@
 import { t } from "../../i18n.js";
 import * as dom from "./dom.js";
-import { api, escapeHtml, errorMessage } from "./utils.js";
 
-const { toastStackEl, jobsPanelEl, jobsPanelListEl } = dom;
+const { toastStackEl } = dom;
 
 export function showToast(message, options = {}) {
   const {
@@ -68,14 +67,6 @@ export function notifyError(message, options = {}) {
 
 export function notifyInfo(message, options = {}) {
   showToast(message, { type: "info", ...options });
-}
-
-export function showApiError(error, fallback = "") {
-  notifyError(errorMessage(error, fallback));
-}
-
-export function showApiSuccess(message) {
-  notifySuccess(message);
 }
 
 export function jobTypeLabel(jobType) {

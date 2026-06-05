@@ -12,7 +12,8 @@ import {
   PI_THREADS_MAX,
 } from "../core/state.js";
 import { api, escapeHtml, errorMessage, formatApiDetail, formatImportResult, normalizeImportRows } from "../core/utils.js";
-import { notifyError, notifyInfo, showApiError, showApiSuccess } from "../core/toast.js";
+import { notifyError, notifyInfo } from "../core/toast.js";
+import { showApiError, showApiSuccess } from "../core/api-feedback.js";
 import { deps } from "../core/deps.js";
 import { trackBackgroundJob } from "../jobs/index.js";
 import { scoreBadgeClass, formatSource } from "./leads.js";

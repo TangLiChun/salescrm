@@ -87,7 +87,27 @@ from app.sources.channel_registry import get_channel_config
 from arin_lookup import lookup_asns_batch, parse_asns_from_text, rows_to_csv
 
 APP_DIR = Path(__file__).resolve().parent
+STATIC_DIR = APP_DIR / "static"
 MAX_ASNS = 200
+
+
+class VersionedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if isinstance(response, Response) and path.endswith((".js", ".css")):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+def asset_version() -> str:
+    env = os.environ.get("ASSET_VERSION")
+    if env:
+        return env
+    main_js = STATIC_DIR / "js" / "main.js"
+    try:
+        return str(int(main_js.stat().st_mtime))
+    except OSError:
+        return str(int(time.time()))
 
 
 @asynccontextmanager
@@ -109,7 +129,7 @@ app.add_middleware(
     secret_key=session_secret(),
     https_only=get_setting("session_https_only", "0") == "1",
 )
-app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+app.mount("/static", VersionedStaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(agent_router)
 
 
@@ -266,8 +286,14 @@ class PiThreadSyncRequest(BaseModel):
 
 
 def render_page(filename: str) -> HTMLResponse:
-    html = (APP_DIR / "static" / filename).read_text(encoding="utf-8")
-    return HTMLResponse(html)
+    html = (STATIC_DIR / filename).read_text(encoding="utf-8")
+    if filename.endswith(".html"):
+        version = asset_version()
+        html = html.replace(
+            'src="/static/js/main.js"',
+            f'src="/static/js/main.js?v={version}"',
+        )
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 def require_login(request: Request) -> dict | None:

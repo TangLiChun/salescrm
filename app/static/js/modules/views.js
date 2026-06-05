@@ -12,7 +12,7 @@ import { renderAiLeads, updateAiLeadsStats, loadLlmStatus } from "./leads.js";
 import { updatePiAgentStatus, updatePiChatHistoryHint, refreshPiAgentChrome, setPiMobilePanel } from "./pi.js";
 import { renderSchedules } from "./schedules.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
-import { showApiError } from "../core/toast.js";
+import { showApiError } from "../core/api-feedback.js";
 
 const { tabs, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
 

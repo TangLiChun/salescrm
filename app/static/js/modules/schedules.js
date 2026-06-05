@@ -3,7 +3,7 @@ import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { api, escapeHtml, formatTime } from "../core/utils.js";
 import { deps } from "../core/deps.js";
-import { showApiSuccess, showApiError } from "../core/toast.js";
+import { showApiError, showApiSuccess } from "../core/api-feedback.js";
 
 const {
   schedulesBody,
