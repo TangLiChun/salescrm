@@ -91,6 +91,7 @@ const aiProgressFill = document.getElementById("ai-progress-fill");
 const aiProgressText = document.getElementById("ai-progress-text");
 const aiStatsEl = document.getElementById("ai-stats");
 const aiLeadsBody = document.getElementById("ai-leads-body");
+const aiChannelsEl = document.getElementById("ai-channels");
 const importLeadsBtn = document.getElementById("import-leads-btn");
 
 let allRows = [];
@@ -114,6 +115,15 @@ const FOLLOW_UP_STATUS_LABELS = {
 let schedules = [];
 let scheduleRuns = {};
 let aiLeads = [];
+const CHANNEL_DEFS = [
+  { key: "peeringdb", name: "PeeringDB" },
+  { key: "web_search", name: "搜索引擎" },
+  { key: "web_regex", name: "网页解析" },
+  { key: "llm_extract", name: "LLM 提取" },
+  { key: "arin", name: "ARIN RDAP" },
+  { key: "scoring", name: "LLM 评分" },
+];
+let channelState = {};
 let llmConfigured = false;
 let emailTemplates = [];
 let editingTemplateId = null;
@@ -1226,6 +1236,36 @@ function renderAiSources(channels) {
   `;
 }
 
+function resetChannelPanel() {
+  channelState = {};
+  for (const def of CHANNEL_DEFS) {
+    channelState[def.key] = { state: "idle", count: "", preview: "" };
+  }
+  renderChannelPanel();
+}
+
+function setChannel(key, patch) {
+  if (!channelState[key]) channelState[key] = { state: "idle", count: "", preview: "" };
+  Object.assign(channelState[key], patch);
+  renderChannelPanel();
+}
+
+const CHANNEL_ICON = { idle: "·", active: "◐", done: "✓", failed: "×" };
+
+function renderChannelPanel() {
+  aiChannelsEl.classList.remove("hidden");
+  aiChannelsEl.innerHTML = CHANNEL_DEFS.map((def) => {
+    const s = channelState[def.key] || { state: "idle", count: "", preview: "" };
+    return `
+      <div class="ai-channel-row state-${s.state}">
+        <span class="ai-channel-icon">${CHANNEL_ICON[s.state]}</span>
+        <span class="ai-channel-name">${escapeHtml(def.name)}</span>
+        <span class="ai-channel-count">${escapeHtml(String(s.count ?? ""))}</span>
+        <span class="ai-channel-preview" title="${escapeHtml(s.preview || "")}">${escapeHtml(s.preview || "")}</span>
+      </div>`;
+  }).join("");
+}
+
 async function loadLlmStatus() {
   try {
     const config = await fetch("/api/config").then((response) => response.json());
@@ -1263,6 +1303,7 @@ async function runLeadDiscovery() {
   renderAiLeads();
   aiPlanEl.classList.add("hidden");
   aiSourcesEl.classList.add("hidden");
+  resetChannelPanel();
   aiProgressEl.classList.remove("hidden");
   aiProgressFill.style.width = "0%";
   aiProgressText.textContent = "AI 正在分析需求…";
@@ -1313,23 +1354,34 @@ async function runLeadDiscovery() {
           aiProgressText.textContent = payload.message;
         }
 
+        if (payload.type === "status" && /评估|评分/.test(payload.message || "")) {
+          setChannel("scoring", { state: "active" });
+        }
+
+        if (payload.type === "status" && /提取部分失败/.test(payload.message || "")) {
+          setChannel("llm_extract", { state: "failed", preview: payload.message });
+        }
+
         if (payload.type === "plan") {
           renderAiPlan(payload.plan);
           renderAiSources(payload.plan.channels);
         }
 
         if (payload.type === "source_result") {
+          const preview = (payload.preview || []).join(" · ");
+          setChannel(payload.source, { state: "done", count: payload.count, preview });
           aiProgressText.textContent = `${payload.source} 返回 ${payload.count} 条`;
-        }
-
-        if (payload.type === "networks") {
-          aiProgressText.textContent = `找到 ${payload.total} 个候选网络，开始查询 ARIN…`;
         }
 
         if (payload.type === "progress") {
           const percent = Math.round((payload.index / payload.total) * 100);
           aiProgressFill.style.width = `${percent}%`;
           aiProgressText.textContent = `${payload.message}（${payload.index}/${payload.total}）`;
+          setChannel("arin", {
+            state: payload.index >= payload.total ? "done" : "active",
+            count: `${payload.index}/${payload.total}`,
+            preview: payload.network || `AS${payload.asn}`,
+          });
         }
 
         if (payload.type === "lead") {
@@ -1345,6 +1397,7 @@ async function runLeadDiscovery() {
         if (payload.type === "done") {
           aiProgressFill.style.width = "100%";
           aiProgressText.textContent = payload.message || "完成";
+          setChannel("scoring", { state: "done", count: (payload.leads || aiLeads).length });
           if (payload.leads) {
             aiLeads = payload.leads.map((lead) => {
               ensureLeadSelected(lead);
