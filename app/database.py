@@ -11,6 +11,12 @@ from app.security import hash_password
 
 FOLLOW_UP_STATUSES = ("new", "contacted", "replied", "invalid", "interested")
 
+CONTACT_SELECT_SQL = """
+    id, asn, org, name, email, roles, handle, rir, source, notes,
+    linkedin, x, facebook,
+    email_sent, email_sent_at, follow_up_status, created_at, updated_at
+"""
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -53,6 +59,9 @@ def _migrate_contacts(conn) -> None:
         conn.execute(
             "UPDATE contacts SET follow_up_status = 'contacted' WHERE email_sent = TRUE"
         )
+    for social_col in ("linkedin", "x", "facebook"):
+        if social_col not in columns:
+            conn.execute(f"ALTER TABLE contacts ADD COLUMN {social_col} TEXT NOT NULL DEFAULT ''")
 
     dedupe_contacts(conn=conn)
 
@@ -60,6 +69,45 @@ def _migrate_contacts(conn) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_user_email_unique ON contacts(user_id, email)"
     )
+
+
+def _migrate_scheduled_jobs(conn) -> None:
+    columns = _table_columns(conn, "scheduled_jobs")
+    if "interval_minutes" not in columns:
+        conn.execute(
+            "ALTER TABLE scheduled_jobs ADD COLUMN interval_minutes INTEGER NOT NULL DEFAULT 1440"
+        )
+        conn.execute(
+            "UPDATE scheduled_jobs SET interval_minutes = interval_hours * 60 WHERE interval_minutes = 1440"
+        )
+    if "run_mode" not in columns:
+        conn.execute(
+            "ALTER TABLE scheduled_jobs ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'interval'"
+        )
+    if "cooldown_minutes" not in columns:
+        conn.execute(
+            "ALTER TABLE scheduled_jobs ADD COLUMN cooldown_minutes INTEGER NOT NULL DEFAULT 15"
+        )
+    if "running_at" not in columns:
+        conn.execute("ALTER TABLE scheduled_jobs ADD COLUMN running_at TIMESTAMPTZ")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due
+            ON scheduled_jobs(enabled, next_run_at, running_at)
+        """
+    )
+
+
+def _migrate_pi_chat_threads(conn) -> None:
+    columns = _table_columns(conn, "pi_chat_threads")
+    if "context_summary" not in columns:
+        conn.execute(
+            "ALTER TABLE pi_chat_threads ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''"
+        )
+    if "context_summary_through" not in columns:
+        conn.execute(
+            "ALTER TABLE pi_chat_threads ADD COLUMN context_summary_through INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 REQUIRED_TABLES = (
@@ -271,6 +319,8 @@ def init_db() -> None:
         )
 
         _migrate_contacts(conn)
+        _migrate_scheduled_jobs(conn)
+        _migrate_pi_chat_threads(conn)
 
         from app.settings_store import init_settings
 
@@ -369,9 +419,10 @@ def _contact_filter_clause(
         like = f"%{q.strip().lower()}%"
         clauses.append(
             "(lower(org) LIKE %s OR lower(name) LIKE %s OR lower(email) LIKE %s "
-            "OR lower(notes) LIKE %s OR lower(roles) LIKE %s)"
+            "OR lower(notes) LIKE %s OR lower(roles) LIKE %s "
+            "OR lower(linkedin) LIKE %s OR lower(x) LIKE %s OR lower(facebook) LIKE %s)"
         )
-        params.extend([like, like, like, like, like])
+        params.extend([like, like, like, like, like, like, like, like])
     return " AND ".join(clauses), params
 
 
@@ -406,8 +457,7 @@ def list_contacts(
         user_id, status=status, follow_up_status=follow_up_status, q=q
     )
     sql = f"""
-        SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
-               email_sent, email_sent_at, follow_up_status, created_at, updated_at
+        SELECT {CONTACT_SELECT_SQL}
         FROM contacts
         WHERE {where}
         ORDER BY email_sent ASC, created_at DESC, id DESC
@@ -423,9 +473,8 @@ def list_contacts(
 def get_contact(user_id: int, contact_id: int) -> dict | None:
     with get_conn() as conn:
         row = conn.execute(
-            """
-            SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
-                   email_sent, email_sent_at, follow_up_status, created_at, updated_at
+            f"""
+            SELECT {CONTACT_SELECT_SQL}
             FROM contacts
             WHERE id = %s AND user_id = %s
             """,
@@ -461,7 +510,9 @@ def _pick_import_text(*values: object) -> str:
 
 
 def normalize_import_row(row: dict) -> dict:
-    """Normalize import payloads so org/name are preserved across all import paths."""
+    """Normalize import payloads so org/name/social URLs are preserved across all import paths."""
+    from app.social_contacts import extract_social_fields_from_row
+
     normalized = dict(row)
     org = _pick_import_text(
         row.get("org"),
@@ -481,6 +532,7 @@ def normalize_import_row(row: dict) -> dict:
 
     normalized["org"] = org
     normalized["name"] = name
+    normalized.update(extract_social_fields_from_row(row))
     asn_raw = row.get("asn")
     if asn_raw is not None and str(asn_raw).strip():
         parsed_asn = parse_asn(str(asn_raw))
@@ -492,6 +544,7 @@ def normalize_import_row(row: dict) -> dict:
 
 def import_contacts(user_id: int, rows: list[dict]) -> dict:
     from app.import_filters import email_allowed_for_import
+    from app.social_contacts import merge_social_fields
 
     imported = 0
     skipped = 0
@@ -511,7 +564,10 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 continue
 
             existing = conn.execute(
-                "SELECT id, org, name, roles, notes FROM contacts WHERE user_id = %s AND lower(email) = %s",
+                f"""
+                SELECT id, org, name, roles, notes, linkedin, x, facebook
+                FROM contacts WHERE user_id = %s AND lower(email) = %s
+                """,
                 (user_id, email),
             ).fetchone()
             if existing:
@@ -522,6 +578,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 existing_name = (existing["name"] or "").strip()
                 merged_org = existing_org or (row.get("org") or "").strip()
                 merged_name = existing_name or (row.get("name") or "").strip()
+                social = merge_social_fields(existing, row)
                 conn.execute(
                     """
                     UPDATE contacts
@@ -529,6 +586,9 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                         name = %s,
                         roles = %s,
                         notes = %s,
+                        linkedin = %s,
+                        x = %s,
+                        facebook = %s,
                         updated_at = %s
                     WHERE id = %s
                     """,
@@ -537,6 +597,9 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                         merged_name,
                         merged_roles,
                         merged_notes,
+                        social["linkedin"],
+                        social["x"],
+                        social["facebook"],
                         now,
                         existing["id"],
                     ),
@@ -545,12 +608,14 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
 
             roles = ",".join(row.get("roles") or []) if isinstance(row.get("roles"), list) else (row.get("roles") or "")
             notes = row.get("notes") or ""
+            social = merge_social_fields({}, row)
             conn.execute(
                 """
                 INSERT INTO contacts (
                     user_id, asn, org, name, email, roles, handle, rir, source, notes,
+                    linkedin, x, facebook,
                     email_sent, email_sent_at, follow_up_status, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, 'new', %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, 'new', %s, %s)
                 """,
                 (
                     user_id,
@@ -563,6 +628,9 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                     row.get("rir") or "ARIN",
                     row.get("source") or "arin",
                     notes,
+                    social["linkedin"],
+                    social["x"],
+                    social["facebook"],
                     now,
                     now,
                 ),
@@ -644,7 +712,12 @@ def update_contact(
     name: str | None = None,
     notes: str | None = None,
     roles: str | None = None,
+    linkedin: str | None = None,
+    x: str | None = None,
+    facebook: str | None = None,
 ) -> dict | None:
+    from app.social_contacts import normalize_social_url
+
     updates: dict[str, object] = {}
     if org is not None:
         updates["org"] = org.strip()
@@ -654,12 +727,17 @@ def update_contact(
         updates["notes"] = notes.strip()
     if roles is not None:
         updates["roles"] = roles.strip()
+    if linkedin is not None:
+        updates["linkedin"] = normalize_social_url("linkedin", linkedin)
+    if x is not None:
+        updates["x"] = normalize_social_url("x", x)
+    if facebook is not None:
+        updates["facebook"] = normalize_social_url("facebook", facebook)
     if not updates:
         with get_conn() as conn:
             row = conn.execute(
-                """
-                SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
-                       email_sent, email_sent_at, follow_up_status, created_at, updated_at
+                f"""
+                SELECT {CONTACT_SELECT_SQL}
                 FROM contacts WHERE id = %s AND user_id = %s
                 """,
                 (contact_id, user_id),
@@ -678,14 +756,46 @@ def update_contact(
         if cursor.rowcount == 0:
             return None
         row = conn.execute(
-            """
-            SELECT id, asn, org, name, email, roles, handle, rir, source, notes,
-                   email_sent, email_sent_at, follow_up_status, created_at, updated_at
+            f"""
+            SELECT {CONTACT_SELECT_SQL}
             FROM contacts WHERE id = %s AND user_id = %s
             """,
             (contact_id, user_id),
         ).fetchone()
     return _contact_from_row(row) if row else None
+
+
+def update_contact_social_fields(
+    user_id: int,
+    contact_id: int,
+    *,
+    linkedin: str = "",
+    x: str = "",
+    facebook: str = "",
+) -> bool:
+    from app.social_contacts import merge_social_fields
+
+    contact = get_contact(user_id, contact_id)
+    if not contact:
+        return False
+    merged = merge_social_fields(contact, {"linkedin": linkedin, "x": x, "facebook": facebook})
+    if (
+        merged["linkedin"] == (contact.get("linkedin") or "")
+        and merged["x"] == (contact.get("x") or "")
+        and merged["facebook"] == (contact.get("facebook") or "")
+    ):
+        return False
+    now = utc_now()
+    with get_conn() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE contacts
+            SET linkedin = %s, x = %s, facebook = %s, updated_at = %s
+            WHERE id = %s AND user_id = %s
+            """,
+            (merged["linkedin"], merged["x"], merged["facebook"], now, contact_id, user_id),
+        )
+        return cursor.rowcount > 0
 
 
 def bulk_update_contacts(
@@ -818,11 +928,27 @@ def dedupe_contacts(*, user_id: int | None = None, conn: Any | None = None) -> d
         return run(connection)
 
 
+def _scheduled_job_from_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    item = dict(row)
+    item["auto_import"] = bool(item.get("auto_import"))
+    item["enabled"] = bool(item.get("enabled"))
+    if not item.get("interval_minutes"):
+        item["interval_minutes"] = int(item.get("interval_hours") or 24) * 60
+    if not item.get("run_mode"):
+        item["run_mode"] = "interval"
+    if not item.get("cooldown_minutes"):
+        item["cooldown_minutes"] = 15
+    return item
+
+
 def list_scheduled_jobs(user_id: int) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT id, name, query, interval_hours, min_score, auto_import, enabled,
+            SELECT id, name, query, interval_hours, interval_minutes, run_mode, cooldown_minutes,
+                   min_score, auto_import, enabled, running_at,
                    last_run_at, last_run_status, last_run_message, next_run_at,
                    created_at, updated_at
             FROM scheduled_jobs
@@ -831,13 +957,7 @@ def list_scheduled_jobs(user_id: int) -> list[dict]:
             """,
             (user_id,),
         ).fetchall()
-    jobs = []
-    for row in rows:
-        item = dict(row)
-        item["auto_import"] = bool(item["auto_import"])
-        item["enabled"] = bool(item["enabled"])
-        jobs.append(item)
-    return jobs
+    return [job for row in rows if (job := _scheduled_job_from_row(dict(row)))]
 
 
 def get_scheduled_job(user_id: int, job_id: int) -> dict | None:
@@ -846,12 +966,14 @@ def get_scheduled_job(user_id: int, job_id: int) -> dict | None:
             "SELECT * FROM scheduled_jobs WHERE id = %s AND user_id = %s",
             (job_id, user_id),
         ).fetchone()
-    if not row:
-        return None
-    item = dict(row)
-    item["auto_import"] = bool(item["auto_import"])
-    item["enabled"] = bool(item["enabled"])
-    return item
+    return _scheduled_job_from_row(dict(row) if row else None)
+
+
+def _resolve_interval_minutes(*, interval_minutes: int | None, interval_hours: int | None) -> int:
+    if interval_minutes is not None:
+        return max(15, min(int(interval_minutes), 10080))
+    hours = interval_hours if interval_hours is not None else 24
+    return max(15, min(int(hours) * 60, 10080))
 
 
 def create_scheduled_job(
@@ -859,26 +981,39 @@ def create_scheduled_job(
     *,
     name: str,
     query: str,
-    interval_hours: int,
+    interval_hours: int | None = None,
+    interval_minutes: int | None = None,
+    run_mode: str = "interval",
+    cooldown_minutes: int = 15,
     min_score: int,
     auto_import: bool,
     enabled: bool = True,
 ) -> dict:
+    minutes = _resolve_interval_minutes(
+        interval_minutes=interval_minutes,
+        interval_hours=interval_hours,
+    )
+    mode = "continuous" if str(run_mode).strip().lower() == "continuous" else "interval"
+    cooldown = max(5, min(int(cooldown_minutes or 15), 1440))
+    interval_hours_value = max(1, (minutes + 59) // 60)
     now = utc_now()
     with get_conn() as conn:
         row = conn.execute(
             """
             INSERT INTO scheduled_jobs (
-                user_id, name, query, interval_hours, min_score, auto_import, enabled,
-                next_run_at, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                user_id, name, query, interval_hours, interval_minutes, run_mode, cooldown_minutes,
+                min_score, auto_import, enabled, next_run_at, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 user_id,
                 name.strip(),
                 query.strip(),
-                interval_hours,
+                interval_hours_value,
+                minutes,
+                mode,
+                cooldown,
                 min_score,
                 auto_import,
                 enabled,
@@ -894,7 +1029,17 @@ def create_scheduled_job(
 
 
 def update_scheduled_job(user_id: int, job_id: int, **fields) -> dict | None:
-    allowed = {"name", "query", "interval_hours", "min_score", "auto_import", "enabled"}
+    allowed = {
+        "name",
+        "query",
+        "interval_hours",
+        "interval_minutes",
+        "run_mode",
+        "cooldown_minutes",
+        "min_score",
+        "auto_import",
+        "enabled",
+    }
     updates = {key: value for key, value in fields.items() if key in allowed and value is not None}
     if not updates:
         return get_scheduled_job(user_id, job_id)
@@ -903,6 +1048,19 @@ def update_scheduled_job(user_id: int, job_id: int, **fields) -> dict | None:
         updates["auto_import"] = bool(updates["auto_import"])
     if "enabled" in updates:
         updates["enabled"] = bool(updates["enabled"])
+    if "run_mode" in updates:
+        updates["run_mode"] = (
+            "continuous" if str(updates["run_mode"]).strip().lower() == "continuous" else "interval"
+        )
+    if "cooldown_minutes" in updates:
+        updates["cooldown_minutes"] = max(5, min(int(updates["cooldown_minutes"]), 1440))
+    if "interval_minutes" in updates or "interval_hours" in updates:
+        minutes = _resolve_interval_minutes(
+            interval_minutes=updates.pop("interval_minutes", None),
+            interval_hours=updates.pop("interval_hours", None),
+        )
+        updates["interval_minutes"] = minutes
+        updates["interval_hours"] = max(1, (minutes + 59) // 60)
 
     updates["updated_at"] = utc_now()
     set_clause = ", ".join(f"{key} = %s" for key in updates)
@@ -927,41 +1085,102 @@ def delete_scheduled_job(user_id: int, job_id: int) -> bool:
         return cursor.rowcount > 0
 
 
-def list_due_scheduled_jobs() -> list[dict]:
+def list_due_scheduled_jobs(*, stale_running_minutes: int = 180) -> list[dict]:
     now = utc_now()
+    stale_before = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=stale_running_minutes)
+    ).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM scheduled_jobs
-            WHERE enabled = TRUE AND (next_run_at IS NULL OR next_run_at <= %s)
-            ORDER BY next_run_at ASC, id ASC
+            WHERE enabled = TRUE
+              AND (next_run_at IS NULL OR next_run_at <= %s)
+              AND (running_at IS NULL OR running_at <= %s)
+            ORDER BY next_run_at ASC NULLS FIRST, id ASC
             """,
-            (now,),
+            (now, stale_before),
         ).fetchall()
     jobs = []
     for row in rows:
-        item = dict(row)
-        item["auto_import"] = bool(item["auto_import"])
-        item["enabled"] = bool(item["enabled"])
-        jobs.append(item)
+        job = _scheduled_job_from_row(dict(row))
+        if job:
+            jobs.append(job)
     return jobs
 
 
-def mark_job_run(job_id: int, *, status: str, message: str, interval_hours: int) -> None:
+def claim_scheduled_job(job_id: int) -> bool:
+    now = utc_now()
+    stale_before = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=3)
+    ).isoformat()
+    with get_conn() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE scheduled_jobs
+            SET running_at = %s, updated_at = %s
+            WHERE id = %s
+              AND enabled = TRUE
+              AND (running_at IS NULL OR running_at <= %s)
+            """,
+            (now, now, job_id, stale_before),
+        )
+        return cursor.rowcount > 0
+
+
+def mark_job_run(
+    job_id: int,
+    *,
+    status: str,
+    message: str,
+    interval_minutes: int,
+    run_mode: str = "interval",
+    cooldown_minutes: int = 15,
+) -> None:
     now_dt = datetime.now(timezone.utc).replace(microsecond=0)
-    next_run = (now_dt + timedelta(hours=interval_hours)).isoformat()
+    mode = "continuous" if str(run_mode).strip().lower() == "continuous" else "interval"
+    if mode == "continuous":
+        delay_minutes = max(5, min(int(cooldown_minutes or 15), 1440))
+    else:
+        delay_minutes = max(15, min(int(interval_minutes or 1440), 10080))
+    next_run = (now_dt + timedelta(minutes=delay_minutes)).isoformat()
     now = now_dt.isoformat()
     with get_conn() as conn:
         conn.execute(
             """
             UPDATE scheduled_jobs
-            SET last_run_at = %s, last_run_status = %s, last_run_message = %s,
-                next_run_at = %s, updated_at = %s
+            SET last_run_at = %s,
+                last_run_status = %s,
+                last_run_message = %s,
+                next_run_at = %s,
+                running_at = NULL,
+                updated_at = %s
             WHERE id = %s
             """,
             (now, status, message[:500], next_run, now, job_id),
         )
+
+
+def clear_job_running(job_id: int) -> None:
+    now = utc_now()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE scheduled_jobs SET running_at = NULL, updated_at = %s WHERE id = %s",
+            (now, job_id),
+        )
+
+
+def count_active_scheduled_jobs() -> dict[str, int]:
+    with get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) AS count FROM scheduled_jobs").fetchone()["count"]
+        enabled = conn.execute(
+            "SELECT COUNT(*) AS count FROM scheduled_jobs WHERE enabled = TRUE"
+        ).fetchone()["count"]
+        running = conn.execute(
+            "SELECT COUNT(*) AS count FROM scheduled_jobs WHERE running_at IS NOT NULL"
+        ).fetchone()["count"]
+    return {"total": int(total), "enabled": int(enabled), "running": int(running)}
 
 
 def insert_job_run(
@@ -1141,6 +1360,9 @@ def contacts_to_csv(contacts: list[dict]) -> str:
         "roles",
         "asn",
         "source",
+        "linkedin",
+        "x",
+        "facebook",
         "follow_up_status",
         "email_sent",
         "notes",
@@ -1155,6 +1377,9 @@ def contacts_to_csv(contacts: list[dict]) -> str:
             contact.get("roles") or "",
             str(contact.get("asn") or ""),
             contact.get("source") or "",
+            contact.get("linkedin") or "",
+            contact.get("x") or "",
+            contact.get("facebook") or "",
             contact.get("follow_up_status") or "new",
             "1" if contact.get("email_sent") else "0",
             contact.get("notes") or "",

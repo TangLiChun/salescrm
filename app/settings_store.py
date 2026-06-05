@@ -15,6 +15,7 @@ SECRET_KEYS = {
     "session_secret",
     "default_admin_password",
     "agent_api_token",
+    "shodan_api_key",
 }
 
 DEFAULTS: dict[str, str] = {
@@ -23,16 +24,24 @@ DEFAULTS: dict[str, str] = {
     "session_secret": "",
     "session_https_only": "0",
     "llm_api_key": "",
-    "llm_base_url": "https://api.openai.com/v1",
-    "llm_model": "gpt-4o-mini",
+    "llm_base_url": "",
+    "llm_model": "",
     "tavily_api_key": "",
     "serpapi_key": "",
     "brave_search_key": "",
     "brightdata_api_key": "",
     "brightdata_serp_zone": "",
     "brightdata_serp_data_format": "auto",
+    "brightdata_linkedin_dataset_id": "",
+    "brightdata_linkedin_enabled": "0",
+    "brightdata_x_dataset_id": "",
+    "brightdata_x_enabled": "0",
+    "brightdata_facebook_dataset_id": "",
+    "brightdata_facebook_enabled": "0",
     "zhipu_api_key": "",
     "zhipu_search_engine": "search_pro",
+    "shodan_api_key": "",
+    "shodan_enabled": "0",
     "scheduler_enabled": "1",
     "scheduler_poll_seconds": "60",
     "import_blocklist": "",
@@ -159,7 +168,26 @@ def get_public_settings() -> dict[str, Any]:
                 values.get("brightdata_api_key", "").strip()
                 and values.get("brightdata_serp_zone", "").strip()
             ),
+            "brightdata_linkedin": bool(
+                values.get("brightdata_api_key", "").strip()
+                and values.get("brightdata_linkedin_enabled", "0") != "0"
+                and values.get("brightdata_linkedin_dataset_id", "").strip()
+            ),
+            "brightdata_x": bool(
+                values.get("brightdata_api_key", "").strip()
+                and values.get("brightdata_x_enabled", "0") != "0"
+                and values.get("brightdata_x_dataset_id", "").strip()
+            ),
+            "brightdata_facebook": bool(
+                values.get("brightdata_api_key", "").strip()
+                and values.get("brightdata_facebook_enabled", "0") != "0"
+                and values.get("brightdata_facebook_dataset_id", "").strip()
+            ),
             "duckduckgo": True,
+            "shodan": bool(
+                values.get("shodan_api_key", "").strip()
+                and values.get("shodan_enabled", "1") != "0"
+            ),
         },
     }
 

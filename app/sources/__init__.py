@@ -1,15 +1,15 @@
-"""Multi-channel search source registry."""
+"""Multi-channel search and enrichment sources."""
 
-from app.sources import peeringdb, web_search
+from app.sources import linkedin, peeringdb, shodan, web_search
+from app.sources.channel_registry import get_channel_config, list_channels
+from app.sources import social_registry
 
-__all__ = ["peeringdb", "web_search"]
-
-
-def list_channels() -> dict:
-    web_backends = web_search.available_backends()
-    return {
-        "web_search": web_backends,
-        "peeringdb": True,
-        "arin_rdap": True,
-        "llm_extract": True,
-    }
+__all__ = [
+    "get_channel_config",
+    "linkedin",
+    "list_channels",
+    "peeringdb",
+    "shodan",
+    "social_registry",
+    "web_search",
+]

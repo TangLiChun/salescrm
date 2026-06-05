@@ -4,32 +4,44 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>登录 · Sales CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="auth-body">
-  <div class="auth-card">
-    <div class="auth-lang-row">
-      <div id="lang-switch" class="lang-switch" role="group" aria-label="Language">
-        <button type="button" class="lang-switch-btn active" data-lang="zh">中文</button>
-        <button type="button" class="lang-switch-btn" data-lang="en">EN</button>
+  <div class="auth-shell">
+    <div class="auth-card">
+      <div class="auth-lang-row">
+        <div id="lang-switch" class="lang-switch" role="group" aria-label="Language">
+          <button type="button" class="lang-switch-btn active" data-lang="zh">中文</button>
+          <button type="button" class="lang-switch-btn" data-lang="en">EN</button>
+        </div>
       </div>
-    </div>
-    <p class="eyebrow">Sales CRM</p>
-    <h1 data-i18n="login.title">登录</h1>
-    <p class="subtitle" data-i18n="login.subtitle">登录后可查询 ASN 并将 role 邮箱导入联系人列表</p>
 
-    <form id="login-form" class="login-form">
-      <label class="field">
-        <span data-i18n="login.username">用户名</span>
-        <input id="username" name="username" type="text" autocomplete="username" required>
-      </label>
-      <label class="field">
-        <span data-i18n="login.password">密码</span>
-        <input id="password" name="password" type="password" autocomplete="current-password" required>
-      </label>
-      <button type="submit" data-i18n="login.submit">登录</button>
-      <p id="login-error" class="form-error hidden"></p>
-    </form>
+      <div class="auth-brand">
+        <div class="app-brand-mark auth-brand-mark" aria-hidden="true"></div>
+        <div>
+          <p class="eyebrow">Sales CRM</p>
+          <h1 data-i18n="login.title">登录</h1>
+        </div>
+      </div>
+      <p class="subtitle auth-subtitle" data-i18n="login.subtitle">登录后可查询 ASN 并将 role 邮箱导入联系人列表</p>
+
+      <form id="login-form" class="login-form">
+        <label class="field">
+          <span data-i18n="login.username">用户名</span>
+          <input id="username" name="username" type="text" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span data-i18n="login.password">密码</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" data-i18n="login.submit">登录</button>
+        <p id="login-error" class="form-error hidden"></p>
+      </form>
+    </div>
+    <p class="auth-footnote">ASN · RDAP · AI Leads · Pi Agent</p>
   </div>
 
   <script src="/static/i18n.js"></script>

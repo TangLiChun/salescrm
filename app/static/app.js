@@ -40,6 +40,9 @@ const chartRecentEl = document.getElementById("chart-recent");
 const refreshStatsBtn = document.getElementById("refresh-stats-btn");
 const contactsBody = document.getElementById("contacts-body");
 const contactsStatsEl = document.getElementById("contacts-stats");
+const contactsMetricTotalEl = document.getElementById("contacts-metric-total");
+const contactsMetricSentEl = document.getElementById("contacts-metric-sent");
+const contactsMetricUnsentEl = document.getElementById("contacts-metric-unsent");
 const contactStatusFilter = document.getElementById("contact-status-filter");
 const contactFollowUpFilter = document.getElementById("contact-follow-up-filter");
 const contactSearchInput = document.getElementById("contact-search");
@@ -65,6 +68,9 @@ const contactEditOrg = document.getElementById("contact-edit-org");
 const contactEditName = document.getElementById("contact-edit-name");
 const contactEditRoles = document.getElementById("contact-edit-roles");
 const contactEditNotes = document.getElementById("contact-edit-notes");
+const contactEditLinkedin = document.getElementById("contact-edit-linkedin");
+const contactEditX = document.getElementById("contact-edit-x");
+const contactEditFacebook = document.getElementById("contact-edit-facebook");
 const downloadBackupBtn = document.getElementById("download-backup-btn");
 const contactNotesModal = document.getElementById("contact-notes-modal");
 const contactNotesTitle = document.getElementById("contact-notes-title");
@@ -77,7 +83,14 @@ const schedulesStatsEl = document.getElementById("schedules-stats");
 const scheduleForm = document.getElementById("schedule-form");
 const scheduleNameInput = document.getElementById("schedule-name");
 const scheduleQueryInput = document.getElementById("schedule-query");
-const scheduleIntervalInput = document.getElementById("schedule-interval");
+const scheduleIntervalPreset = document.getElementById("schedule-interval-preset");
+const scheduleIntervalMinutesInput = document.getElementById("schedule-interval-minutes");
+const scheduleIntervalWrap = document.getElementById("schedule-interval-wrap");
+const scheduleIntervalCustomWrap = document.getElementById("schedule-interval-custom-wrap");
+const scheduleRunModeInput = document.getElementById("schedule-run-mode");
+const scheduleCooldownInput = document.getElementById("schedule-cooldown-minutes");
+const scheduleCooldownWrap = document.getElementById("schedule-cooldown-wrap");
+const schedulerStatusEl = document.getElementById("scheduler-status");
 const scheduleMinScoreInput = document.getElementById("schedule-min-score");
 const scheduleAutoImportInput = document.getElementById("schedule-auto-import");
 const refreshSchedulesBtn = document.getElementById("refresh-schedules-btn");
@@ -135,11 +148,17 @@ let notesContactId = null;
 const FOLLOW_UP_STATUS_KEYS = ["new", "contacted", "replied", "invalid", "interested"];
 let schedules = [];
 let scheduleRuns = {};
+let schedulerStatus = null;
+let schedulesRefreshTimer = null;
 let aiLeads = [];
 const CHANNEL_DEFS = [
   { key: "peeringdb", nameKey: "channel.peeringdb" },
+  { key: "shodan", nameKey: "channel.shodan" },
   { key: "web_search", nameKey: "channel.webSearch" },
   { key: "web_regex", nameKey: "channel.webRegex" },
+  { key: "linkedin", nameKey: "channel.linkedin" },
+  { key: "x", nameKey: "channel.x" },
+  { key: "facebook", nameKey: "channel.facebook" },
   { key: "llm_extract", nameKey: "channel.llmExtract" },
   { key: "arin", nameKey: "channel.arin" },
   { key: "scoring", nameKey: "channel.scoring" },
@@ -151,7 +170,7 @@ let llmConfigured = false;
 let currentUserId = null;
 const PI_CHAT_STORAGE_VERSION = "v1";
 const PI_THREADS_STORAGE_VERSION = "v2";
-const PI_CHAT_MAX_STORED = 200;
+const PI_CHAT_MAX_STORED = 800;
 const PI_THREADS_MAX = 30;
 let piThreads = [];
 let activePiThreadId = null;
@@ -159,6 +178,17 @@ let piChatHistory = [];
 let piChatController = null;
 let piChatBusy = false;
 const PI_LEAD_STREAM_TOOLS = new Set(["discover_leads", "enrich_contact"]);
+const PI_CHANNEL_ICON = { idle: "·", active: "◐", done: "✓", failed: "×" };
+const PI_SOURCE_CHANNEL_MAP = {
+  peeringdb: "peeringdb",
+  shodan: "shodan",
+  web_search: "web_search",
+  web_regex: "web_regex",
+  llm_extract: "llm_extract",
+  linkedin: "linkedin",
+  x: "x",
+  facebook: "facebook",
+};
 let emailTemplates = [];
 let editingTemplateId = null;
 let contactSearchTimer = null;
@@ -349,6 +379,21 @@ function positionContactActionMenu(toggle, panel) {
   panel.style.visibility = "";
 }
 
+function socialLinksHtml(contact) {
+  const links = [];
+  if (contact.linkedin) {
+    links.push(`<a class="social-link" href="${escapeHtml(contact.linkedin)}" target="_blank" rel="noopener" title="LinkedIn">in</a>`);
+  }
+  if (contact.x) {
+    links.push(`<a class="social-link" href="${escapeHtml(contact.x)}" target="_blank" rel="noopener" title="X">X</a>`);
+  }
+  if (contact.facebook) {
+    links.push(`<a class="social-link" href="${escapeHtml(contact.facebook)}" target="_blank" rel="noopener" title="Facebook">fb</a>`);
+  }
+  if (!links.length) return "";
+  return `<span class="contact-social-links">${links.join("")}</span>`;
+}
+
 function contactActionsHtml(contact) {
   const id = contact.id;
   const status = escapeHtml(contact.follow_up_status || "new");
@@ -379,6 +424,12 @@ function contactActionsHtml(contact) {
   `;
 }
 
+function updateContactsMetrics(total, sentOnPage, unsentOnPage) {
+  if (contactsMetricTotalEl) contactsMetricTotalEl.textContent = String(total ?? 0);
+  if (contactsMetricSentEl) contactsMetricSentEl.textContent = String(sentOnPage ?? 0);
+  if (contactsMetricUnsentEl) contactsMetricUnsentEl.textContent = String(unsentOnPage ?? 0);
+}
+
 function renderContacts() {
   contactsBody.innerHTML = "";
   updateContactsBulkBar();
@@ -391,6 +442,7 @@ function renderContacts() {
     contactsStatsEl.textContent = contactsTotal
       ? t("msg.contactsStatsEmptyPage", { total: contactsTotal })
       : t("msg.contactsEmpty");
+    updateContactsMetrics(contactsTotal, 0, 0);
     renderContactsPagination();
     return;
   }
@@ -416,7 +468,7 @@ function renderContacts() {
       <td class="col-select"><input type="checkbox" class="contact-select" data-id="${contact.id}" ${checked}></td>
       <td>${statusBadge}</td>
       <td class="col-org">${escapeHtml(contact.org || "—")}</td>
-      <td class="col-name">${escapeHtml(contact.name || "—")}</td>
+      <td class="col-name">${escapeHtml(contact.name || "—")}${socialLinksHtml(contact)}</td>
       <td class="col-email"><a class="email-link" href="mailto:${contact.email}">${escapeHtml(contact.email)}</a></td>
       <td class="col-role">${roles || "—"}</td>
       <td class="col-asn mono">${contact.asn ? `AS${contact.asn}` : "—"}</td>
@@ -435,6 +487,7 @@ function renderContacts() {
     page: contactsPage,
     pages: contactsPages,
   });
+  updateContactsMetrics(contactsTotal, sentCount, contacts.length - sentCount);
   renderContactsPagination();
   syncContactsSelectAllCheckbox();
 }
@@ -639,7 +692,7 @@ function formatImportResult(result) {
 function normalizeImportRow(row) {
   if (!row || typeof row !== "object") return row;
   const roles = row.roles;
-  return {
+  const normalized = {
     asn: row.asn ?? null,
     org: String(row.org || row.organization || row.company || row.network_name || "").trim(),
     name: String(row.name || row.contact_name || row.contact || row.fn || "").trim(),
@@ -649,7 +702,19 @@ function normalizeImportRow(row) {
     rir: row.rir || "",
     source: row.source || "",
     notes: row.notes || "",
+    linkedin: String(row.linkedin || row.linkedin_url || "").trim(),
+    x: String(row.x || row.x_url || row.twitter || row.twitter_url || "").trim(),
+    facebook: String(row.facebook || row.facebook_url || "").trim(),
+    profile_url: String(row.profile_url || "").trim(),
   };
+  const source = String(row.source || "").toLowerCase();
+  const profileUrl = normalized.profile_url;
+  if (profileUrl) {
+    if (source === "linkedin" && !normalized.linkedin) normalized.linkedin = profileUrl;
+    if (source === "x" && !normalized.x) normalized.x = profileUrl;
+    if (source === "facebook" && !normalized.facebook) normalized.facebook = profileUrl;
+  }
+  return normalized;
 }
 
 function normalizeImportRows(rows) {
@@ -765,6 +830,9 @@ function openContactEdit(contactId) {
   contactEditName.value = contact.name || "";
   contactEditRoles.value = contact.roles || "";
   contactEditNotes.value = contact.notes || "";
+  contactEditLinkedin.value = contact.linkedin || "";
+  contactEditX.value = contact.x || "";
+  contactEditFacebook.value = contact.facebook || "";
   contactEditModal.classList.remove("hidden");
 }
 
@@ -783,6 +851,9 @@ async function saveContactEdit(event) {
       name: contactEditName.value,
       roles: contactEditRoles.value,
       notes: contactEditNotes.value,
+      linkedin: contactEditLinkedin.value,
+      x: contactEditX.value,
+      facebook: contactEditFacebook.value,
     }),
   });
   closeContactEdit();
@@ -1000,6 +1071,61 @@ async function deleteEmailTemplate(templateId) {
   }
   await loadEmailTemplates();
 }
+function formatScheduleInterval(job) {
+  if ((job.run_mode || "interval") === "continuous") {
+    return t("msg.scheduleContinuous", { minutes: job.cooldown_minutes || 15 });
+  }
+  const minutes = job.interval_minutes || (job.interval_hours || 24) * 60;
+  if (minutes % 1440 === 0) {
+    return t("msg.scheduleDays", { days: minutes / 1440 });
+  }
+  if (minutes % 60 === 0) {
+    return t("msg.scheduleHoursOnly", { hours: minutes / 60 });
+  }
+  return t("msg.scheduleMinutesOnly", { minutes });
+}
+
+function updateScheduleFormMode() {
+  const continuous = scheduleRunModeInput?.value === "continuous";
+  scheduleIntervalWrap?.classList.toggle("hidden", continuous);
+  scheduleIntervalCustomWrap?.classList.toggle("hidden", continuous || scheduleIntervalPreset?.value !== "custom");
+  scheduleCooldownWrap?.classList.toggle("hidden", !continuous);
+}
+
+function getScheduleIntervalMinutes() {
+  if (scheduleIntervalPreset?.value === "custom") {
+    return Number(scheduleIntervalMinutesInput?.value) || 1440;
+  }
+  return Number(scheduleIntervalPreset?.value) || 1440;
+}
+
+function renderSchedulerStatus() {
+  if (!schedulerStatusEl) return;
+  if (!schedulerStatus) {
+    schedulerStatusEl.textContent = "";
+    return;
+  }
+  if (!schedulerStatus.enabled) {
+    schedulerStatusEl.textContent = t("msg.schedulerDisabledHint");
+    schedulerStatusEl.className = "stats scheduler-status warn";
+    return;
+  }
+  if (!schedulerStatus.llm_configured) {
+    schedulerStatusEl.textContent = t("msg.schedulerLlmMissing");
+    schedulerStatusEl.className = "stats scheduler-status warn";
+    return;
+  }
+  const running = schedulerStatus.active_jobs > 0
+    ? t("msg.schedulerRunningJobs", { count: schedulerStatus.active_jobs })
+    : t("msg.schedulerIdle");
+  schedulerStatusEl.textContent = t("msg.schedulerStatusLine", {
+    poll: schedulerStatus.poll_seconds,
+    enabled: schedulerStatus.enabled_jobs,
+    running,
+  });
+  schedulerStatusEl.className = "stats scheduler-status ok";
+}
+
 function formatJobRunLine(run) {
   const statusLabel = run.status === "ok" ? t("msg.scheduleRunOk") : t("msg.scheduleRunFail");
   const detail =
@@ -1025,10 +1151,13 @@ function renderSchedules() {
     const enabledBadge = job.enabled
       ? `<span class="status-badge sent">${t("msg.scheduleEnabled")}</span>`
       : `<span class="status-badge unsent">${t("msg.scheduleDisabled")}</span>`;
+    const runningBadge = job.running_at
+      ? `<span class="status-badge contacted">${t("msg.scheduleRunning")}</span>`
+      : "";
     tr.innerHTML = `
       <td>${escapeHtml(job.name)}</td>
-      <td class="mono">${t("msg.scheduleHours", { hours: job.interval_hours })}</td>
-      <td>${enabledBadge}</td>
+      <td class="mono">${escapeHtml(formatScheduleInterval(job))}</td>
+      <td>${enabledBadge}${runningBadge}</td>
       <td class="mono">${escapeHtml(formatTime(job.last_run_at))}</td>
       <td class="mono">${escapeHtml(formatTime(job.next_run_at))}</td>
       <td>${escapeHtml(job.last_run_message || job.last_run_status || "—")}</td>
@@ -1054,24 +1183,43 @@ function renderSchedules() {
 async function loadSchedules() {
   const data = await api("/api/schedules");
   schedules = data.schedules || [];
+  schedulerStatus = data.scheduler || null;
   scheduleRuns = {};
   await Promise.all(
     schedules.map(async (job) => {
       const runData = await api(`/api/schedules/${job.id}/runs?limit=5`);
       scheduleRuns[job.id] = runData.runs || [];
-    })
+    }),
   );
   renderSchedules();
+  renderSchedulerStatus();
+}
+
+function startSchedulesAutoRefresh() {
+  stopSchedulesAutoRefresh();
+  schedulesRefreshTimer = window.setInterval(() => {
+    loadSchedules().catch(() => {});
+  }, 30000);
+}
+
+function stopSchedulesAutoRefresh() {
+  if (schedulesRefreshTimer) {
+    window.clearInterval(schedulesRefreshTimer);
+    schedulesRefreshTimer = null;
+  }
 }
 
 async function createSchedule(event) {
   event.preventDefault();
+  const runMode = scheduleRunModeInput?.value || "continuous";
   await api("/api/schedules", {
     method: "POST",
     body: JSON.stringify({
       name: scheduleNameInput.value.trim(),
       query: scheduleQueryInput.value.trim(),
-      interval_hours: Number(scheduleIntervalInput.value) || 24,
+      run_mode: runMode,
+      interval_minutes: getScheduleIntervalMinutes(),
+      cooldown_minutes: Number(scheduleCooldownInput?.value) || 15,
       min_score: Number(scheduleMinScoreInput.value) || 60,
       auto_import: scheduleAutoImportInput.checked,
       enabled: true,
@@ -1079,8 +1227,11 @@ async function createSchedule(event) {
   });
   scheduleForm.reset();
   scheduleAutoImportInput.checked = true;
-  scheduleIntervalInput.value = "24";
   scheduleMinScoreInput.value = "60";
+  if (scheduleRunModeInput) scheduleRunModeInput.value = "continuous";
+  if (scheduleIntervalPreset) scheduleIntervalPreset.value = "1440";
+  if (scheduleCooldownInput) scheduleCooldownInput.value = "15";
+  updateScheduleFormMode();
   await loadSchedules();
 }
 
@@ -1172,6 +1323,16 @@ async function loadSettingsForm() {
   setInputValue("setting-zhipu-search-engine", data.zhipu_search_engine || "search_pro");
   setInputValue("setting-brightdata-serp-zone", data.brightdata_serp_zone || "");
   setInputValue("setting-brightdata-serp-format", data.brightdata_serp_data_format || "auto");
+  setInputValue("setting-brightdata-linkedin-dataset", data.brightdata_linkedin_dataset_id || "");
+  document.getElementById("setting-brightdata-linkedin-enabled").checked =
+    (data.brightdata_linkedin_enabled || "0") === "1";
+  setInputValue("setting-brightdata-x-dataset", data.brightdata_x_dataset_id || "");
+  document.getElementById("setting-brightdata-x-enabled").checked =
+    (data.brightdata_x_enabled || "0") === "1";
+  setInputValue("setting-brightdata-facebook-dataset", data.brightdata_facebook_dataset_id || "");
+  document.getElementById("setting-brightdata-facebook-enabled").checked =
+    (data.brightdata_facebook_enabled || "0") === "1";
+  document.getElementById("setting-shodan-enabled").checked = (data.shodan_enabled || "0") === "1";
   setInputValue("setting-scheduler-poll-seconds", data.scheduler_poll_seconds);
   document.getElementById("setting-scheduler-enabled").checked = data.scheduler_enabled === "1";
 
@@ -1192,6 +1353,7 @@ async function loadSettingsForm() {
     ["setting-serpapi-key", data.serpapi_key, data.serpapi_key_configured],
     ["setting-brave-search-key", data.brave_search_key, data.brave_search_key_configured],
     ["setting-zhipu-api-key", data.zhipu_api_key, data.zhipu_api_key_configured],
+    ["setting-shodan-api-key", data.shodan_api_key, data.shodan_api_key_configured],
   ];
   for (const [id, masked, configured] of secretFields) {
     const el = document.getElementById(id);
@@ -1211,6 +1373,15 @@ async function saveSettings(event) {
     zhipu_search_engine: document.getElementById("setting-zhipu-search-engine").value.trim(),
     brightdata_serp_zone: document.getElementById("setting-brightdata-serp-zone").value.trim(),
     brightdata_serp_data_format: document.getElementById("setting-brightdata-serp-format").value.trim(),
+    brightdata_linkedin_dataset_id: document.getElementById("setting-brightdata-linkedin-dataset").value.trim(),
+    brightdata_linkedin_enabled: document.getElementById("setting-brightdata-linkedin-enabled").checked
+      ? "1"
+      : "0",
+    brightdata_x_dataset_id: document.getElementById("setting-brightdata-x-dataset").value.trim(),
+    brightdata_x_enabled: document.getElementById("setting-brightdata-x-enabled").checked ? "1" : "0",
+    brightdata_facebook_dataset_id: document.getElementById("setting-brightdata-facebook-dataset").value.trim(),
+    brightdata_facebook_enabled: document.getElementById("setting-brightdata-facebook-enabled").checked ? "1" : "0",
+    shodan_enabled: document.getElementById("setting-shodan-enabled").checked ? "1" : "0",
     scheduler_enabled: document.getElementById("setting-scheduler-enabled").checked ? "1" : "0",
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
   };
@@ -1224,6 +1395,7 @@ async function saveSettings(event) {
     ["serpapi_key", "setting-serpapi-key"],
     ["brave_search_key", "setting-brave-search-key"],
     ["zhipu_api_key", "setting-zhipu-api-key"],
+    ["shodan_api_key", "setting-shodan-api-key"],
   ];
   for (const [key, id] of secrets) {
     const value = document.getElementById(id).value.trim();
@@ -1541,6 +1713,7 @@ function mapServerPiThreadSummary(row) {
     id: row.id,
     title: row.title || "",
     history: [],
+    has_context_summary: Boolean(row.has_context_summary || (row.context_summary || "").trim()),
     createdAt: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
     updatedAt: row.updated_at ? Date.parse(row.updated_at) || Date.now() : Date.now(),
   };
@@ -1551,9 +1724,24 @@ function mapServerPiThreadFull(row) {
     id: row.id,
     title: row.title || "",
     history: normalizeHistoryItems(row.history),
+    has_context_summary: Boolean(row.has_context_summary || (row.context_summary || "").trim()),
     createdAt: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
     updatedAt: row.updated_at ? Date.parse(row.updated_at) || Date.now() : Date.now(),
   };
+}
+
+async function refreshActivePiThreadMeta() {
+  if (!activePiThreadId) return;
+  try {
+    const thread = await api(`/api/pi/threads/${encodeURIComponent(activePiThreadId)}`);
+    const index = piThreads.findIndex((item) => item.id === activePiThreadId);
+    if (index >= 0) {
+      piThreads[index].has_context_summary = Boolean((thread.context_summary || "").trim());
+    }
+    updatePiChatHistoryHint();
+  } catch {
+    // ignore metadata refresh failures
+  }
 }
 
 async function fetchActivePiThreadHistory() {
@@ -1795,6 +1983,8 @@ function restorePiChatToolEntry(item) {
     el = appendPiChatTool(name);
   }
   el.querySelector(".pi-chat-tool-head")?.classList.add("done");
+  el.querySelector(".pi-chat-live-panel")?.classList.add("hidden");
+  stopPiDiscoverTimer(el);
   const summary = item.summary || "";
   const progressEl = el.querySelector(".pi-chat-tool-progress");
   const pre = el.querySelector(".pi-chat-tool-result");
@@ -1843,6 +2033,10 @@ function updatePiChatHistoryHint() {
     return;
   }
   piChatHistoryHintEl.textContent = t("msg.piHistorySavedThreads", { count, threads: threadCount });
+  const active = piThreads.find((item) => item.id === activePiThreadId);
+  if (active?.has_context_summary) {
+    piChatHistoryHintEl.textContent += ` · ${t("msg.piContextCompressed")}`;
+  }
 }
 
 function buildPiLeadMessage() {
@@ -1977,6 +2171,18 @@ function formatPiToolSummary(name, result) {
   if (name === "web_search") {
     return `${result.backend_used || "search"} · ${result.result_count ?? 0} 条结果 · 邮箱 ${result.emails_found?.length ?? 0} · ASN ${result.asns_found?.length ?? 0}`;
   }
+  if (name === "collect_linkedin_profiles") {
+    return `LinkedIn · ${result.profile_count ?? 0} 个 profile`;
+  }
+  if (name === "collect_x_profiles") {
+    return `X · ${result.profile_count ?? 0} 个 profile`;
+  }
+  if (name === "collect_facebook_profiles") {
+    return `Facebook · ${result.profile_count ?? 0} 个 profile`;
+  }
+  if (name === "shodan_search") {
+    return `Shodan · ${result.match_count ?? 0} 条 · ${result.networks?.length ?? 0} 个 ASN`;
+  }
   return "";
 }
 
@@ -2063,9 +2269,247 @@ async function importPiChatLookup(toolEl) {
   }
 }
 
+function scrollPiChatToBottom() {
+  if (!piChatMessagesEl) return;
+  piChatMessagesEl.scrollTo({ top: piChatMessagesEl.scrollHeight, behavior: "smooth" });
+}
+
+function stopPiDiscoverTimer(toolEl) {
+  if (toolEl?._piDiscoverTimer) {
+    clearInterval(toolEl._piDiscoverTimer);
+    toolEl._piDiscoverTimer = null;
+  }
+}
+
+function startPiDiscoverTimer(toolEl) {
+  stopPiDiscoverTimer(toolEl);
+  if (!toolEl) return;
+  toolEl._piDiscoverTimer = setInterval(() => {
+    const elapsedEl = toolEl.querySelector(".pi-chat-live-elapsed");
+    if (!elapsedEl || !toolEl._piDiscoverStartedAt) return;
+    const sec = Math.floor((Date.now() - toolEl._piDiscoverStartedAt) / 1000);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    elapsedEl.textContent = `${m}:${String(s).padStart(2, "0")}`;
+  }, 1000);
+}
+
+function initPiDiscoverChannelState(toolEl) {
+  toolEl._piChannelState = {};
+  for (const def of CHANNEL_DEFS) {
+    toolEl._piChannelState[def.key] = { state: "idle", count: "", preview: "" };
+  }
+  toolEl._piDiscoverStartedAt = Date.now();
+  toolEl._piLeadCount = 0;
+}
+
+function renderPiDiscoverLivePanel(toolEl) {
+  const channelsEl = toolEl?.querySelector(".pi-chat-live-channels");
+  if (!channelsEl || !toolEl._piChannelState) return;
+  channelsEl.innerHTML = CHANNEL_DEFS.map((def) => {
+    const s = toolEl._piChannelState[def.key] || { state: "idle", count: "", preview: "" };
+    return `
+      <div class="pi-channel-row state-${s.state}">
+        <span class="pi-channel-icon">${PI_CHANNEL_ICON[s.state] || "·"}</span>
+        <span class="pi-channel-name">${escapeHtml(t(def.nameKey))}</span>
+        <span class="pi-channel-count">${escapeHtml(String(s.count ?? ""))}</span>
+        <span class="pi-channel-preview" title="${escapeHtml(s.preview || "")}">${escapeHtml(s.preview || "")}</span>
+      </div>`;
+  }).join("");
+  const leadsEl = toolEl.querySelector(".pi-chat-live-leads");
+  if (leadsEl) {
+    leadsEl.textContent = t("pi.liveLeadCount", { count: toolEl._piLeadCount || 0 });
+  }
+  scrollPiChatToBottom();
+}
+
+function setPiDiscoverChannel(toolEl, key, patch) {
+  if (!toolEl?._piChannelState?.[key]) return;
+  Object.assign(toolEl._piChannelState[key], patch);
+  renderPiDiscoverLivePanel(toolEl);
+}
+
+function pushPiDiscoverTicker(toolEl, message) {
+  if (!toolEl || !message) return;
+  const ticker = toolEl.querySelector(".pi-chat-live-ticker");
+  if (!ticker) return;
+  const li = document.createElement("li");
+  li.className = "pi-chat-ticker-line";
+  li.textContent = message;
+  ticker.prepend(li);
+  while (ticker.children.length > 10) {
+    ticker.lastElementChild?.remove();
+  }
+  scrollPiChatToBottom();
+}
+
+function updatePiDiscoverRdapBar(toolEl, index, total, network) {
+  const wrap = toolEl?.querySelector(".pi-chat-rdap-wrap");
+  const fill = toolEl?.querySelector(".pi-chat-rdap-fill");
+  const text = toolEl?.querySelector(".pi-chat-rdap-text");
+  if (!wrap || !fill || !text) return;
+  wrap.classList.remove("hidden");
+  const safeTotal = Math.max(1, Number(total) || 1);
+  const safeIndex = Math.min(Math.max(1, Number(index) || 1), safeTotal);
+  const pct = Math.round((safeIndex / safeTotal) * 100);
+  fill.style.width = `${pct}%`;
+  text.textContent = t("pi.rdapProgress", {
+    index: safeIndex,
+    total: safeTotal,
+    network: network || "",
+  });
+  setPiDiscoverChannel(toolEl, "arin", {
+    state: "active",
+    count: `${safeIndex}/${safeTotal}`,
+    preview: network || "",
+  });
+  if (piChatProgressFill) {
+    piChatProgressFill.style.width = `${Math.max(35, Math.min(92, 35 + pct * 0.55))}%`;
+  }
+}
+
+function handlePiDiscoverProgress(toolEl, message) {
+  if (!toolEl || !message) return;
+  pushPiDiscoverTicker(toolEl, message);
+  if (piChatProgressText) {
+    piChatProgressText.textContent = message;
+  }
+
+  const sourceMatch = message.match(/^([\w]+):\s*(\d+)\s*条/);
+  if (sourceMatch) {
+    const channelKey = PI_SOURCE_CHANNEL_MAP[sourceMatch[1]] || sourceMatch[1];
+    if (toolEl._piChannelState?.[channelKey]) {
+      setPiDiscoverChannel(toolEl, channelKey, {
+        state: "done",
+        count: sourceMatch[2],
+        preview: message,
+      });
+    }
+    return;
+  }
+
+  if (message.includes("多渠道") || message.includes("搜索中")) {
+    for (const key of ["peeringdb", "web_search", "shodan"]) {
+      if (toolEl._piChannelState?.[key]?.state === "idle") {
+        setPiDiscoverChannel(toolEl, key, { state: "active" });
+      }
+    }
+  }
+  if (message.includes("评估")) {
+    setPiDiscoverChannel(toolEl, "scoring", { state: "active" });
+    setPiDiscoverChannel(toolEl, "arin", { state: "done" });
+  }
+  if (message.includes("抓取") || message.includes("profile")) {
+    for (const key of ["linkedin", "x", "facebook"]) {
+      if (message.toLowerCase().includes(key) || message.includes(t(`channel.${key}`))) {
+        setPiDiscoverChannel(toolEl, key, { state: "active" });
+      }
+    }
+  }
+}
+
+function finalizePiDiscoverTool(toolEl, event) {
+  if (!toolEl) return;
+  stopPiDiscoverTimer(toolEl);
+  toolEl.classList.remove("pi-chat-tool-running");
+  toolEl.querySelector(".pi-chat-tool-head")?.classList.add("done");
+  if (toolEl._piChannelState) {
+    for (const def of CHANNEL_DEFS) {
+      const state = toolEl._piChannelState[def.key];
+      if (state?.state === "active") {
+        setPiDiscoverChannel(toolEl, def.key, { state: "done" });
+      }
+    }
+  }
+  toolEl.querySelector(".pi-chat-rdap-wrap")?.classList.add("hidden");
+  if (event?.message) {
+    pushPiDiscoverTicker(toolEl, event.message);
+  }
+}
+
+function handlePiDiscoverToolEvent(toolEl, event) {
+  if (!toolEl || !event) return;
+  switch (event.kind) {
+    case "plan":
+      renderPiChatPlan(toolEl, event.plan);
+      pushPiDiscoverTicker(toolEl, event.plan?.summary || t("pi.planReady"));
+      for (const key of ["peeringdb", "web_search", "shodan"]) {
+        if (toolEl._piChannelState?.[key]?.state === "idle") {
+          setPiDiscoverChannel(toolEl, key, { state: "active" });
+        }
+      }
+      break;
+    case "source_result": {
+      const channelKey = PI_SOURCE_CHANNEL_MAP[event.source] || event.source;
+      const preview = Array.isArray(event.preview) ? event.preview.slice(0, 2).join(" · ") : "";
+      if (toolEl._piChannelState?.[channelKey]) {
+        setPiDiscoverChannel(toolEl, channelKey, {
+          state: "done",
+          count: String(event.count ?? ""),
+          preview,
+        });
+      }
+      pushPiDiscoverTicker(toolEl, `${event.source}: ${event.count ?? 0} ${t("pi.items")}`);
+      break;
+    }
+    case "progress":
+      updatePiDiscoverRdapBar(toolEl, event.index, event.total, event.network || "");
+      pushPiDiscoverTicker(toolEl, event.message || `RDAP AS${event.asn}`);
+      break;
+    case "asn_result":
+      pushPiDiscoverTicker(
+        toolEl,
+        t("pi.asnCandidates", {
+          asn: event.asn,
+          count: event.candidate_count || 0,
+        }),
+      );
+      break;
+    case "phase":
+      if (event.phase === "scoring") {
+        setPiDiscoverChannel(toolEl, "scoring", { state: "active" });
+        setPiDiscoverChannel(toolEl, "arin", { state: "done" });
+      }
+      break;
+    case "status":
+      handlePiDiscoverProgress(toolEl, event.message);
+      break;
+    case "lead":
+      appendPiChatLeadRow(toolEl, event.lead);
+      toolEl._piLeadCount = (toolEl._piLeadCount || 0) + 1;
+      renderPiDiscoverLivePanel(toolEl);
+      setPiDiscoverChannel(toolEl, "scoring", {
+        state: "active",
+        count: String(toolEl._piLeadCount),
+      });
+      break;
+    case "done":
+      finalizePiDiscoverTool(toolEl, event);
+      break;
+    default:
+      break;
+  }
+}
+
 function appendPiChatDiscoverTool(name) {
   const el = appendPiChatTool(name);
-  el.classList.add("pi-chat-tool-discover");
+  el.classList.add("pi-chat-tool-discover", "pi-chat-tool-running");
+  const livePanel = document.createElement("div");
+  livePanel.className = "pi-chat-live-panel";
+  livePanel.innerHTML = `
+    <div class="pi-chat-live-head">
+      <span class="pi-chat-live-badge">${t("pi.liveRunning")}</span>
+      <span class="pi-chat-live-elapsed">0:00</span>
+      <span class="pi-chat-live-leads">${t("pi.liveLeadCount", { count: 0 })}</span>
+    </div>
+    <div class="pi-chat-live-channels"></div>
+    <div class="pi-chat-rdap-wrap hidden">
+      <div class="pi-chat-rdap-label">${t("channel.arin")}</div>
+      <div class="pi-chat-rdap-bar"><div class="pi-chat-rdap-fill"></div></div>
+      <div class="pi-chat-rdap-text"></div>
+    </div>
+    <ul class="pi-chat-live-ticker" aria-live="polite"></ul>
+  `;
   const planEl = document.createElement("div");
   planEl.className = "pi-chat-tool-plan hidden";
   const leadsWrap = document.createElement("div");
@@ -2086,10 +2530,14 @@ function appendPiChatDiscoverTool(name) {
   const actionsEl = document.createElement("div");
   actionsEl.className = "pi-chat-leads-actions hidden";
   actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-leads">${t("pi.importSelectedLeads")}</button>`;
+  el.appendChild(livePanel);
   el.appendChild(planEl);
   el.appendChild(leadsWrap);
   el.appendChild(actionsEl);
   el._piLeads = [];
+  initPiDiscoverChannelState(el);
+  renderPiDiscoverLivePanel(el);
+  startPiDiscoverTimer(el);
   return el;
 }
 
@@ -2104,7 +2552,7 @@ function appendPiChatLeadRow(toolEl, lead) {
   toolEl._piLeads.push(lead);
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><span class="score-badge">${lead.lead_score || 0}</span></td>
+    <td><span class="${scoreBadgeClass(lead.lead_score)}">${lead.lead_score || 0}</span></td>
     <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
     <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a></td>
     <td>${escapeHtml(formatSource(lead))}</td>
@@ -2116,7 +2564,9 @@ function appendPiChatLeadRow(toolEl, lead) {
     tr.classList.toggle("selected");
   });
   body.appendChild(tr);
+  tr.classList.add("pi-lead-row-in");
   toolEl.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
+  scrollPiChatToBottom();
 }
 
 function renderPiChatPlan(toolEl, plan) {
@@ -2314,6 +2764,7 @@ function appendPiChatTool(name) {
   clearPiChatEmpty();
   const el = document.createElement("div");
   el.className = "pi-chat-tool";
+  el.dataset.toolName = name;
   el.innerHTML = `
     <div class="pi-chat-tool-head"><span class="dot"></span><span class="pi-chat-tool-name">${escapeHtml(name)}</span></div>
     <p class="pi-chat-tool-progress"></p>
@@ -2402,6 +2853,12 @@ async function sendPiChatMessage(message) {
 
         if (payload.type === "status") {
           piChatProgressText.textContent = payload.message || t("msg.piProcessingShort");
+          if (
+            activeToolEl?.classList.contains("pi-chat-tool-discover") &&
+            payload.message?.includes("仍在执行")
+          ) {
+            pushPiDiscoverTicker(activeToolEl, payload.message);
+          }
         } else if (payload.type === "tool_start") {
           activeToolEl =
             PI_LEAD_STREAM_TOOLS.has(payload.name)
@@ -2410,21 +2867,24 @@ async function sendPiChatMessage(message) {
                 ? appendPiChatLookupTool(payload.name)
                 : appendPiChatTool(payload.name || "tool");
           piChatProgressText.textContent = t("msg.piCallingTool", { name: payload.name });
-          piChatProgressFill.style.width = "35%";
+          piChatProgressFill.style.width = "12%";
+          scrollPiChatToBottom();
         } else if (payload.type === "tool_progress") {
           if (activeToolEl) {
-            activeToolEl.querySelector(".pi-chat-tool-progress").textContent = payload.message || "";
+            if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
+              handlePiDiscoverProgress(activeToolEl, payload.message || "");
+            } else {
+              activeToolEl.querySelector(".pi-chat-tool-progress").textContent = payload.message || "";
+            }
           }
-          piChatProgressText.textContent = payload.message || piChatProgressText.textContent;
-          piChatProgressFill.style.width = "65%";
+          if (!PI_LEAD_STREAM_TOOLS.has(payload.name)) {
+            piChatProgressText.textContent = payload.message || piChatProgressText.textContent;
+            piChatProgressFill.style.width = "65%";
+          }
         } else if (payload.type === "tool_event") {
           const event = payload.event || {};
           if (PI_LEAD_STREAM_TOOLS.has(payload.name) && activeToolEl) {
-            if (event.kind === "plan") {
-              renderPiChatPlan(activeToolEl, event.plan);
-            } else if (event.kind === "lead") {
-              appendPiChatLeadRow(activeToolEl, event.lead);
-            }
+            handlePiDiscoverToolEvent(activeToolEl, event);
           }
         } else if (payload.type === "tool_result") {
           const summary = formatPiToolSummary(payload.name, payload.result);
@@ -2433,10 +2893,22 @@ async function sendPiChatMessage(message) {
             name: payload.name || "tool",
             summary: summary || "",
           };
+          if (!toolEntry.summary && payload.result && typeof payload.result === "object") {
+            try {
+              toolEntry.summary = JSON.stringify(payload.result).slice(0, 8000);
+            } catch {
+              toolEntry.summary = summary || "";
+            }
+          }
           if (payload.name === "lookup_asns") {
             toolEntry.preview = (payload.result?.rows || payload.result?.preview || []).slice(0, 25);
           }
           if (activeToolEl) {
+            if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
+              finalizePiDiscoverTool(activeToolEl, {
+                message: summary || payload.result?.message,
+              });
+            }
             activeToolEl.querySelector(".pi-chat-tool-head").classList.add("done");
             const pre = activeToolEl.querySelector(".pi-chat-tool-result");
             if (PI_LEAD_STREAM_TOOLS.has(payload.name)) {
@@ -2475,7 +2947,7 @@ async function sendPiChatMessage(message) {
             } else {
               pre.classList.remove("hidden");
               pre.textContent = JSON.stringify(payload.result, null, 2);
-              toolEntry.summary = pre.textContent.slice(0, 2000);
+              toolEntry.summary = pre.textContent.slice(0, 8000);
             }
           }
           appendPiHistoryEntry(toolEntry);
@@ -2539,6 +3011,7 @@ async function sendPiChatMessage(message) {
     piChatController = null;
     setPiChatBusy(false);
     savePiThreadsStore();
+    refreshActivePiThreadMeta().catch(() => {});
   }
 }
 
@@ -2598,9 +3071,10 @@ function switchView(view) {
     pageTitle.textContent = t("page.schedules.title");
     pageSubtitle.textContent = t("page.schedules.subtitle");
     loadSchedules().catch((error) => alert(error.message));
+    startSchedulesAutoRefresh();
   } else if (view === "settings") {
     pageTitle.textContent = t("page.settings.title");
-    pageSubtitle.textContent = t("page.settings.subtitle");
+    pageSubtitle.textContent = t("settings.savedInDb");
     loadSettingsForm().catch((error) => alert(error.message));
     switchSettingsCat(activeSettingsCat);
     loadEmailTemplates().catch((error) => alert(error.message));
@@ -2613,6 +3087,9 @@ function switchView(view) {
     pageSubtitle.textContent = t("page.contacts.subtitle");
     loadContacts().catch((error) => alert(error.message));
     loadEmailTemplates().catch(() => {});
+  }
+  if (view !== "schedules") {
+    stopSchedulesAutoRefresh();
   }
 }
 
@@ -2696,7 +3173,7 @@ function renderAiLeads() {
     const roles = (lead.roles || []).map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`).join("");
     tr.innerHTML = `
       <td class="col-select"><input type="checkbox" class="row-import-check" data-kind="ai" data-index="${index}" ${lead._selected !== false ? "checked" : ""}></td>
-      <td><span class="score-badge">${lead.lead_score || 0}</span></td>
+      <td><span class="${scoreBadgeClass(lead.lead_score)}">${lead.lead_score || 0}</span></td>
       <td><span class="source-tag">${escapeHtml(formatSource(lead))}</span></td>
       <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
       <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email)}</a></td>
@@ -2724,6 +3201,13 @@ function formatSource(lead) {
   return map[source] || source;
 }
 
+function scoreBadgeClass(score) {
+  const value = Number(score) || 0;
+  if (value >= 80) return "score-badge score-high";
+  if (value >= 60) return "score-badge score-mid";
+  return "score-badge score-low";
+}
+
 function openLeadDetail(index) {
   const lead = aiLeads[index];
   if (!lead) return;
@@ -2738,7 +3222,7 @@ function openLeadDetail(index) {
     [t("leadDetail.sourceDetail"), escapeHtml(lead.source_detail || "—"), false],
     [t("leadDetail.networkName"), escapeHtml(lead.network_name || "—"), false],
     [t("leadDetail.matchedKeyword"), escapeHtml(lead.matched_keyword || "—"), true],
-    [t("leadDetail.aiScore"), `<span class="score-badge">${lead.lead_score || 0}</span>`, false],
+    [t("leadDetail.aiScore"), `<span class="${scoreBadgeClass(lead.lead_score)}">${lead.lead_score || 0}</span>`, false],
     [t("leadDetail.aiReason"), escapeHtml(lead.lead_reason || "—"), false],
   ];
   leadDetailBody.innerHTML = rows
@@ -2769,9 +3253,13 @@ function renderAiSources(channels) {
   if (!channels) return;
   aiSourcesEl.classList.remove("hidden");
   const web = (channels.web_search || []).join(", ") || "duckduckgo";
-  aiSourcesEl.innerHTML = `
-    <p><strong>已启用渠道：</strong>搜索引擎(${escapeHtml(web)}) · PeeringDB · 全球 RDAP · LLM 提取/评分</p>
-  `;
+  const socialBits = ["linkedin", "x", "facebook"]
+    .filter((key) => channels[key])
+    .map((key) => (key === "x" ? "X" : key === "linkedin" ? "LinkedIn" : "Facebook"));
+  const bits = [`搜索引擎(${escapeHtml(web)})`, "PeeringDB", "全球 RDAP", "LLM 提取/评分"];
+  if (channels.shodan) bits.splice(2, 0, "Shodan");
+  if (socialBits.length) bits.splice(3, 0, socialBits.join("/"));
+  aiSourcesEl.innerHTML = `<p><strong>已启用渠道：</strong>${bits.join(" · ")}</p>`;
 }
 
 function resetChannelPanel() {
@@ -3345,6 +3833,9 @@ refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) 
 refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
 refreshStatsBtn.addEventListener("click", () => loadStats().catch((error) => alert(error.message)));
 scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch((error) => alert(error.message)));
+scheduleRunModeInput?.addEventListener("change", updateScheduleFormMode);
+scheduleIntervalPreset?.addEventListener("change", updateScheduleFormMode);
+updateScheduleFormMode();
 settingsForm.addEventListener("submit", (event) => saveSettings(event).catch((error) => alert(error.message)));
 saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch((error) => alert(error.message)));
 emailTemplatesListEl.addEventListener("click", (event) => {

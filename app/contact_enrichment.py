@@ -7,11 +7,14 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from arin_lookup import lookup_asn
-from app.database import get_contact, import_contacts, list_contact_emails
+from app.database import get_contact, import_contacts, list_contact_emails, update_contact_social_fields
 from app.lead_discovery import _contact_candidates, _dedupe_candidates
 from app.llm import LLMError, extract_leads_from_web, score_leads
 from app.sources import peeringdb as peeringdb_source
 from app.sources import web_search
+from app.sources import brightdata_social as bs
+from app.sources.social_registry import SOCIAL_CHANNELS, extract_all_social_urls_from_web_results
+from app.social_contacts import enrich_candidates_with_social
 
 GENERIC_EMAIL_DOMAINS = frozenset(
     {
@@ -182,6 +185,44 @@ async def enrich_contact_stream(
         }
 
     signals = web_search.extract_signals_from_results(web_results)
+    social_profiles_by_channel: dict[str, list[dict[str, Any]]] = {}
+    found_social_urls = extract_all_social_urls_from_web_results(web_results)
+    for spec in SOCIAL_CHANNELS:
+        urls = found_social_urls.get(spec.key) or []
+        if not bs.is_channel_configured(spec) or not urls:
+            continue
+        yield {
+            "type": "status",
+            "message": f"{spec.label} 补充抓取 {min(len(urls), 5)} 个 profile…",
+        }
+        try:
+            profiles = await asyncio.to_thread(
+                bs.collect_profiles_by_url,
+                spec,
+                urls,
+                max_urls=5,
+            )
+            social_profiles_by_channel[spec.key] = profiles
+            for profile in profiles:
+                web_results.append(spec.to_web_result(profile))
+        except Exception as exc:
+            yield {"type": "status", "message": f"{spec.label} 抓取跳过：{exc}"}
+
+    enriched_anchor = enrich_candidates_with_social(
+        [contact],
+        web_results=web_results,
+        profiles_by_channel=social_profiles_by_channel,
+    )[0]
+    social_patch = {
+        key: enriched_anchor.get(key) or ""
+        for key in ("linkedin", "x", "facebook")
+        if enriched_anchor.get(key) and not (contact.get(key) or "")
+    }
+    if social_patch:
+        update_contact_social_fields(user_id, contact_id, **social_patch)
+        contact.update(social_patch)
+        yield {"type": "status", "message": "已补充社交 profile 链接"}
+
     for signal_asn in signals["asns"]:
         if signal_asn not in {item["asn"] for item in asn_targets}:
             asn_targets.append(
@@ -268,6 +309,11 @@ async def enrich_contact_stream(
         for row in candidates
         if row.get("email") and row["email"].lower() not in known_emails and row["email"].lower() != anchor_email
     ]
+    candidates = enrich_candidates_with_social(
+        candidates,
+        web_results=web_results,
+        profiles_by_channel=social_profiles_by_channel,
+    )
 
     if not candidates:
         yield {

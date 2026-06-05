@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
-from app.database import insert_job_run, list_due_scheduled_jobs, mark_job_run
+from app.database import (
+    claim_scheduled_job,
+    count_active_scheduled_jobs,
+    insert_job_run,
+    list_due_scheduled_jobs,
+    mark_job_run,
+)
 from app.lead_discovery import run_lead_discovery_batch
 from app.llm import llm_configured
 from app.settings_store import get_setting
@@ -11,6 +18,8 @@ from app.settings_store import get_setting
 logger = logging.getLogger(__name__)
 
 _scheduler_task: asyncio.Task | None = None
+_running_jobs: set[int] = set()
+_run_lock = asyncio.Lock()
 
 
 def scheduler_enabled() -> bool:
@@ -24,36 +33,47 @@ def scheduler_interval_seconds() -> int:
         return 60
 
 
+def get_scheduler_status() -> dict[str, Any]:
+    counts = count_active_scheduled_jobs()
+    return {
+        "enabled": scheduler_enabled(),
+        "running": _scheduler_task is not None and not _scheduler_task.done(),
+        "poll_seconds": scheduler_interval_seconds(),
+        "llm_configured": llm_configured(),
+        "active_jobs": counts["running"],
+        "enabled_jobs": counts["enabled"],
+        "total_jobs": counts["total"],
+    }
+
+
 async def run_scheduled_job(job: dict) -> dict:
-    job_id = job["id"]
-    user_id = job["user_id"]
+    job_id = int(job["id"])
+    user_id = int(job["user_id"])
+    if not claim_scheduled_job(job_id):
+        return {"ok": False, "status": "skipped", "message": "任务已在运行中"}
+
     try:
         result = await run_lead_discovery_batch(
             job["query"],
-            min_score=job["min_score"],
+            min_score=int(job["min_score"]),
             delay=0.5,
-            auto_import=job["auto_import"],
+            auto_import=bool(job["auto_import"]),
             user_id=user_id,
         )
+        schedule_kwargs = {
+            "interval_minutes": int(job.get("interval_minutes") or job.get("interval_hours", 24) * 60),
+            "run_mode": job.get("run_mode") or "interval",
+            "cooldown_minutes": int(job.get("cooldown_minutes") or 15),
+        }
         if result.get("error"):
             msg = result["error"]
-            mark_job_run(
-                job_id,
-                status="error",
-                message=msg,
-                interval_hours=job["interval_hours"],
-            )
+            mark_job_run(job_id, status="error", message=msg, **schedule_kwargs)
             insert_job_run(job_id, status="error", message=msg)
             return {"ok": False, "status": "error", "message": msg}
         leads = result.get("leads") or []
         imported = (result.get("import") or {}).get("imported", 0)
         msg = f"找到 {len(leads)} 条线索，导入 {imported} 条"
-        mark_job_run(
-            job_id,
-            status="ok",
-            message=msg,
-            interval_hours=job["interval_hours"],
-        )
+        mark_job_run(job_id, status="ok", message=msg, **schedule_kwargs)
         insert_job_run(
             job_id,
             status="ok",
@@ -75,22 +95,39 @@ async def run_scheduled_job(job: dict) -> dict:
             job_id,
             status="error",
             message=msg,
-            interval_hours=job["interval_hours"],
+            interval_minutes=int(job.get("interval_minutes") or job.get("interval_hours", 24) * 60),
+            run_mode=job.get("run_mode") or "interval",
+            cooldown_minutes=int(job.get("cooldown_minutes") or 15),
         )
         insert_job_run(job_id, status="error", message=msg)
         return {"ok": False, "status": "error", "message": msg}
+    finally:
+        _running_jobs.discard(job_id)
 
 
 async def _run_job(job: dict) -> None:
-    await run_scheduled_job(job)
+    job_id = int(job["id"])
+    async with _run_lock:
+        if job_id in _running_jobs:
+            return
+        _running_jobs.add(job_id)
+    try:
+        await run_scheduled_job(job)
+    finally:
+        _running_jobs.discard(job_id)
 
 
 async def _scheduler_loop() -> None:
+    logger.info("Lead discovery scheduler started (poll=%ss)", scheduler_interval_seconds())
     while True:
         try:
-            if llm_configured():
+            if scheduler_enabled() and llm_configured():
                 jobs = list_due_scheduled_jobs()
+                if jobs:
+                    logger.info("Running %s due scheduled job(s)", len(jobs))
                 for job in jobs:
+                    if not scheduler_enabled():
+                        break
                     await _run_job(job)
         except Exception:
             logger.exception("Scheduler tick failed")
@@ -114,3 +151,8 @@ async def stop_scheduler() -> None:
         except asyncio.CancelledError:
             pass
         _scheduler_task = None
+
+
+async def restart_scheduler() -> None:
+    await stop_scheduler()
+    await start_scheduler()

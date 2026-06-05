@@ -7,7 +7,11 @@ from typing import Any
 from app.llm import LLMError, extract_leads_from_web, plan_lead_search, score_leads
 from app.sources import list_channels
 from app.sources import peeringdb as peeringdb_source
+from app.sources import shodan as shodan_source
 from app.sources import web_search
+from app.sources import brightdata_social as bs
+from app.sources.social_registry import SOCIAL_CHANNELS, extract_all_social_urls_from_web_results
+from app.social_contacts import enrich_candidates_with_social
 from arin_lookup import lookup_asn
 
 
@@ -100,9 +104,19 @@ async def discover_leads_stream(
     max_asns = plan.get("max_asns", 15)
     preferred_roles = plan.get("preferred_roles") or []
 
+    channel_bits = [
+        f"搜索引擎({', '.join(channels['web_search'])})",
+        "PeeringDB",
+        "全球 RDAP",
+    ]
+    if channels.get("shodan"):
+        channel_bits.append("Shodan")
+    for spec in SOCIAL_CHANNELS:
+        if channels.get(spec.key):
+            channel_bits.append(spec.label)
     yield {
         "type": "status",
-        "message": f"多渠道搜索中：搜索引擎({', '.join(channels['web_search'])}) · PeeringDB · 全球 RDAP",
+        "message": f"多渠道搜索中：{' · '.join(channel_bits)}",
     }
 
     peeringdb_task = asyncio.to_thread(peeringdb_source.discover_asns, keywords, max_asns=max_asns)
@@ -111,7 +125,53 @@ async def discover_leads_stream(
         web_queries,
         max_results_per_query=max(4, plan.get("max_web_results", 20) // max(len(web_queries), 1)),
     )
-    networks, web_results = await asyncio.gather(peeringdb_task, web_task)
+    shodan_task = None
+    if shodan_source.is_configured() and keywords:
+        shodan_task = asyncio.to_thread(
+            shodan_source.discover_from_keywords,
+            keywords,
+            max_networks=max_asns,
+        )
+
+    if shodan_task:
+        networks, web_results, shodan_bundle = await asyncio.gather(
+            peeringdb_task, web_task, shodan_task
+        )
+        shodan_networks, shodan_web = shodan_bundle
+    else:
+        networks, web_results = await asyncio.gather(peeringdb_task, web_task)
+        shodan_networks, shodan_web = [], []
+
+    if shodan_networks or shodan_web:
+        seen_asn = {int(net["asn"]) for net in networks}
+        for net in shodan_networks:
+            if int(net["asn"]) not in seen_asn:
+                seen_asn.add(int(net["asn"]))
+                networks.append(net)
+        web_results.extend(shodan_web)
+
+    social_profiles_by_channel: dict[str, list[dict[str, Any]]] = {}
+    found_social_urls = extract_all_social_urls_from_web_results(web_results)
+    for spec in SOCIAL_CHANNELS:
+        urls = found_social_urls.get(spec.key) or []
+        if not bs.is_channel_configured(spec) or not urls:
+            continue
+        yield {
+            "type": "status",
+            "message": f"{spec.label} 补充抓取 {min(len(urls), 8)} 个 profile…",
+        }
+        try:
+            profiles = await asyncio.to_thread(
+                bs.collect_profiles_by_url,
+                spec,
+                urls,
+                max_urls=8,
+            )
+            social_profiles_by_channel[spec.key] = profiles
+            for profile in profiles:
+                web_results.append(spec.to_web_result(profile))
+        except Exception as exc:
+            yield {"type": "status", "message": f"{spec.label} 抓取跳过：{exc}"}
 
     yield {
         "type": "source_result",
@@ -119,12 +179,31 @@ async def discover_leads_stream(
         "count": len(networks),
         "preview": [f"AS{n['asn']} {n.get('name', '')}" for n in networks[:5]],
     }
+    if shodan_networks:
+        yield {
+            "type": "source_result",
+            "source": "shodan",
+            "count": len(shodan_networks),
+            "preview": [f"AS{n['asn']} {n.get('name', '')}" for n in shodan_networks[:5]],
+        }
     yield {
         "type": "source_result",
         "source": "web_search",
         "count": len(web_results),
         "preview": [r.get("title") or r.get("url") or "" for r in web_results[:5]],
     }
+    for spec in SOCIAL_CHANNELS:
+        profiles = social_profiles_by_channel.get(spec.key) or []
+        if not profiles:
+            continue
+        yield {
+            "type": "source_result",
+            "source": spec.key,
+            "count": len(profiles),
+            "preview": [
+                f"{p.get('name') or '?'} @ {p.get('org') or '?'}" for p in profiles[:5]
+            ],
+        }
 
     signals = web_search.extract_signals_from_results(web_results)
     yield {
@@ -197,6 +276,11 @@ async def discover_leads_stream(
 
     all_candidates = _dedupe_candidates(all_candidates)
     all_candidates = [row for row in all_candidates if row.get("email")]
+    all_candidates = enrich_candidates_with_social(
+        all_candidates,
+        web_results=web_results,
+        profiles_by_channel=social_profiles_by_channel,
+    )
 
     if not all_candidates:
         yield {"type": "done", "leads": [], "import": None, "message": "找到网络信息但未提取到可用邮箱联系人"}

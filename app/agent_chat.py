@@ -15,6 +15,7 @@ from app.database import (
     count_contacts,
     create_contact_note,
     dedupe_contacts,
+    create_scheduled_job,
     delete_contact,
     get_contact,
     get_contact_stats,
@@ -25,17 +26,30 @@ from app.database import (
     normalize_import_row,
     update_contact,
     update_contact_follow_up_status,
+    update_scheduled_job,
 )
 from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
 from app.llm import LLMError, chat_completion_with_tools_stream
 from app.pi_chat_store import (
     MAX_LLM_HISTORY_MESSAGES,
+    compress_thread_context_until_current,
     get_pi_thread,
     history_for_llm,
 )
+from app.pi_context import compress_tool_result_for_llm
 from app.settings_store import get_setting, update_settings
+from app.sources import brightdata_social as bs
+from app.sources import shodan as shodan_source
 from app.sources import web_search
+from app.sources.channel_registry import get_channel_config
+from app.sources.social_registry import FACEBOOK, LINKEDIN, SOCIAL_CHANNELS, X
+
+SOCIAL_PROFILE_TOOLS: dict[str, bs.SocialChannelSpec] = {
+    "collect_linkedin_profiles": LINKEDIN,
+    "collect_x_profiles": X,
+    "collect_facebook_profiles": FACEBOOK,
+}
 
 MAX_TOOL_ROUNDS = 8
 MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
@@ -53,12 +67,51 @@ KNOWN_TOOL_NAMES = {
     "get_import_filters",
     "update_import_filters",
     "list_schedules",
+    "create_schedule",
+    "update_schedule",
     "get_search_config",
+    "shodan_search",
     "web_search",
     "lookup_asns",
     "discover_leads",
     "enrich_contact",
+    "collect_linkedin_profiles",
+    "collect_x_profiles",
+    "collect_facebook_profiles",
 }
+
+def _social_profile_tool(
+    tool_name: str,
+    spec: bs.SocialChannelSpec,
+    *,
+    example_url: str,
+) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool_name,
+            "description": (
+                f"通过 Bright Data 按 URL 抓取 {spec.label} profile。"
+                f"需配置 Bright Data API Key；一次最多 {bs.DEFAULT_MAX_URLS} 个 URL"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": f"{spec.label} profile URL 列表，如 {example_url}",
+                    },
+                    "max_urls": {
+                        "type": "integer",
+                        "description": "最多抓取条数，默认 10",
+                    },
+                },
+                "required": ["urls"],
+            },
+        },
+    }
+
 
 AGENT_TOOLS: list[dict[str, Any]] = [
     {
@@ -278,10 +331,43 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_search_config",
-            "description": "查看当前联网搜索配置：启用的搜索引擎、优先级、智谱/Bright Data SERP 等 API Key 是否已配置",
+            "description": "查看数据渠道配置：搜索引擎、Shodan、LinkedIn/X/Facebook、PeeringDB/RDAP 等是否启用",
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "shodan_search",
+            "description": "Shodan host 搜索（需 API Key）。按 org/asn 等 filter 查互联网资产，补充 ASN/组织/域名",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": 'Shodan 查询，如 org:"Google" 或 asn:15169',
+                    },
+                    "page": {"type": "integer", "description": "页码，默认 1"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    _social_profile_tool(
+        "collect_linkedin_profiles",
+        LINKEDIN,
+        example_url="https://www.linkedin.com/in/username/",
+    ),
+    _social_profile_tool(
+        "collect_x_profiles",
+        X,
+        example_url="https://x.com/username",
+    ),
+    _social_profile_tool(
+        "collect_facebook_profiles",
+        FACEBOOK,
+        example_url="https://www.facebook.com/username",
+    ),
     {
         "type": "function",
         "function": {
@@ -312,34 +398,92 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_schedule",
+            "description": "创建定时/持续线索发现任务。run_mode=continuous 表示一轮完成后自动继续；interval 表示按固定间隔运行",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "任务名称"},
+                    "query": {"type": "string", "description": "与 discover_leads 相同的自然语言搜索描述"},
+                    "run_mode": {
+                        "type": "string",
+                        "enum": ["continuous", "interval"],
+                        "description": "continuous=持续运行；interval=固定间隔",
+                    },
+                    "interval_minutes": {
+                        "type": "integer",
+                        "description": "固定间隔模式下的分钟数（15-10080），默认 360",
+                    },
+                    "cooldown_minutes": {
+                        "type": "integer",
+                        "description": "持续模式下每轮间隔分钟数，默认 15",
+                    },
+                    "min_score": {"type": "integer", "description": "最低评分，默认 60"},
+                    "auto_import": {"type": "boolean", "description": "是否自动导入，默认 true"},
+                },
+                "required": ["name", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_schedule",
+            "description": "更新定时任务（启用/停用、改间隔、改描述等）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schedule_id": {"type": "integer", "description": "任务 ID"},
+                    "name": {"type": "string"},
+                    "query": {"type": "string"},
+                    "enabled": {"type": "boolean"},
+                    "run_mode": {"type": "string", "enum": ["continuous", "interval"]},
+                    "interval_minutes": {"type": "integer"},
+                    "cooldown_minutes": {"type": "integer"},
+                    "min_score": {"type": "integer"},
+                    "auto_import": {"type": "boolean"},
+                },
+                "required": ["schedule_id"],
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作网络运营商联系人库。
 
 能力：
 - lookup_asns：已知 ASN 列表时，批量 RDAP 查 role 邮箱
-- discover_leads：首选线索工具 — PeeringDB 直连 + 全球 RDAP + 联网搜索 + LLM 评分（可 auto_import）
+- discover_leads：首选线索工具 — PeeringDB + RDAP + 联网搜索 + 社交媒体（LinkedIn/X/Facebook，若启用）+ LLM 评分
+- collect_linkedin_profiles / collect_x_profiles / collect_facebook_profiles：Bright Data 按 URL 抓社交 profile
 - web_search：仅快速查资料，不要用它做线索挖掘主流程
-- get_search_config：查看联网搜索引擎配置
+- get_search_config：查看各数据渠道配置（搜索/社交/Shodan/PeeringDB 等）
+- shodan_search：Shodan 资产搜索（org/asn filter），discover_leads 已自动接入
 - enrich_contact：为已有联系人扩展更多联系方式，可 auto_import
 - get_contact / list_contacts / import_leads：读取、搜索、导入联系人
 - update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理联系人
 - get_stats / dedupe_contacts：统计与去重
 - get_import_filters / update_import_filters：导入黑名单/白名单（设置页同源）
-- list_schedules：定时线索任务
+- list_schedules / create_schedule / update_schedule：定时或持续自动找线索（≥60 分自动导入）
 
 工具选用（重要）：
 - 找 peering 联系人 / 挖 ASN 邮箱 / 批量线索 → discover_leads（auto_import=true, min_score=60），不要手动堆 web_search
 - 已有明确 ASN 列表且只要 RDAP → lookup_asns
 - 已有 CRM 联系人要扩展 → enrich_contact
 - web_search 仅作补充；Bright Data markdown 模式 snippet 常为空，不可依赖
+- 已有社交 profile URL → 用对应 collect_*_profiles；批量找线索仍用 discover_leads（会自动从搜索结果提取 URL）
 
-联网搜索说明：系统设置 → AI 与搜索。优先级 brightdata > zhipu > tavily > serpapi > brave > duckduckgo。
-用户问搜索引擎配置时，先 get_search_config 再回答。
+联网搜索说明：系统设置 → AI 与搜索。搜索引擎优先级 brightdata > zhipu > tavily > serpapi > brave > duckduckgo。
+社交媒体均走 Bright Data Scraper API（/datasets/v3/scrape），与 SERP 共用 API Key：
+已配置渠道 Dataset ID 见系统设置；未配置时不会启用对应社交抓取。
+用户问搜索引擎/数据渠道配置时，先 get_search_config 再回答。
 
 规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。
 入库：lead_score ≥ 60 直接 import_leads 或 discover_leads auto_import，无需再问用户。
-import_leads 的 asn 必须是纯数字（如 395092），不要带 AS 前缀。"""
+import_leads 的 asn 必须是纯数字（如 395092），不要带 AS 前缀。
+若线索含 linkedin/x/facebook/profile_url，导入时会自动写入联系人社交链接字段。"""
 
 
 async def _stream_lead_events(
@@ -354,7 +498,11 @@ async def _stream_lead_events(
     async for event in stream:
         event_type = event.get("type")
         if event_type == "status":
-            emit.progress(str(event.get("message") or "搜索中…"))
+            msg = str(event.get("message") or "搜索中…")
+            emit.progress(msg)
+            emit.event({"kind": "status", "message": msg})
+            if "评估" in msg:
+                emit.event({"kind": "phase", "phase": "scoring"})
         elif event_type == "plan":
             plan = event.get("plan") or {}
             emit.event({"kind": "plan", "plan": plan})
@@ -385,6 +533,18 @@ async def _stream_lead_events(
                     event.get("message")
                     or f"RDAP AS{event.get('asn')} ({event.get('index')}/{event.get('total')})"
                 )
+            )
+        elif event_type == "asn_result":
+            emit.event(
+                {
+                    "kind": "asn_result",
+                    "asn": event.get("asn"),
+                    "network": event.get("network"),
+                    "candidate_count": event.get("candidate_count", 0),
+                }
+            )
+            emit.progress(
+                f"AS{event.get('asn')} · {event.get('candidate_count', 0)} 个邮箱候选"
             )
         elif event_type == "lead":
             leads.append(event["lead"])
@@ -454,8 +614,17 @@ class ToolEmitter:
         self._queue.put_nowait(("event", payload))
 
 
-def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
-    return history_for_llm(history)
+def _trim_history(
+    history: list[dict[str, Any]],
+    *,
+    context_summary: str = "",
+    summary_through: int = 0,
+) -> list[dict[str, str]]:
+    return history_for_llm(
+        history,
+        context_summary=context_summary,
+        summary_through=summary_through,
+    )
 
 
 def _assistant_intro_before_tools(content: str) -> str:
@@ -795,8 +964,118 @@ async def _run_tool(
         schedules = list_scheduled_jobs(user_id)
         return {"schedules": schedules, "count": len(schedules)}
 
+    if name == "create_schedule":
+        job_name = str(args.get("name") or "").strip()
+        query = str(args.get("query") or "").strip()
+        if not job_name or not query:
+            return {"error": "请提供 name 和 query"}
+        job = create_scheduled_job(
+            user_id,
+            name=job_name,
+            query=query,
+            run_mode=str(args.get("run_mode") or "continuous"),
+            interval_minutes=int(args.get("interval_minutes") or 360),
+            cooldown_minutes=int(args.get("cooldown_minutes") or 15),
+            min_score=int(args.get("min_score") or 60),
+            auto_import=bool(args.get("auto_import", True)),
+            enabled=True,
+        )
+        return {"ok": True, "schedule": job}
+
+    if name == "update_schedule":
+        schedule_id = int(args.get("schedule_id") or 0)
+        if schedule_id <= 0:
+            return {"error": "请提供 schedule_id"}
+        fields = {
+            key: args.get(key)
+            for key in (
+                "name",
+                "query",
+                "enabled",
+                "run_mode",
+                "interval_minutes",
+                "cooldown_minutes",
+                "min_score",
+                "auto_import",
+            )
+            if key in args
+        }
+        job = update_scheduled_job(user_id, schedule_id, **fields)
+        if not job:
+            return {"error": "定时任务不存在"}
+        return {"ok": True, "schedule": job}
+
     if name == "get_search_config":
-        return web_search.get_search_config()
+        return get_channel_config()
+
+    if name == "shodan_search":
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return {"error": "请提供 query（Shodan 搜索语法）"}
+        if not shodan_source.is_configured():
+            return {
+                "error": "Shodan 未配置",
+                "hint": "在系统设置填写 Shodan API Key 并启用渠道",
+                "config": shodan_source.get_config(),
+            }
+        page = max(1, int(args.get("page") or 1))
+        emit.progress(f"Shodan 搜索：{query}")
+        try:
+            payload = await asyncio.to_thread(shodan_source.host_search, query, page=page)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "config": shodan_source.get_config()}
+        matches = payload.get("matches") or []
+        networks: list[dict[str, Any]] = []
+        web_results: list[dict[str, str]] = []
+        seen_asn: set[int] = set()
+        for match in matches:
+            if not isinstance(match, dict):
+                continue
+            web_results.append(shodan_source.match_to_web_result(match, query=query))
+            network = shodan_source.match_to_network(match, keyword=query)
+            if network and network["asn"] not in seen_asn:
+                seen_asn.add(network["asn"])
+                networks.append(network)
+        return {
+            "query": query,
+            "total": payload.get("total", len(matches)),
+            "match_count": len(matches),
+            "networks": networks[:20],
+            "web_results": web_results[:20],
+            "config": shodan_source.get_config(),
+            "note": "带 filter 的查询会消耗 Shodan query credits",
+        }
+
+    if name in SOCIAL_PROFILE_TOOLS:
+        spec = SOCIAL_PROFILE_TOOLS[name]
+        urls = [str(item).strip() for item in (args.get("urls") or []) if str(item).strip()]
+        max_urls = max(1, min(int(args.get("max_urls") or bs.DEFAULT_MAX_URLS), bs.DEFAULT_MAX_URLS))
+        if not urls:
+            return {"error": f"请提供 urls（{spec.label} profile URL 列表）"}
+        if not bs.is_channel_configured(spec):
+            return {
+                "error": f"Bright Data {spec.label} 未配置",
+                "hint": f"在系统设置填写 Bright Data API Key 并启用 {spec.label} 渠道",
+                "config": bs.channel_config(spec),
+            }
+        emit.progress(f"{spec.label} 抓取 {min(len(urls), max_urls)} 个 profile…")
+        try:
+            profiles = await asyncio.to_thread(
+                bs.collect_profiles_by_url,
+                spec,
+                urls,
+                max_urls=max_urls,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "config": bs.channel_config(spec)}
+        previews = bs.profiles_to_lead_previews(spec, profiles)
+        return {
+            "profile_count": len(profiles),
+            "profiles": profiles[:15],
+            "lead_previews": previews[:15],
+            "config": bs.channel_config(spec),
+            "note": f"{spec.label} 通常无邮箱；请结合 discover_leads / lookup_asns 找可导入邮箱",
+        }
 
     if name == "web_search":
         query = str(args.get("query") or "").strip()
@@ -880,11 +1159,27 @@ async def agent_chat_stream(
     *,
     thread_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    thread: dict[str, Any] | None = None
     if thread_id:
-        thread = get_pi_thread(user_id, thread_id)
-        if thread:
-            history = thread.get("history") or []
-    history = _trim_history(history or [])
+        loaded = get_pi_thread(user_id, thread_id)
+        if loaded:
+            history = loaded.get("history") or []
+            had_summary = bool((loaded.get("context_summary") or "").strip())
+            thread = await asyncio.to_thread(
+                compress_thread_context_until_current,
+                user_id,
+                thread_id,
+            )
+            thread = thread or get_pi_thread(user_id, thread_id)
+            if thread and not had_summary and (thread.get("context_summary") or "").strip():
+                yield {"type": "status", "message": "长对话已滚动压缩，继续处理…"}
+    context_summary = str((thread or {}).get("context_summary") or "")
+    summary_through = int((thread or {}).get("context_summary_through") or 0)
+    history = _trim_history(
+        history or [],
+        context_summary=context_summary,
+        summary_through=summary_through,
+    )
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": message.strip()})
@@ -981,11 +1276,12 @@ async def agent_chat_stream(
 
             result = result_holder.get("value", {"error": "工具执行失败"})
             yield {"type": "tool_result", "name": name, "result": result}
+            tool_content = compress_tool_result_for_llm(name, result)
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.get("id"),
-                    "content": json.dumps(result, ensure_ascii=False)[:12000],
+                    "content": tool_content,
                 }
             )
 

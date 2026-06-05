@@ -63,7 +63,7 @@ from app.background_jobs import (
 )
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
-from app.scheduler import run_scheduled_job, start_scheduler, stop_scheduler
+from app.scheduler import get_scheduler_status, restart_scheduler, run_scheduled_job, start_scheduler, stop_scheduler
 from app.security import verify_password
 from app.pi_chat_store import (
     create_pi_thread,
@@ -81,6 +81,7 @@ from app.settings_store import (
     update_settings,
 )
 from app.sources import list_channels
+from app.sources.channel_registry import get_channel_config
 from arin_lookup import lookup_asns_batch, parse_asns_from_text, rows_to_csv
 
 APP_DIR = Path(__file__).resolve().parent
@@ -141,7 +142,10 @@ class EnrichContactJobRequest(BaseModel):
 class ScheduleRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     query: str = Field(min_length=4, max_length=2000)
-    interval_hours: int = Field(default=24, ge=1, le=168)
+    interval_hours: int | None = Field(default=None, ge=1, le=168)
+    interval_minutes: int | None = Field(default=None, ge=15, le=10080)
+    run_mode: str = Field(default="interval")
+    cooldown_minutes: int = Field(default=15, ge=5, le=1440)
     min_score: int = Field(default=60, ge=0, le=100)
     auto_import: bool = True
     enabled: bool = True
@@ -151,6 +155,9 @@ class ScheduleUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     query: str | None = Field(default=None, max_length=2000)
     interval_hours: int | None = Field(default=None, ge=1, le=168)
+    interval_minutes: int | None = Field(default=None, ge=15, le=10080)
+    run_mode: str | None = None
+    cooldown_minutes: int | None = Field(default=None, ge=5, le=1440)
     min_score: int | None = Field(default=None, ge=0, le=100)
     auto_import: bool | None = None
     enabled: bool | None = None
@@ -173,6 +180,9 @@ class ContactUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=4000)
     roles: str | None = Field(default=None, max_length=500)
+    linkedin: str | None = Field(default=None, max_length=500)
+    x: str | None = Field(default=None, max_length=500)
+    facebook: str | None = Field(default=None, max_length=500)
 
 
 class ContactBulkRequest(BaseModel):
@@ -194,6 +204,12 @@ class SettingsUpdateRequest(BaseModel):
     brightdata_api_key: str | None = None
     brightdata_serp_zone: str | None = None
     brightdata_serp_data_format: str | None = None
+    brightdata_linkedin_dataset_id: str | None = None
+    brightdata_linkedin_enabled: str | None = None
+    brightdata_x_dataset_id: str | None = None
+    brightdata_x_enabled: str | None = None
+    brightdata_facebook_dataset_id: str | None = None
+    brightdata_facebook_enabled: str | None = None
     scheduler_enabled: str | None = None
     scheduler_poll_seconds: str | None = None
     session_https_only: str | None = None
@@ -201,6 +217,8 @@ class SettingsUpdateRequest(BaseModel):
     import_allowlist: str | None = None
     zhipu_api_key: str | None = None
     zhipu_search_engine: str | None = None
+    shodan_api_key: str | None = None
+    shodan_enabled: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -283,6 +301,7 @@ def index(request: Request) -> HTMLResponse | RedirectResponse:
 def public_config() -> dict:
     config = get_public_settings()
     config["search_channels"] = list_channels()
+    config["data_channel_config"] = get_channel_config()
     return config
 
 
@@ -292,9 +311,19 @@ def get_settings(_: CurrentUser) -> dict:
 
 
 @app.put("/api/settings")
-def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
+async def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
+    from app.settings_store import get_settings
+
+    before = get_settings()
     updates = body.model_dump(exclude_none=True)
-    return update_settings(updates)
+    result = update_settings(updates)
+    scheduler_changed = (
+        "scheduler_enabled" in updates
+        and updates.get("scheduler_enabled") != before.get("scheduler_enabled")
+    ) or "scheduler_poll_seconds" in updates
+    if scheduler_changed:
+        await restart_scheduler()
+    return result
 
 
 @app.post("/api/settings/agent-token/regenerate")
@@ -455,6 +484,9 @@ def patch_contact(
         name=body.name,
         notes=body.notes,
         roles=body.roles,
+        linkedin=body.linkedin,
+        x=body.x,
+        facebook=body.facebook,
     )
     if not contact:
         raise HTTPException(status_code=404, detail="联系人不存在")
@@ -569,10 +601,15 @@ def remove_email_template(template_id: int, user: CurrentUser) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/schedules/status")
+def schedules_status(_: CurrentUser) -> dict:
+    return get_scheduler_status()
+
+
 @app.get("/api/schedules")
 def get_schedules(user: CurrentUser) -> dict:
     jobs = list_scheduled_jobs(user["id"])
-    return {"schedules": jobs, "total": len(jobs)}
+    return {"schedules": jobs, "total": len(jobs), "scheduler": get_scheduler_status()}
 
 
 @app.post("/api/schedules")
@@ -584,6 +621,9 @@ def create_schedule(body: ScheduleRequest, user: CurrentUser) -> dict:
         name=body.name,
         query=body.query,
         interval_hours=body.interval_hours,
+        interval_minutes=body.interval_minutes,
+        run_mode=body.run_mode,
+        cooldown_minutes=body.cooldown_minutes,
         min_score=body.min_score,
         auto_import=body.auto_import,
         enabled=body.enabled,
@@ -599,6 +639,9 @@ def patch_schedule(job_id: int, body: ScheduleUpdateRequest, user: CurrentUser) 
         name=body.name,
         query=body.query,
         interval_hours=body.interval_hours,
+        interval_minutes=body.interval_minutes,
+        run_mode=body.run_mode,
+        cooldown_minutes=body.cooldown_minutes,
         min_score=body.min_score,
         auto_import=body.auto_import,
         enabled=body.enabled,
