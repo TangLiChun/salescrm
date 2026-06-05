@@ -18,13 +18,16 @@ from app.database import (
     get_contact_stats,
     import_contacts,
     list_contacts,
+    list_scheduled_jobs,
     mark_contact_sent,
     normalize_import_row,
     update_contact,
     update_contact_follow_up_status,
 )
+from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
 from app.llm import LLMError, chat_completion_with_tools_stream
+from app.settings_store import get_setting, update_settings
 
 MAX_TOOL_ROUNDS = 8
 MAX_HISTORY = 20
@@ -205,6 +208,52 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_import_filters",
+            "description": "读取系统设置中的线索导入黑名单/白名单（与设置页「线索导入」相同）",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_import_filters",
+            "description": "更新线索导入黑名单/白名单；可整段替换或追加域名/邮箱模式（如 @cox.com）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "blocklist": {
+                        "type": "string",
+                        "description": "完整黑名单文本（每行一条，替换现有黑名单）",
+                    },
+                    "allowlist": {
+                        "type": "string",
+                        "description": "完整白名单文本（每行一条，替换现有白名单）",
+                    },
+                    "append_blocklist": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "追加到黑名单的模式，如 @cox.com",
+                    },
+                    "append_allowlist": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "追加到白名单的模式",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_schedules",
+            "description": "列出定时 AI 线索发现任务",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作网络运营商联系人库。
@@ -216,8 +265,10 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 - get_contact / list_contacts / import_leads：读取、搜索、导入联系人
 - update_contact / mark_contact_sent / delete_contacts / add_contact_note：管理已有联系人
 - get_stats / dedupe_contacts：统计与去重
+- get_import_filters / update_import_filters：读取或修改设置里的导入黑名单/白名单（import_leads 与自动导入均会遵守）
+- list_schedules：查看定时线索任务
 
-规则：用简洁中文回复；用户说「找更多联系方式」时用 enrich_contact；导入前查重；不要编造数据。"""
+规则：用简洁中文回复；用户说「找更多联系方式」时用 enrich_contact；用户要求屏蔽某域名时用 update_import_filters 写入黑名单，不要只在对话里「记住」；导入前查重；不要编造数据。"""
 
 
 async def _stream_lead_events(
@@ -415,6 +466,30 @@ async def _lookup_asns_tool(args: dict[str, Any], emit: ToolEmitter) -> dict[str
     }
 
 
+def _merge_pattern_lines(existing: str, additions: list[str]) -> str:
+    patterns = parse_patterns(existing)
+    seen = set(patterns)
+    for item in additions:
+        line = str(item or "").strip().lower()
+        if not line or line.startswith("#"):
+            continue
+        if line not in seen:
+            patterns.append(line)
+            seen.add(line)
+    return "\n".join(patterns)
+
+
+def _import_filters_payload() -> dict[str, Any]:
+    blocklist = get_setting("import_blocklist", "")
+    allowlist = get_setting("import_allowlist", "")
+    return {
+        "blocklist": blocklist,
+        "allowlist": allowlist,
+        "blocklist_patterns": parse_patterns(blocklist),
+        "allowlist_patterns": parse_patterns(allowlist),
+    }
+
+
 async def _run_tool(
     user_id: int,
     name: str,
@@ -509,6 +584,39 @@ async def _run_tool(
         result = dedupe_contacts(user_id=user_id)
         result["total_contacts"] = count_contacts(user_id)
         return result
+
+    if name == "get_import_filters":
+        return _import_filters_payload()
+
+    if name == "update_import_filters":
+        updates: dict[str, str | None] = {}
+        if "blocklist" in args:
+            updates["import_blocklist"] = str(args.get("blocklist") or "")
+        elif args.get("append_blocklist"):
+            current = get_setting("import_blocklist", "")
+            updates["import_blocklist"] = _merge_pattern_lines(
+                current,
+                list(args.get("append_blocklist") or []),
+            )
+        if "allowlist" in args:
+            updates["import_allowlist"] = str(args.get("allowlist") or "")
+        elif args.get("append_allowlist"):
+            current = get_setting("import_allowlist", "")
+            updates["import_allowlist"] = _merge_pattern_lines(
+                current,
+                list(args.get("append_allowlist") or []),
+            )
+        if not updates:
+            return {"error": "请提供 blocklist/allowlist 或 append_blocklist/append_allowlist"}
+        update_settings(updates)
+        payload = _import_filters_payload()
+        payload["ok"] = True
+        payload["message"] = "导入过滤规则已更新"
+        return payload
+
+    if name == "list_schedules":
+        schedules = list_scheduled_jobs(user_id)
+        return {"schedules": schedules, "count": len(schedules)}
 
     return {"error": f"未知工具: {name}"}
 

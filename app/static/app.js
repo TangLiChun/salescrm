@@ -23,6 +23,8 @@ const piChatSendBtn = document.getElementById("pi-chat-send");
 const piChatStopBtn = document.getElementById("pi-chat-stop");
 const piChatClearBtn = document.getElementById("pi-chat-clear");
 const piChatHistoryHintEl = document.getElementById("pi-chat-history-hint");
+const piThreadListEl = document.getElementById("pi-thread-list");
+const piThreadNewBtn = document.getElementById("pi-thread-new");
 const piChatProgressEl = document.getElementById("pi-chat-progress");
 const piChatProgressFill = document.getElementById("pi-chat-progress-fill");
 const piChatProgressText = document.getElementById("pi-chat-progress-text");
@@ -148,7 +150,11 @@ let lastDiscoverQuery = "";
 let llmConfigured = false;
 let currentUserId = null;
 const PI_CHAT_STORAGE_VERSION = "v1";
+const PI_THREADS_STORAGE_VERSION = "v2";
 const PI_CHAT_MAX_STORED = 40;
+const PI_THREADS_MAX = 30;
+let piThreads = [];
+let activePiThreadId = null;
 let piChatHistory = [];
 let piChatController = null;
 let piChatBusy = false;
@@ -1333,42 +1339,218 @@ function piChatStorageKey(userId) {
   return `salescrm:pi-chat:${PI_CHAT_STORAGE_VERSION}:${userId}`;
 }
 
-function savePiChatHistory() {
+function piThreadsStorageKey(userId) {
+  return `salescrm:pi-threads:${PI_THREADS_STORAGE_VERSION}:${userId}`;
+}
+
+function createPiThreadId() {
+  return `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function defaultPiThreadTitle() {
+  return t("pi.newThreadTitle");
+}
+
+function summarizePiThreadTitle(text) {
+  const line = String(text || "")
+    .split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!line) return defaultPiThreadTitle();
+  return line.length > 42 ? `${line.slice(0, 42)}…` : line;
+}
+
+function getActivePiThread() {
+  return piThreads.find((thread) => thread.id === activePiThreadId) || null;
+}
+
+function syncActivePiThreadHistory() {
+  const thread = getActivePiThread();
+  if (!thread) return;
+  thread.history = piChatHistory.slice(-PI_CHAT_MAX_STORED);
+  thread.updatedAt = Date.now();
+}
+
+function renderPiThreadList() {
+  if (!piThreadListEl) return;
+  piThreadListEl.innerHTML = "";
+  if (!piThreads.length) {
+    const li = document.createElement("li");
+    li.className = "pi-thread-empty stats";
+    li.textContent = t("pi.noThreads");
+    piThreadListEl.appendChild(li);
+    return;
+  }
+  const sorted = [...piThreads].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const thread of sorted) {
+    const li = document.createElement("li");
+    li.className = "pi-thread-item";
+    const count = Array.isArray(thread.history) ? thread.history.length : 0;
+    li.innerHTML = `
+      <button type="button" class="pi-thread-btn ${thread.id === activePiThreadId ? "active" : ""}" data-thread-id="${thread.id}">
+        <span class="pi-thread-title">${escapeHtml(thread.title || defaultPiThreadTitle())}</span>
+        <span class="pi-thread-meta">${t("pi.threadMeta", { count })}</span>
+      </button>
+      <button type="button" class="pi-thread-delete" data-delete-thread="${thread.id}" aria-label="${t("pi.deleteThread")}">×</button>
+    `;
+    piThreadListEl.appendChild(li);
+  }
+}
+
+function savePiThreadsStore() {
   if (!currentUserId) return;
+  syncActivePiThreadHistory();
   try {
     localStorage.setItem(
-      piChatStorageKey(currentUserId),
+      piThreadsStorageKey(currentUserId),
       JSON.stringify({
-        history: piChatHistory.slice(-PI_CHAT_MAX_STORED),
+        activeThreadId: activePiThreadId,
+        threads: piThreads.slice(0, PI_THREADS_MAX),
         updatedAt: Date.now(),
       }),
     );
+    renderPiThreadList();
     updatePiChatHistoryHint();
   } catch {
     // ignore quota errors
   }
 }
 
-function loadPiChatHistoryFromStorage(userId) {
+function migratePiChatV1ToThreads(userId) {
   try {
     const raw = localStorage.getItem(piChatStorageKey(userId));
-    if (!raw) {
-      piChatHistory = [];
-      return;
-    }
+    if (!raw) return null;
     const data = JSON.parse(raw);
-    piChatHistory = Array.isArray(data.history)
+    const history = Array.isArray(data.history)
       ? data.history.filter((item) => item?.role && item?.content)
       : [];
+    if (!history.length) return null;
+    const firstUser = history.find((item) => item.role === "user");
+    return {
+      id: createPiThreadId(),
+      title: summarizePiThreadTitle(firstUser?.content || ""),
+      history,
+      createdAt: data.updatedAt || Date.now(),
+      updatedAt: data.updatedAt || Date.now(),
+    };
   } catch {
-    piChatHistory = [];
+    return null;
   }
+}
+
+function loadPiThreadsFromStorage(userId) {
+  piThreads = [];
+  activePiThreadId = null;
+  piChatHistory = [];
+  try {
+    const raw = localStorage.getItem(piThreadsStorageKey(userId));
+    if (raw) {
+      const data = JSON.parse(raw);
+      piThreads = Array.isArray(data.threads)
+        ? data.threads.filter((thread) => thread?.id).slice(0, PI_THREADS_MAX)
+        : [];
+      activePiThreadId = data.activeThreadId || piThreads[0]?.id || null;
+    }
+  } catch {
+    piThreads = [];
+    activePiThreadId = null;
+  }
+
+  if (!piThreads.length) {
+    const migrated = migratePiChatV1ToThreads(userId);
+    if (migrated) {
+      piThreads = [migrated];
+      activePiThreadId = migrated.id;
+      savePiThreadsStore();
+    }
+  }
+
+  if (!piThreads.length) {
+    createPiThread();
+    return;
+  }
+
+  if (!activePiThreadId || !piThreads.some((thread) => thread.id === activePiThreadId)) {
+    activePiThreadId = piThreads[0].id;
+  }
+  const active = getActivePiThread();
+  piChatHistory = Array.isArray(active?.history)
+    ? active.history.filter((item) => item?.role && item?.content)
+    : [];
+}
+
+function createPiThread(title) {
+  if (piChatBusy) {
+    alert(t("pi.busySwitch"));
+    return null;
+  }
+  syncActivePiThreadHistory();
+  const thread = {
+    id: createPiThreadId(),
+    title: title || defaultPiThreadTitle(),
+    history: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  piThreads.unshift(thread);
+  if (piThreads.length > PI_THREADS_MAX) {
+    piThreads = piThreads.slice(0, PI_THREADS_MAX);
+  }
+  activePiThreadId = thread.id;
+  piChatHistory = [];
+  restorePiChatUi();
+  savePiThreadsStore();
+  return thread;
+}
+
+function switchPiThread(threadId) {
+  if (threadId === activePiThreadId) return;
+  if (piChatBusy) {
+    alert(t("pi.busySwitch"));
+    return;
+  }
+  syncActivePiThreadHistory();
+  activePiThreadId = threadId;
+  const active = getActivePiThread();
+  piChatHistory = Array.isArray(active?.history)
+    ? active.history.filter((item) => item?.role && item?.content)
+    : [];
+  restorePiChatUi();
+  savePiThreadsStore();
+}
+
+function deletePiThread(threadId) {
+  if (piChatBusy) {
+    alert(t("pi.busySwitch"));
+    return;
+  }
+  if (!window.confirm(t("pi.confirmDeleteThread"))) return;
+  piThreads = piThreads.filter((thread) => thread.id !== threadId);
+  if (!piThreads.length) {
+    createPiThread();
+    return;
+  }
+  if (activePiThreadId === threadId) {
+    activePiThreadId = piThreads[0].id;
+    piChatHistory = Array.isArray(piThreads[0].history) ? [...piThreads[0].history] : [];
+    restorePiChatUi();
+  }
+  savePiThreadsStore();
+}
+
+function savePiChatHistory() {
+  savePiThreadsStore();
+}
+
+function loadPiChatHistoryFromStorage(userId) {
+  loadPiThreadsFromStorage(userId);
 }
 
 function restorePiChatUi() {
   piChatMessagesEl.innerHTML = "";
   if (!piChatHistory.length) {
     piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHintAlt")}</div>`;
+    renderPiThreadList();
     updatePiChatHistoryHint();
     return;
   }
@@ -1377,17 +1559,19 @@ function restorePiChatUi() {
       appendPiChatBubble(item.role, item.content);
     }
   }
+  renderPiThreadList();
   updatePiChatHistoryHint();
 }
 
 function updatePiChatHistoryHint() {
   if (!piChatHistoryHintEl) return;
   const count = piChatHistory.length;
+  const threadCount = piThreads.length;
   if (!count) {
     piChatHistoryHintEl.textContent = t("msg.piHistoryLocal");
     return;
   }
-  piChatHistoryHintEl.textContent = t("msg.piHistorySaved", { count });
+  piChatHistoryHintEl.textContent = t("msg.piHistorySavedThreads", { count, threads: threadCount });
 }
 
 function buildPiLeadMessage() {
@@ -1412,6 +1596,7 @@ async function openPiAgentForLeads() {
     return;
   }
   switchView("pi-agent");
+  createPiThread(summarizePiThreadTitle(message));
   await sendPiChatMessage(message);
 }
 
@@ -1430,6 +1615,7 @@ async function openPiEnrichContact(contact) {
     .filter(Boolean)
     .join("\n");
   switchView("pi-agent");
+  createPiThread(t("pi.enrichThreadTitle", { label }));
   await sendPiChatMessage(message);
 }
 
@@ -1847,6 +2033,10 @@ async function sendPiChatMessage(message) {
   piChatInput.value = "";
   appendPiChatBubble("user", text);
   piChatHistory.push({ role: "user", content: text });
+  const thread = getActivePiThread();
+  if (thread && (thread.title === defaultPiThreadTitle() || !thread.title)) {
+    thread.title = summarizePiThreadTitle(text);
+  }
   savePiChatHistory();
 
   setPiChatBusy(true);
@@ -2023,9 +2213,13 @@ function clearPiChat() {
     return;
   }
   piChatHistory = [];
-  if (currentUserId) {
-    localStorage.removeItem(piChatStorageKey(currentUserId));
+  const thread = getActivePiThread();
+  if (thread) {
+    thread.history = [];
+    thread.title = defaultPiThreadTitle();
+    thread.updatedAt = Date.now();
   }
+  savePiThreadsStore();
   piChatMessagesEl.innerHTML = `<div class="pi-chat-empty">${t("pi.emptyHintAlt")}</div>`;
   updatePiChatHistoryHint();
   updatePiAgentStatus();
@@ -2689,6 +2883,18 @@ piChatForm?.addEventListener("submit", (event) => {
 });
 piChatStopBtn?.addEventListener("click", stopPiChat);
 piChatClearBtn?.addEventListener("click", clearPiChat);
+piThreadNewBtn?.addEventListener("click", () => createPiThread());
+piThreadListEl?.addEventListener("click", (event) => {
+  const deleteBtn = event.target.closest("[data-delete-thread]");
+  if (deleteBtn) {
+    deletePiThread(deleteBtn.dataset.deleteThread);
+    return;
+  }
+  const threadBtn = event.target.closest(".pi-thread-btn[data-thread-id]");
+  if (threadBtn) {
+    switchPiThread(threadBtn.dataset.threadId);
+  }
+});
 asnInput.addEventListener("input", () => {
   clearTimeout(asnParseTimer);
   asnParseTimer = setTimeout(() => {
