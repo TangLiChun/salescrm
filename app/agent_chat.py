@@ -1596,6 +1596,7 @@ async def agent_chat_stream(
                 event_type = event.get("type")
                 if event_type == "error":
                     yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
+                    yield {"type": "done"}
                     return
                 if event_type == "content_delta":
                     piece = str(event.get("text") or "")
@@ -1617,6 +1618,7 @@ async def agent_chat_stream(
                     yield {"type": "status", "message": "模型未响应，正在重试…"}
                     continue
                 yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+                yield {"type": "done"}
                 return
 
             tool_calls = (assistant or {}).get("tool_calls") or []
@@ -1644,6 +1646,7 @@ async def agent_chat_stream(
                     yield {"type": "status", "message": "模型未调用工具，正在重试…"}
                     continue
                 yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+                yield {"type": "done"}
                 return
 
             prepared_calls = _prepare_tool_calls(tool_calls)
@@ -1661,20 +1664,24 @@ async def agent_chat_stream(
                     yield {"type": "status", "message": "工具调用无效，正在重试…"}
                     continue
                 yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+                yield {"type": "done"}
                 return
             break
 
         if not assistant:
             yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+            yield {"type": "done"}
             return
 
-        intro = _assistant_intro_before_tools(content)
+        intro = _assistant_intro_before_tools(content or content_buffer)
         if intro:
             if not streamed_reply:
                 yield {"type": "assistant_start"}
             yield {"type": "assistant_done", "text": intro}
         elif streamed_reply:
-            yield {"type": "assistant_done", "text": content_buffer.strip()}
+            visible = _assistant_intro_before_tools(content_buffer.strip())
+            if visible:
+                yield {"type": "assistant_done", "text": visible}
 
         executed_calls = [tool_call for tool_call, _, _ in prepared_calls]
         messages.append(
@@ -1747,3 +1754,4 @@ async def agent_chat_stream(
             return
 
     yield {"type": "error", "message": "对话未完成，请重试"}
+    yield {"type": "done"}

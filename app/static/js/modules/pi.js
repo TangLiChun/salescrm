@@ -1539,12 +1539,17 @@ export async function sendPiChatMessage(message) {
   let activeToolEl = null;
   let activeAssistantEl = null;
   let assistantStreamText = "";
+  let streamEnded = false;
 
   const settlePendingAssistantBubble = () => {
     const visibleText = sanitizePiAssistantDisplay(assistantStreamText);
     if (activeAssistantEl) {
       if (visibleText) {
         updatePiChatAssistantBubble(activeAssistantEl, visibleText, false);
+        const last = state.piChatHistory[state.piChatHistory.length - 1];
+        if (!(last?.role === "assistant" && last.content === visibleText)) {
+          appendPiHistoryEntry({ role: "assistant", content: visibleText });
+        }
       } else {
         activeAssistantEl.remove();
       }
@@ -1733,8 +1738,6 @@ export async function sendPiChatMessage(message) {
               activeAssistantEl = appendPiChatBubble("assistant", assistantStreamText);
             }
             appendPiHistoryEntry({ role: "assistant", content: assistantStreamText });
-          } else if (activeAssistantEl) {
-            activeAssistantEl.remove();
           }
           activeAssistantEl = null;
           assistantStreamText = "";
@@ -1747,10 +1750,12 @@ export async function sendPiChatMessage(message) {
             setProgressFill(piChatProgressFill, 100);
           }
         } else if (payload.type === "error") {
+          streamEnded = true;
           settlePendingAssistantBubble();
           failActiveTool(payload.message || t("msg.errorGeneric"));
           appendPiChatStatus(payload.message || t("msg.errorGeneric"));
         } else if (payload.type === "done") {
+          streamEnded = true;
           piChatProgressText.textContent = t("pi.done");
         }
       }
@@ -1762,25 +1767,29 @@ export async function sendPiChatMessage(message) {
         try {
           const payload = JSON.parse(trailing.slice(6));
           if (payload.type === "error") {
+            streamEnded = true;
             settlePendingAssistantBubble();
             failActiveTool(payload.message || t("msg.errorGeneric"));
             appendPiChatStatus(payload.message || t("msg.errorGeneric"));
           }
         } catch {
-          settlePendingAssistantBubble();
-          failActiveTool(t("pi.streamInterrupted"));
-          appendPiChatStatus(t("pi.streamInterrupted"));
+          if (!streamEnded) {
+            settlePendingAssistantBubble();
+            failActiveTool(t("pi.streamInterrupted"));
+            appendPiChatStatus(t("pi.streamInterrupted"));
+          }
         }
       }
     }
 
-    if (activeToolEl) {
-      failActiveTool(t("pi.streamInterrupted"));
-      appendPiChatStatus(t("pi.streamInterrupted"));
-    }
-    if (piChatProgressText.textContent === t("pi.processingShort") && !assistantStreamText) {
-      settlePendingAssistantBubble();
-      appendPiChatStatus(t("pi.streamInterrupted"));
+    if (!streamEnded) {
+      if (activeToolEl) {
+        failActiveTool(t("pi.streamInterrupted"));
+        appendPiChatStatus(t("pi.streamInterrupted"));
+      } else if (piChatProgressText.textContent === t("pi.processingShort") && !assistantStreamText) {
+        settlePendingAssistantBubble();
+        appendPiChatStatus(t("pi.streamInterrupted"));
+      }
     }
   } catch (error) {
     settlePendingAssistantBubble();
