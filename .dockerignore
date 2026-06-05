@@ -1,0 +1,9 @@
+.git
+.cursor
+__pycache__
+*.pyc
+*.pyo
+.env
+data/
+*.db
+.DS_Store
