@@ -91,7 +91,14 @@ const aiProgressFill = document.getElementById("ai-progress-fill");
 const aiProgressText = document.getElementById("ai-progress-text");
 const aiStatsEl = document.getElementById("ai-stats");
 const aiLeadsBody = document.getElementById("ai-leads-body");
+const aiLeadsStateEl = document.getElementById("ai-leads-state");
+const aiChannelsEl = document.getElementById("ai-channels");
 const importLeadsBtn = document.getElementById("import-leads-btn");
+const retryDiscoverBtn = document.getElementById("retry-discover-btn");
+const leadDetailModal = document.getElementById("lead-detail-modal");
+const leadDetailBody = document.getElementById("lead-detail-body");
+const leadDetailImport = document.getElementById("lead-detail-import");
+let detailLeadIndex = null;
 
 let allRows = [];
 let csvContent = "";
@@ -114,6 +121,17 @@ const FOLLOW_UP_STATUS_LABELS = {
 let schedules = [];
 let scheduleRuns = {};
 let aiLeads = [];
+const CHANNEL_DEFS = [
+  { key: "peeringdb", name: "PeeringDB" },
+  { key: "web_search", name: "搜索引擎" },
+  { key: "web_regex", name: "网页解析" },
+  { key: "llm_extract", name: "LLM 提取" },
+  { key: "arin", name: "ARIN RDAP" },
+  { key: "scoring", name: "LLM 评分" },
+];
+let channelState = {};
+let discoverController = null;
+let lastDiscoverQuery = "";
 let llmConfigured = false;
 let emailTemplates = [];
 let editingTemplateId = null;
@@ -882,6 +900,33 @@ function setInputValue(id, value) {
   if (el) el.value = value ?? "";
 }
 
+const SETTINGS_FORM_CATS = new Set(["account", "ai", "import", "automation"]);
+let activeSettingsCat = "account";
+
+function switchSettingsCat(cat) {
+  activeSettingsCat = cat;
+  document.querySelectorAll(".settings-rail-item").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.settingsCat === cat);
+  });
+  document.querySelectorAll(".settings-pane").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.settingsPane !== cat);
+  });
+  const footer = document.getElementById("settings-footer");
+  footer.classList.toggle("hidden", !SETTINGS_FORM_CATS.has(cat));
+}
+
+function updateSettingsRailDots(data) {
+  const aiDot = document.getElementById("rail-dot-ai");
+  const aiOn = Boolean(data.llm_api_key_configured);
+  aiDot.classList.toggle("on", aiOn);
+  aiDot.title = aiOn ? "LLM 已配置" : "LLM 未配置";
+
+  const autoDot = document.getElementById("rail-dot-automation");
+  const autoOn = data.scheduler_enabled === "1";
+  autoDot.classList.toggle("on", autoOn);
+  autoDot.title = autoOn ? "定时任务已启用" : "定时任务未启用";
+}
+
 async function loadSettingsForm() {
   const data = await api("/api/settings");
   setInputValue("setting-default-admin-user", data.default_admin_user);
@@ -904,6 +949,7 @@ async function loadSettingsForm() {
     el.placeholder = configured ? `已配置 ${masked}，留空则不修改` : "未配置";
   }
   settingsStatusEl.textContent = "";
+  updateSettingsRailDots(data);
 }
 
 async function saveSettings(event) {
@@ -1098,6 +1144,7 @@ function switchView(view) {
     pageTitle.textContent = "系统设置";
     pageSubtitle.textContent = "LLM、搜索引擎、定时任务等配置保存在数据库，Web 界面直接管理";
     loadSettingsForm().catch((error) => alert(error.message));
+    switchSettingsCat(activeSettingsCat);
     loadEmailTemplates().catch((error) => alert(error.message));
   } else if (view === "stats") {
     pageTitle.textContent = "统计概览";
@@ -1133,8 +1180,47 @@ function updateAiLeadsStats() {
   importLeadsBtn.disabled = selected === 0;
 }
 
+function hideLeadsState() {
+  aiLeadsStateEl.classList.add("hidden");
+  aiLeadsStateEl.innerHTML = "";
+}
+
+function showLeadsState(html, isError = false) {
+  aiLeadsStateEl.className = `leads-state${isError ? " error" : ""}`;
+  aiLeadsStateEl.innerHTML = html;
+}
+
+function showLeadsError(message) {
+  showLeadsState(`<p>线索发现出错：${escapeHtml(message)}</p>`, true);
+  retryDiscoverBtn.classList.remove("hidden");
+}
+
+function showLeadsEmpty() {
+  showLeadsState(
+    `<p>没有找到符合条件的线索。</p>
+     <p class="hint">建议：调低「最低匹配分」，或用更宽泛的关键词描述目标客户。</p>`
+  );
+  retryDiscoverBtn.classList.remove("hidden");
+}
+
+function showLeadsNeedLlm() {
+  showLeadsState(
+    `<p>AI 线索发现需要先配置 LLM。</p>
+     <p class="hint">前往「系统设置 → AI 与搜索」填写 API Key。</p>
+     <button type="button" class="primary-btn" id="leads-state-goto-settings">去系统设置</button>`
+  );
+  const btn = document.getElementById("leads-state-goto-settings");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      switchView("settings");
+      switchSettingsCat("ai");
+    });
+  }
+}
+
 function renderAiLeads() {
   aiLeadsBody.innerHTML = "";
+  if (aiLeads.length > 0) hideLeadsState();
 
   if (aiLeads.length === 0) {
     const tr = document.createElement("tr");
@@ -1158,7 +1244,10 @@ function renderAiLeads() {
       <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email)}</a></td>
       <td>${roles || "—"}</td>
       <td class="mono">${lead.asn ? `AS${lead.asn}` : "—"}</td>
-      <td>${escapeHtml(lead.lead_reason || lead.source_detail || "—")}</td>
+      <td>
+        ${escapeHtml(lead.lead_reason || lead.source_detail || "—")}
+        <button type="button" class="link-btn lead-detail-btn" data-index="${index}">详情</button>
+      </td>
     `;
     aiLeadsBody.appendChild(tr);
   }
@@ -1175,6 +1264,36 @@ function formatSource(lead) {
     "ai-lead": "AI",
   };
   return map[source] || source;
+}
+
+function openLeadDetail(index) {
+  const lead = aiLeads[index];
+  if (!lead) return;
+  detailLeadIndex = index;
+  const roles = (lead.roles || []).map((r) => `<span class="role-tag">${escapeHtml(r)}</span>`).join(" ") || "—";
+  const rows = [
+    ["组织", escapeHtml(lead.org || lead.network_name || "—"), false],
+    ["邮箱", `<a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a>`, true],
+    ["ASN", lead.asn ? `AS${lead.asn}` : "—", true],
+    ["Role", roles, false],
+    ["来源", escapeHtml(formatSource(lead)), false],
+    ["来源详情", escapeHtml(lead.source_detail || "—"), false],
+    ["网络名", escapeHtml(lead.network_name || "—"), false],
+    ["匹配关键词", escapeHtml(lead.matched_keyword || "—"), true],
+    ["AI 评分", `<span class="score-badge">${lead.lead_score || 0}</span>`, false],
+    ["AI 理由", escapeHtml(lead.lead_reason || "—"), false],
+  ];
+  leadDetailBody.innerHTML = rows
+    .map(([k, v, mono]) => `<div class="lead-detail-row"><span class="k">${k}</span><span class="v${mono ? " mono" : ""}">${v}</span></div>`)
+    .join("");
+  ensureLeadSelected(lead);
+  leadDetailImport.checked = lead._selected !== false;
+  leadDetailModal.classList.remove("hidden");
+}
+
+function closeLeadDetail() {
+  detailLeadIndex = null;
+  leadDetailModal.classList.add("hidden");
 }
 
 function renderAiPlan(plan) {
@@ -1197,6 +1316,36 @@ function renderAiSources(channels) {
   `;
 }
 
+function resetChannelPanel() {
+  channelState = {};
+  for (const def of CHANNEL_DEFS) {
+    channelState[def.key] = { state: "idle", count: "", preview: "" };
+  }
+  renderChannelPanel();
+}
+
+function setChannel(key, patch) {
+  if (!channelState[key]) channelState[key] = { state: "idle", count: "", preview: "" };
+  Object.assign(channelState[key], patch);
+  renderChannelPanel();
+}
+
+const CHANNEL_ICON = { idle: "·", active: "◐", done: "✓", failed: "×" };
+
+function renderChannelPanel() {
+  aiChannelsEl.classList.remove("hidden");
+  aiChannelsEl.innerHTML = CHANNEL_DEFS.map((def) => {
+    const s = channelState[def.key] || { state: "idle", count: "", preview: "" };
+    return `
+      <div class="ai-channel-row state-${s.state}">
+        <span class="ai-channel-icon">${CHANNEL_ICON[s.state]}</span>
+        <span class="ai-channel-name">${escapeHtml(def.name)}</span>
+        <span class="ai-channel-count">${escapeHtml(String(s.count ?? ""))}</span>
+        <span class="ai-channel-preview" title="${escapeHtml(s.preview || "")}">${escapeHtml(s.preview || "")}</span>
+      </div>`;
+  }).join("");
+}
+
 async function loadLlmStatus() {
   try {
     const config = await fetch("/api/config").then((response) => response.json());
@@ -1207,10 +1356,12 @@ async function loadLlmStatus() {
       const web = (config.search_channels?.web_search || []).join(", ") || "duckduckgo";
       llmStatusEl.textContent = `LLM 已配置（${config.llm_model || "default"}）· 搜索渠道：${web} + PeeringDB + ARIN`;
       discoverBtn.disabled = false;
+      hideLeadsState();
     } else {
       llmStatusEl.className = "llm-status warn";
       llmStatusEl.textContent = "LLM 未配置：请在「系统设置」填写 API Key。搜索引擎默认 DuckDuckGo";
       discoverBtn.disabled = true;
+      showLeadsNeedLlm();
     }
   } catch {
     llmStatusEl.className = "llm-status warn";
@@ -1219,7 +1370,24 @@ async function loadLlmStatus() {
   }
 }
 
+function setDiscoverRunning(running) {
+  if (running) {
+    discoverBtn.textContent = "取消";
+    discoverBtn.classList.add("danger-btn");
+    discoverBtn.disabled = false;
+    retryDiscoverBtn.classList.add("hidden");
+  } else {
+    discoverBtn.textContent = "AI 开始找线索";
+    discoverBtn.classList.remove("danger-btn");
+    discoverBtn.disabled = !llmConfigured;
+  }
+}
+
 async function runLeadDiscovery() {
+  if (discoverController) {
+    discoverController.abort();
+    return;
+  }
   const query = leadQueryInput.value.trim();
   if (!query) {
     alert("请先描述你要找的销售线索");
@@ -1234,10 +1402,15 @@ async function runLeadDiscovery() {
   renderAiLeads();
   aiPlanEl.classList.add("hidden");
   aiSourcesEl.classList.add("hidden");
+  resetChannelPanel();
+  hideLeadsState();
   aiProgressEl.classList.remove("hidden");
   aiProgressFill.style.width = "0%";
   aiProgressText.textContent = "AI 正在分析需求…";
-  discoverBtn.disabled = true;
+  lastDiscoverQuery = query;
+  discoverController = new AbortController();
+  setDiscoverRunning(true);
+  retryDiscoverBtn.classList.add("hidden");
   importLeadsBtn.disabled = true;
 
   try {
@@ -1245,6 +1418,7 @@ async function runLeadDiscovery() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
+      signal: discoverController.signal,
       body: JSON.stringify({
         query,
         min_score: Number(minScoreInput.value) || 60,
@@ -1284,23 +1458,34 @@ async function runLeadDiscovery() {
           aiProgressText.textContent = payload.message;
         }
 
+        if (payload.type === "status" && /评估|评分/.test(payload.message || "")) {
+          setChannel("scoring", { state: "active" });
+        }
+
+        if (payload.type === "status" && /提取部分失败/.test(payload.message || "")) {
+          setChannel("llm_extract", { state: "failed", preview: payload.message });
+        }
+
         if (payload.type === "plan") {
           renderAiPlan(payload.plan);
           renderAiSources(payload.plan.channels);
         }
 
         if (payload.type === "source_result") {
+          const preview = (payload.preview || []).join(" · ");
+          setChannel(payload.source, { state: "done", count: payload.count, preview });
           aiProgressText.textContent = `${payload.source} 返回 ${payload.count} 条`;
-        }
-
-        if (payload.type === "networks") {
-          aiProgressText.textContent = `找到 ${payload.total} 个候选网络，开始查询 ARIN…`;
         }
 
         if (payload.type === "progress") {
           const percent = Math.round((payload.index / payload.total) * 100);
           aiProgressFill.style.width = `${percent}%`;
           aiProgressText.textContent = `${payload.message}（${payload.index}/${payload.total}）`;
+          setChannel("arin", {
+            state: payload.index >= payload.total ? "done" : "active",
+            count: `${payload.index}/${payload.total}`,
+            preview: payload.network || `AS${payload.asn}`,
+          });
         }
 
         if (payload.type === "lead") {
@@ -1316,6 +1501,7 @@ async function runLeadDiscovery() {
         if (payload.type === "done") {
           aiProgressFill.style.width = "100%";
           aiProgressText.textContent = payload.message || "完成";
+          setChannel("scoring", { state: "done", count: (payload.leads || aiLeads).length });
           if (payload.leads) {
             aiLeads = payload.leads.map((lead) => {
               ensureLeadSelected(lead);
@@ -1327,14 +1513,26 @@ async function runLeadDiscovery() {
             alert(formatImportResult(payload.import));
             await loadContacts();
           }
+          if ((payload.leads || aiLeads).length === 0) {
+            showLeadsEmpty();
+          }
         }
       }
     }
   } catch (error) {
-    alert(error.message || "AI 线索发现失败");
-    aiProgressText.textContent = "失败";
+    if (error.name === "AbortError") {
+      aiProgressText.textContent = "已取消";
+    } else {
+      aiProgressText.textContent = "失败";
+      if (typeof showLeadsError === "function") {
+        showLeadsError(error.message || "AI 线索发现失败");
+      } else {
+        alert(error.message || "AI 线索发现失败");
+      }
+    }
   } finally {
-    discoverBtn.disabled = !llmConfigured;
+    discoverController = null;
+    setDiscoverRunning(false);
   }
 }
 
@@ -1385,6 +1583,12 @@ lookupBtn.addEventListener("click", runLookup);
 exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
+retryDiscoverBtn.addEventListener("click", () => {
+  if (lastDiscoverQuery) {
+    leadQueryInput.value = lastDiscoverQuery;
+  }
+  runLeadDiscovery();
+});
 importLeadsBtn.addEventListener("click", importAiLeads);
 roleFilter.addEventListener("change", renderRows);
 contactStatusFilter.addEventListener("change", () => loadContacts(true).catch((error) => alert(error.message)));
@@ -1512,6 +1716,10 @@ tabs.forEach((tab) => {
   tab.addEventListener("click", () => switchView(tab.dataset.view));
 });
 
+document.querySelectorAll(".settings-rail-item").forEach((btn) => {
+  btn.addEventListener("click", () => switchSettingsCat(btn.dataset.settingsCat));
+});
+
 contactNoteForm.addEventListener("submit", (event) => {
   addContactNote(event).catch((error) => alert(error.message));
 });
@@ -1576,6 +1784,34 @@ schedulesBody.addEventListener("click", (event) => {
   if (deleteBtn) {
     deleteSchedule(deleteBtn.dataset.id).catch((error) => alert(error.message));
   }
+});
+
+aiLeadsBody.addEventListener("click", (event) => {
+  const btn = event.target.closest(".lead-detail-btn");
+  if (btn) openLeadDetail(Number(btn.dataset.index));
+});
+
+aiLeadsBody.addEventListener("change", (event) => {
+  const check = event.target.closest(".row-import-check");
+  if (!check || check.dataset.kind !== "ai") return;
+  const lead = aiLeads[Number(check.dataset.index)];
+  if (lead) lead._selected = check.checked;
+  updateAiLeadsStats();
+});
+
+leadDetailModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-detail]")) closeLeadDetail();
+});
+
+leadDetailImport.addEventListener("change", () => {
+  if (detailLeadIndex === null) return;
+  const lead = aiLeads[detailLeadIndex];
+  if (lead) lead._selected = leadDetailImport.checked;
+  renderAiLeads();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !leadDetailModal.classList.contains("hidden")) closeLeadDetail();
 });
 
 bootstrap();
