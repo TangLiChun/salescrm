@@ -3,6 +3,7 @@ import * as dom from "./core/dom.js";
 import { state } from "./core/state.js";
 import { api, errorMessage } from "./core/utils.js";
 import { showApiError, showApiSuccess } from "./core/api-feedback.js";
+import { registerDeps } from "./core/deps.js";
 import { handleModalKeydown } from "./core/modal.js";
 import {
   startJobEventStream,
