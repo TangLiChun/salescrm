@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-05T00:00:00Z",
+  "title": "Design System: Sales CRM",
+  "extensions": {
+    "colorMeta": {
+      "petrol": {
+        "role": "primary",
+        "displayName": "Petrol",
+        "canonical": "oklch(0.48 0.088 222)",
+        "tonalRamp": ["oklch(0.18 0.05 222)", "oklch(0.27 0.07 222)", "oklch(0.36 0.085 222)", "oklch(0.48 0.088 222)", "oklch(0.60 0.08 222)", "oklch(0.72 0.06 222)", "oklch(0.85 0.035 222)", "oklch(0.95 0.02 222)"]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "oklch(0.972 0.006 88)",
+        "tonalRamp": ["oklch(0.20 0.008 88)", "oklch(0.32 0.008 88)", "oklch(0.45 0.008 88)", "oklch(0.58 0.007 88)", "oklch(0.72 0.007 88)", "oklch(0.85 0.006 88)", "oklch(0.93 0.006 88)", "oklch(0.972 0.006 88)"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "canonical": "oklch(0.993 0.004 88)",
+        "tonalRamp": ["oklch(0.22 0.006 88)", "oklch(0.34 0.006 88)", "oklch(0.47 0.006 88)", "oklch(0.60 0.005 88)", "oklch(0.74 0.005 88)", "oklch(0.87 0.004 88)", "oklch(0.95 0.004 88)", "oklch(0.993 0.004 88)"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Cool Ink",
+        "canonical": "oklch(0.28 0.022 256)",
+        "tonalRamp": ["oklch(0.20 0.025 256)", "oklch(0.28 0.022 256)", "oklch(0.40 0.02 256)", "oklch(0.49 0.016 256)", "oklch(0.62 0.012 256)", "oklch(0.75 0.01 256)", "oklch(0.86 0.008 256)", "oklch(0.95 0.006 256)"]
+      },
+      "positive": {
+        "role": "tertiary",
+        "displayName": "Moss",
+        "canonical": "oklch(0.50 0.075 155)",
+        "tonalRamp": ["oklch(0.20 0.04 155)", "oklch(0.30 0.055 155)", "oklch(0.40 0.07 155)", "oklch(0.50 0.075 155)", "oklch(0.62 0.07 155)", "oklch(0.74 0.055 155)", "oklch(0.86 0.035 155)", "oklch(0.95 0.02 155)"]
+      },
+      "caution": {
+        "role": "tertiary",
+        "displayName": "Ochre",
+        "canonical": "oklch(0.60 0.09 72)",
+        "tonalRamp": ["oklch(0.22 0.05 72)", "oklch(0.33 0.07 72)", "oklch(0.45 0.085 72)", "oklch(0.60 0.09 72)", "oklch(0.70 0.08 72)", "oklch(0.80 0.06 72)", "oklch(0.89 0.045 72)", "oklch(0.95 0.03 72)"]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Clay",
+        "canonical": "oklch(0.53 0.135 28)",
+        "tonalRamp": ["oklch(0.22 0.08 28)", "oklch(0.32 0.10 28)", "oklch(0.43 0.125 28)", "oklch(0.53 0.135 28)", "oklch(0.64 0.12 28)", "oklch(0.75 0.09 28)", "oklch(0.86 0.055 28)", "oklch(0.95 0.035 28)"]
+      }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "Page title in the header. One per view." },
+      "title": { "displayName": "Title", "purpose": "Panel and section headings." },
+      "body": { "displayName": "Body", "purpose": "Default text and form values; prose caps at 65-75ch." },
+      "label": { "displayName": "Engraved Label", "purpose": "Uppercase letter-spaced monospace for kickers, table headers, chart titles." },
+      "data": { "displayName": "Machine Data", "purpose": "Tabular monospace for ASN, email, handle, timestamp, score, count." }
+    },
+    "shadows": [
+      { "name": "resting-lift", "value": "0 1px 2px oklch(0.28 0.03 256 / 0.06), 0 1px 1px oklch(0.28 0.03 256 / 0.04)", "purpose": "Near-invisible lift on panels and the active tab chip." },
+      { "name": "overlay-pop", "value": "0 20px 44px -14px oklch(0.26 0.05 256 / 0.30), 0 4px 12px -6px oklch(0.26 0.05 256 / 0.14)", "purpose": "Modals only; the one place real elevation is allowed." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Default easing for all state transitions; exponential ease-out, no bounce." },
+      { "name": "duration-default", "value": "150ms", "purpose": "Standard transition duration for hover, focus, and reveal." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "900px", "purpose": "Two-column lookup layout collapses to one column; toolbars stack." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single loud action per context (run lookup, save settings, start discovery).",
+      "html": "<button class=\"ds-btn-primary\">开始查询</button>",
+      "css": ".ds-btn-primary { background: var(--accent); color: var(--on-accent); border: 1px solid transparent; border-radius: var(--r-sm); padding: 12px 16px; font: 600 0.8125rem/1.2 var(--sans); cursor: pointer; transition: background 150ms cubic-bezier(0.22,1,0.36,1), transform 150ms cubic-bezier(0.22,1,0.36,1); } .ds-btn-primary:hover { background: var(--accent-strong); } .ds-btn-primary:active { transform: translateY(0.5px); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Quiet utility actions (refresh, export, logout). A ghost with a hairline border.",
+      "html": "<button class=\"ds-btn-secondary\">导出 CSV</button>",
+      "css": ".ds-btn-secondary { background: var(--surface); color: var(--ink-soft); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 12px 16px; font: 600 0.8125rem/1.2 var(--sans); cursor: pointer; transition: background 150ms, border-color 150ms, color 150ms; } .ds-btn-secondary:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--ink-faint); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Success Button",
+      "kind": "button",
+      "refersTo": "button-success",
+      "description": "Reserved for committing imported data (import selected contacts / leads).",
+      "html": "<button class=\"ds-btn-success\">导入选中联系人</button>",
+      "css": ".ds-btn-success { background: var(--positive); color: var(--on-accent); border: 1px solid transparent; border-radius: var(--r-sm); padding: 12px 16px; font: 600 0.8125rem/1.2 var(--sans); cursor: pointer; transition: background 150ms; } .ds-btn-success:hover { background: var(--positive-ink); } .ds-btn-success:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Segmented Tabs",
+      "kind": "nav",
+      "refersTo": "tab-active",
+      "description": "Primary view navigation as a single inset toolbar; the active tab is a raised chip.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab ds-tab-active\">ASN 查询</button><button class=\"ds-tab\">AI 线索发现</button><button class=\"ds-tab\">联系人列表</button></nav>",
+      "css": ".ds-tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-sunk); border: 1px solid var(--line); border-radius: var(--r-md); } .ds-tab { background: transparent; color: var(--ink-soft); border: 0; border-radius: var(--r-sm); padding: 8px 16px; font: 550 0.8125rem var(--sans); cursor: pointer; transition: background 150ms, color 150ms; } .ds-tab:hover { background: var(--surface-hover); color: var(--ink); } .ds-tab-active { background: var(--surface); color: var(--accent-ink); box-shadow: 0 1px 2px oklch(0.28 0.03 256 / 0.06); } .ds-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }"
+    },
+    {
+      "name": "Role Chip",
+      "kind": "chip",
+      "refersTo": "chip-role",
+      "description": "A machine-token tag (abuse, technical, noc); monospace, petrol-tinted.",
+      "html": "<span class=\"ds-chip-role\">technical</span>",
+      "css": ".ds-chip-role { display: inline-block; padding: 1px 8px; border-radius: var(--r-xs); background: var(--accent-tint); border: 1px solid var(--accent-line); color: var(--accent-ink); font: 500 0.75rem var(--mono); }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "chip-role",
+      "description": "Follow-up / send status with a leading dot, so status is never carried by color alone.",
+      "html": "<span class=\"ds-badge\"><span class=\"ds-badge-dot\"></span>有意向</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--positive-tint); color: var(--positive-ink); border: 1px solid oklch(0.86 0.05 155); font: 600 0.75rem var(--sans); } .ds-badge-dot { width: 5px; height: 5px; border-radius: 999px; background: currentColor; opacity: 0.85; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Search and form field; surface fill, hairline stroke, petrol focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"组织 / 姓名 / 邮箱\">",
+      "css": ".ds-input { background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 8px 12px; font: 0.875rem var(--sans); transition: border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color: var(--ink-faint); } .ds-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint-2); }"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "The base container: warm surface, 12px corners, defined by a hairline not a shadow.",
+      "html": "<section class=\"ds-panel\"><h2 class=\"ds-panel-title\">查询结果</h2><p class=\"ds-panel-sub\">3 个 ASN · 2 条邮箱 · 1 条异常</p></section>",
+      "css": ".ds-panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 1px 2px oklch(0.28 0.03 256 / 0.06); padding: 20px; } .ds-panel-title { margin: 0 0 4px; font: 650 1.125rem var(--sans); letter-spacing: -0.01em; color: var(--ink); } .ds-panel-sub { margin: 0; font: 0.8125rem var(--sans); color: var(--ink-muted); }"
+    },
+    {
+      "name": "Readout Strip",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "Signature stats display: one bordered bar divided by hairlines, large monospace tabular numbers. The antidote to the hero-metric dashboard.",
+      "html": "<div class=\"ds-readout\"><div class=\"ds-readout-cell\"><strong>128</strong><span>联系人总数</span></div><div class=\"ds-readout-cell\"><strong>41</strong><span>已发邮件</span></div><div class=\"ds-readout-cell\"><strong>23</strong><span>有意向</span></div></div>",
+      "css": ".ds-readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; } .ds-readout-cell { background: var(--surface); padding: 16px 20px; } .ds-readout-cell strong { display: block; font: 600 1.75rem var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--ink); } .ds-readout-cell span { display: block; margin-top: 4px; font: 0.75rem var(--sans); color: var(--ink-muted); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Field Instrument",
+    "overview": "The interface of a precision instrument resting on engineering paper. The operator works network-infrastructure contacts (ASNs, ARIN role emails, peering desks), reading dense tables in daylight for long stretches. The system makes that reading exact and trustworthy: calm, engineered, an instrument and not a toy. Two tensions carry the look: warm paper surfaces against cool blue-grey ink, and human prose in a humanist sans against machine data in tabular monospace. It explicitly rejects the generic blue-and-white B2B SaaS template; if a stranger could guess the palette from the category alone, the design has failed.",
+    "keyCharacteristics": [
+      "Warm paper surfaces, cool ink text, one committed petrol accent.",
+      "Machine data in tabular monospace; human language in a humanist sans.",
+      "Hairline borders over shadows. Flat at rest, dense by intent.",
+      "A restrained, low-chroma status palette where every color maps to a real state.",
+      "Honest interaction states everywhere: hover, focus, disabled, empty, error."
+    ],
+    "rules": [
+      { "name": "The One Petrol Rule", "body": "There is exactly one accent hue. Petrol marks what is actionable or active and nothing else. If two accents appear on a screen, one is wrong.", "section": "colors" },
+      { "name": "The Warm-and-Cool Rule", "body": "Surfaces are tinted warm (hue ~88), ink is tinted cool (hue ~256). This tension is load-bearing. Never flatten both to a neutral grey, and never invert it.", "section": "colors" },
+      { "name": "The No-Pure Rule", "body": "Never #fff and never #000. Every neutral is tinted toward paper or ink.", "section": "colors" },
+      { "name": "The Machine-Data-Is-Monospace Rule", "body": "Any value a machine produced (ASN, email, handle, ID, timestamp, count, score) is monospace with tabular figures. Any value a human wrote is sans. This is how the operator trusts the columns.", "section": "typography" },
+      { "name": "The Engraved-Label Rule", "body": "Structural labels (kickers, table headers, chart titles) are small, uppercase, letter-spaced monospace, like markings stamped into an instrument panel.", "section": "typography" },
+      { "name": "The Hairline-First Rule", "body": "Reach for a 1px line before a shadow. If a box needs definition, give it a border. Only two shadows exist.", "section": "elevation" },
+      { "name": "The Flat-2014-Test", "body": "If a card looks like a 2014 app, the shadow is too dark and the radius too round. Pull the shadow toward zero and the corner toward 6-12px.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep exactly one accent: petrol oklch(0.48 0.088 222) for actions, links, active state, focus.",
+      "Do set every machine identifier (ASN, email, handle, timestamp, score, count) in tabular monospace.",
+      "Do define surfaces with 1px warm hairlines; reach for a border before a shadow.",
+      "Do tint every neutral, warm for surfaces (hue ~88), cool for ink (hue ~256).",
+      "Do pair every status color with a dot or text label, so status never relies on color alone.",
+      "Do give each interactive element honest hover, focus, disabled, empty, and error states.",
+      "Do keep the status palette low-chroma and semantic: moss = positive, ochre = pending, clay = danger."
+    ],
+    "donts": [
+      "Don't introduce stock Tailwind blue (#2563eb) or any second accent. The category reflex is blue; refuse it.",
+      "Don't use pure-white floating cards, soft drop-shadow haze, or pastel badge soup.",
+      "Don't build a hero-metric dashboard. Use the Readout Strip instead.",
+      "Don't use #fff or #000; every neutral is tinted toward paper or ink.",
+      "Don't add consumer-playful gradients, gradient text, or decorative glassmorphism.",
+      "Don't color non-destructive actions red; only true deletions are clay-red.",
+      "Don't nest cards, round corners past 12px, or let any interface read as 'AI made this dashboard.'"
+    ]
+  }
+}
