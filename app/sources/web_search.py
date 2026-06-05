@@ -60,10 +60,10 @@ def brightdata_serp_configured() -> bool:
 
 def available_backends() -> list[str]:
     backends: list[str] = []
-    if zhipu_search_configured():
-        backends.append("zhipu")
     if brightdata_serp_configured():
         backends.append("brightdata")
+    if zhipu_search_configured():
+        backends.append("zhipu")
     if get_setting("tavily_api_key", "").strip():
         backends.append("tavily")
     if get_setting("serpapi_key", "").strip():
