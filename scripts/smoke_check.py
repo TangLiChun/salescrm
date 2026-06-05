@@ -6,8 +6,8 @@ from __future__ import annotations
 import os
 import sys
 
+from app.auth import authenticate_user
 from app.database import (
-    authenticate_user,
     check_db,
     check_schema,
     get_contact_stats,
