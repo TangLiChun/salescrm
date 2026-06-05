@@ -97,6 +97,10 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Sales CRM — ASN RDAP Lookup", lifespan=lifespan)
+
+# Session middleware reads app_settings — tables must exist before import-time setup.
+init_db()
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret(),
