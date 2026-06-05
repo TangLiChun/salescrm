@@ -1518,12 +1518,16 @@ async def agent_chat_stream(
     *,
     thread_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    yield {"type": "status", "message": "Pi 助手思考中…"}
+
     thread: dict[str, Any] | None = None
     if thread_id:
         loaded = get_pi_thread(user_id, thread_id)
         if loaded:
             history = loaded.get("history") or []
             had_summary = bool((loaded.get("context_summary") or "").strip())
+            if len(history) > 24:
+                yield {"type": "status", "message": "整理对话上下文…"}
             thread = await asyncio.to_thread(
                 compress_thread_context_until_current,
                 user_id,
@@ -1543,11 +1547,13 @@ async def agent_chat_stream(
     messages.extend(history)
     messages.append({"role": "user", "content": message.strip()})
 
-    yield {"type": "status", "message": "Pi 助手思考中…"}
-
     for round_index in range(MAX_TOOL_ROUNDS):
+        if round_index > 0:
+            yield {"type": "status", "message": "正在整理工具结果…"}
+
         assistant: dict[str, Any] | None = None
         content_buffer = ""
+        streamed_reply = False
 
         async for event in _iter_llm_stream(messages, AGENT_TOOLS):
             event_type = event.get("type")
@@ -1558,6 +1564,10 @@ async def agent_chat_stream(
                 piece = str(event.get("text") or "")
                 if piece:
                     content_buffer += piece
+                    if not streamed_reply:
+                        streamed_reply = True
+                        yield {"type": "assistant_start"}
+                    yield {"type": "assistant_delta", "text": piece}
             elif event_type == "message":
                 assistant = event.get("message")
 
@@ -1576,8 +1586,9 @@ async def agent_chat_stream(
                 assistant = {**assistant, "tool_calls": tool_calls, "content": intro or None}
 
         if content and not tool_calls:
-            yield {"type": "assistant_start"}
-            yield {"type": "assistant_delta", "text": content}
+            if not streamed_reply:
+                yield {"type": "assistant_start"}
+                yield {"type": "assistant_delta", "text": content}
             yield {"type": "assistant_done", "text": content}
             yield {"type": "done"}
             return
@@ -1599,9 +1610,11 @@ async def agent_chat_stream(
 
         intro = _assistant_intro_before_tools(content)
         if intro:
-            yield {"type": "assistant_start"}
-            yield {"type": "assistant_delta", "text": intro}
+            if not streamed_reply:
+                yield {"type": "assistant_start"}
             yield {"type": "assistant_done", "text": intro}
+        elif streamed_reply:
+            yield {"type": "assistant_done", "text": content_buffer.strip()}
 
         executed_calls = [tool_call for tool_call, _, _ in prepared_calls]
         messages.append(
@@ -1613,6 +1626,7 @@ async def agent_chat_stream(
         )
 
         for tool_call, name, args in prepared_calls:
+            yield {"type": "tool_start", "name": name, "args": args}
 
             event_queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
             emitter = ToolEmitter(event_queue)

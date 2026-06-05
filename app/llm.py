@@ -118,8 +118,7 @@ def chat_completion_with_tools_stream(
                 piece = delta.get("content")
                 if piece:
                     content_parts.append(piece)
-                    if not tools:
-                        yield {"type": "content_delta", "text": piece}
+                    yield {"type": "content_delta", "text": piece}
 
                 reasoning_piece = delta.get("reasoning_content")
                 if reasoning_piece:
