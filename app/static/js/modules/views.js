@@ -12,6 +12,7 @@ import { renderAiLeads, updateAiLeadsStats, loadLlmStatus } from "./leads.js";
 import { updatePiAgentStatus, updatePiChatHistoryHint, refreshPiAgentChrome, setPiMobilePanel } from "./pi.js";
 import { renderSchedules } from "./schedules.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
+import { showApiError } from "../core/toast.js";
 
 const { tabs, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
 
@@ -57,18 +58,18 @@ export function switchView(view) {
     updatePiAgentStatus();
   } else if (view === "schedules") {
     pageTitle.textContent = t("page.schedules.title");
-    loadSchedules().catch((error) => alert(error.message));
+    loadSchedules().catch(showApiError);
     startSchedulesAutoRefresh();
   } else if (view === "settings") {
     switchSettingsCat(state.activeSettingsCat);
-    loadSettingsForm().catch((error) => alert(error.message));
-    loadEmailTemplates().catch((error) => alert(error.message));
+    loadSettingsForm().catch(showApiError);
+    loadEmailTemplates().catch(showApiError);
   } else if (view === "stats") {
     pageTitle.textContent = t("page.stats.title");
-    loadStats().catch((error) => alert(error.message));
+    loadStats().catch(showApiError);
   } else {
     pageTitle.textContent = t("page.contacts.title");
-    loadContacts().catch((error) => alert(error.message));
+    loadContacts().catch(showApiError);
     loadEmailTemplates().catch(() => {});
   }
   if (view !== "schedules") {

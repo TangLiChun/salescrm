@@ -242,7 +242,7 @@ code {
     background var(--dur) var(--ease),
     color var(--dur) var(--ease),
     border-color var(--dur) var(--ease),
-    transform var(--dur-slow) var(--ease-spring);
+    transform var(--dur-slow) var(--ease);
 }
 
 .app-nav .nav-item:hover:not(.active) {
@@ -274,7 +274,7 @@ code {
   color: var(--ink-muted);
   flex-shrink: 0;
   transition:
-    transform var(--dur-slow) var(--ease-spring),
+    transform var(--dur-slow) var(--ease),
     background var(--dur) var(--ease),
     border-color var(--dur) var(--ease),
     color var(--dur) var(--ease);
@@ -788,7 +788,7 @@ input[type="search"] {
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
-::placeholder { color: var(--ink-faint); }
+::placeholder { color: var(--ink-muted); }
 
 textarea:focus,
 input:focus,
@@ -947,11 +947,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 #progress-fill,
 #ai-progress-fill,
 #pi-chat-progress-fill {
-  width: 0;
+  width: 100%;
   height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
   background: linear-gradient(90deg, var(--accent), oklch(0.52 0.09 200));
   border-radius: var(--r-pill);
-  transition: width 0.35s var(--ease);
+  transition: transform 0.35s var(--ease);
 }
 
 #progress-text,
@@ -1095,12 +1097,12 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   font-weight: 650;
   text-transform: uppercase;
   text-decoration: none;
-  color: var(--text-muted, #64748b);
-  background: color-mix(in srgb, var(--border, #e2e8f0) 70%, transparent);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--line) 70%, transparent);
 }
 
 .contact-social-links .social-link:hover {
-  color: var(--accent, #2563eb);
+  color: var(--accent);
 }
 
 .contacts-table .col-email {
@@ -2362,8 +2364,10 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .pi-thread-delete {
   flex: 0 0 auto;
   align-self: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2.75rem;
+  height: 2.75rem;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   border: 0;
   border-radius: var(--r-sm);
@@ -2763,10 +2767,12 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .pi-chat-rdap-fill {
   height: 100%;
-  width: 0%;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--accent), var(--positive));
-  transition: width 0.35s ease;
+  transition: transform 0.35s var(--ease);
 }
 
 .pi-chat-rdap-text {
@@ -3475,6 +3481,14 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
   .lead-prefs-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .contacts-table .col-org,
+  .contacts-table .col-asn,
+  .contacts-table .col-source,
+  .contacts-table .col-notes,
+  .contacts-table .col-imported {
+    display: none;
   }
 }
 

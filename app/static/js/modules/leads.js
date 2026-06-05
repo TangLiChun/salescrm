@@ -3,7 +3,9 @@ import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { CHANNEL_DEFS } from "../core/state.js";
 import { api, escapeHtml, errorMessage, formatImportResult, normalizeImportRows } from "../core/utils.js";
-import { notifyInfo } from "../core/toast.js";
+import { notifyError, notifyInfo, showApiError, showApiSuccess } from "../core/toast.js";
+import { closeModal, openModal } from "../core/modal.js";
+import { resetProgressFill, setProgressFill } from "../core/progress.js";
 import { deps } from "../core/deps.js";
 import { trackBackgroundJob } from "../jobs/index.js";
 
@@ -149,12 +151,12 @@ export function openLeadDetail(index) {
     .join("");
   ensureLeadSelected(lead);
   leadDetailImport.checked = lead._selected !== false;
-  leadDetailModal.classList.remove("hidden");
+  openModal(leadDetailModal, { initialFocus: "[data-close-detail]" });
 }
 
 export function closeLeadDetail() {
   state.detailLeadIndex = null;
-  leadDetailModal.classList.add("hidden");
+  closeModal(leadDetailModal);
 }
 
 export function resetChannelPanel() {
@@ -234,11 +236,11 @@ export async function runLeadDiscovery() {
   }
   const query = leadQueryInput.value.trim();
   if (!query) {
-    alert(t("msg.describeLeads"));
+    notifyInfo(t("msg.describeLeads"));
     return;
   }
   if (!state.llmConfigured) {
-    alert(t("msg.llmNotConfiguredLeads"));
+    notifyError(t("msg.llmNotConfiguredLeads"));
     return;
   }
 
@@ -256,7 +258,7 @@ export async function runLeadDiscovery() {
       trackBackgroundJob(data.job);
       notifyInfo(t("msg.jobStartedBackground"));
     } catch (error) {
-      alert(errorMessage(error, t("msg.leadsError", { message: error.message })));
+      showApiError(error, t("msg.leadsError", { message: error.message }));
     }
     return;
   }
@@ -266,7 +268,7 @@ export async function runLeadDiscovery() {
   resetChannelPanel();
   hideLeadsState();
   aiProgressEl.classList.remove("hidden");
-  aiProgressFill.style.width = "0%";
+  resetProgressFill(aiProgressFill);
   aiProgressText.textContent = t("msg.aiAnalyzing");
   state.lastDiscoverQuery = query;
   state.discoverController = new AbortController();
@@ -335,7 +337,7 @@ export async function runLeadDiscovery() {
 
         if (payload.type === "progress") {
           const percent = Math.round((payload.index / payload.total) * 100);
-          aiProgressFill.style.width = `${percent}%`;
+          setProgressFill(aiProgressFill, percent);
           aiProgressText.textContent = `${payload.message}（${payload.index}/${payload.total}）`;
           setChannel("arin", {
             state: payload.index >= payload.total ? "done" : "active",
@@ -355,7 +357,7 @@ export async function runLeadDiscovery() {
         }
 
         if (payload.type === "done") {
-          aiProgressFill.style.width = "100%";
+          setProgressFill(aiProgressFill, 100);
           aiProgressText.textContent = payload.message || t("msg.discoverComplete");
           setChannel("scoring", { state: "done", count: (payload.leads || state.aiLeads).length });
           if (payload.leads) {
@@ -366,7 +368,7 @@ export async function runLeadDiscovery() {
             renderAiLeads();
           }
           if (payload.import) {
-            alert(formatImportResult(payload.import));
+            showApiSuccess(formatImportResult(payload.import));
             await deps.loadContacts?.();
           }
           if ((payload.leads || state.aiLeads).length === 0) {
@@ -383,7 +385,7 @@ export async function runLeadDiscovery() {
       if (typeof showLeadsError === "function") {
         showLeadsError(error.message || "AI 线索发现失败");
       } else {
-        alert(error.message || "AI 线索发现失败");
+        showApiError(error, error.message || "AI 线索发现失败");
       }
     }
   } finally {
@@ -395,7 +397,7 @@ export async function runLeadDiscovery() {
 export async function importAiLeads() {
   const selected = getSelectedAiLeads();
   if (selected.length === 0) {
-    alert(t("msg.selectLeadsToImport"));
+    notifyInfo(t("msg.selectLeadsToImport"));
     return;
   }
 
@@ -412,10 +414,10 @@ export async function importAiLeads() {
       method: "POST",
       body: JSON.stringify({ rows: normalizeImportRows(rows) }),
     });
-    alert(formatImportResult(result));
+    showApiSuccess(formatImportResult(result));
     await deps.loadContacts?.();
     deps.switchView("contacts");
   } catch (error) {
-    alert(error.message || t("msg.importFailed"));
+    showApiError(error, error.message || t("msg.importFailed"));
   }
 }

@@ -2,7 +2,8 @@ import { initI18n, t } from "../i18n.js";
 import * as dom from "./core/dom.js";
 import { state } from "./core/state.js";
 import { api, errorMessage } from "./core/utils.js";
-import { registerDeps } from "./core/deps.js";
+import { notifyError, notifySuccess, notifyInfo, showApiError, showApiSuccess } from "./core/toast.js";
+import { handleModalKeydown } from "./core/modal.js";
 import {
   startJobEventStream,
   resumeBackgroundJobs,
@@ -176,7 +177,12 @@ jobsPanelEl?.addEventListener("click", (event) => {
   }
 });
 
+contactEditModal?.addEventListener("modal:escape", () => closeContactEdit());
+contactNotesModal?.addEventListener("modal:escape", () => closeContactNotes());
+leadDetailModal?.addEventListener("modal:escape", () => closeLeadDetail());
+
 document.addEventListener("keydown", (event) => {
+  handleModalKeydown(event);
   if (event.key === "Escape" && jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
     closeJobsPanel();
   }
@@ -219,7 +225,7 @@ exportBtn.addEventListener("click", downloadCsv);
 importBtn.addEventListener("click", importResults);
 discoverBtn.addEventListener("click", runLeadDiscovery);
 discoverViaPiBtn?.addEventListener("click", () => {
-  openPiAgentForLeads().catch((error) => alert(errorMessage(error, t("msg.piStartFailed"))));
+  openPiAgentForLeads().catch((error) => showApiError(error, t("msg.piStartFailed")));
 });
 retryDiscoverBtn.addEventListener("click", () => {
   if (state.lastDiscoverQuery) {
@@ -229,28 +235,28 @@ retryDiscoverBtn.addEventListener("click", () => {
 });
 importLeadsBtn.addEventListener("click", importAiLeads);
 roleFilter.addEventListener("change", renderRows);
-contactStatusFilter.addEventListener("change", () => loadContacts(true).catch((error) => alert(error.message)));
-contactFollowUpFilter.addEventListener("change", () => loadContacts(true).catch((error) => alert(error.message)));
+contactStatusFilter.addEventListener("change", () => loadContacts(true).catch(showApiError));
+contactFollowUpFilter.addEventListener("change", () => loadContacts(true).catch(showApiError));
 contactSearchInput.addEventListener("input", () => {
   clearTimeout(state.contactSearchTimer);
   state.contactSearchTimer = setTimeout(() => {
-    loadContacts(true).catch((error) => alert(error.message));
+    loadContacts(true).catch(showApiError);
   }, 300);
 });
 contactsPageSizeSelect.addEventListener("change", () => {
   state.contactsPageSize = Number(contactsPageSizeSelect.value) || 50;
-  loadContacts(true).catch((error) => alert(error.message));
+  loadContacts(true).catch(showApiError);
 });
 contactsPrevBtn.addEventListener("click", () => {
   if (state.contactsPage > 1) {
     state.contactsPage -= 1;
-    loadContacts().catch((error) => alert(error.message));
+    loadContacts().catch(showApiError);
   }
 });
 contactsNextBtn.addEventListener("click", () => {
   if (state.contactsPage < state.contactsPages) {
     state.contactsPage += 1;
-    loadContacts().catch((error) => alert(error.message));
+    loadContacts().catch(showApiError);
   }
 });
 contactsSelectAll.addEventListener("change", () => {
@@ -277,40 +283,40 @@ contactsBody.addEventListener("change", (event) => {
 });
 bulkApplyStatusBtn.addEventListener("click", () => {
   bulkContactsAction("status", { follow_up_status: bulkStatusSelect.value })
-    .then((result) => alert(t("msg.bulkUpdated", { count: result.updated })))
-    .catch((error) => alert(error.message));
+    .then((result) => showApiSuccess(t("msg.bulkUpdated", { count: result.updated })))
+    .catch(showApiError);
 });
 bulkMarkSentBtn.addEventListener("click", () => {
   bulkContactsAction("mark_sent")
-    .then((result) => alert(t("msg.bulkMarked", { count: result.updated })))
-    .catch((error) => alert(error.message));
+    .then((result) => showApiSuccess(t("msg.bulkMarked", { count: result.updated })))
+    .catch(showApiError);
 });
 bulkDeleteBtn.addEventListener("click", () => {
   if (!confirm(t("msg.confirmBulkDeleteContacts"))) return;
   bulkContactsAction("delete")
-    .then((result) => alert(t("msg.bulkDeleted", { count: result.deleted })))
-    .catch((error) => alert(error.message));
+    .then((result) => showApiSuccess(t("msg.bulkDeleted", { count: result.deleted })))
+    .catch(showApiError);
 });
 contactEditForm.addEventListener("submit", (event) => {
-  saveContactEdit(event).catch((error) => alert(error.message));
+  saveContactEdit(event).catch(showApiError);
 });
 contactEditModal.addEventListener("click", (event) => {
   if (event.target.closest("[data-close-edit]")) {
     closeContactEdit();
   }
 });
-downloadBackupBtn.addEventListener("click", () => downloadBackup().catch((error) => alert(error.message)));
-exportContactsBtn.addEventListener("click", () => exportContactsCsv().catch((error) => alert(error.message)));
-dedupeContactsBtn.addEventListener("click", () => dedupeContacts().catch((error) => alert(error.message)));
-refreshContactsBtn.addEventListener("click", () => loadContacts().catch((error) => alert(error.message)));
-refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch((error) => alert(error.message)));
-refreshStatsBtn.addEventListener("click", () => loadStats().catch((error) => alert(error.message)));
-scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch((error) => alert(error.message)));
+downloadBackupBtn.addEventListener("click", () => downloadBackup().catch(showApiError));
+exportContactsBtn.addEventListener("click", () => exportContactsCsv().catch(showApiError));
+dedupeContactsBtn.addEventListener("click", () => dedupeContacts().catch(showApiError));
+refreshContactsBtn.addEventListener("click", () => loadContacts().catch(showApiError));
+refreshSchedulesBtn.addEventListener("click", () => loadSchedules().catch(showApiError));
+refreshStatsBtn.addEventListener("click", () => loadStats().catch(showApiError));
+scheduleForm.addEventListener("submit", (event) => createSchedule(event).catch(showApiError));
 scheduleRunModeInput?.addEventListener("change", updateScheduleFormMode);
 scheduleIntervalPreset?.addEventListener("change", updateScheduleFormMode);
 updateScheduleFormMode();
-settingsForm.addEventListener("submit", (event) => saveSettings(event).catch((error) => alert(error.message)));
-saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch((error) => alert(error.message)));
+settingsForm.addEventListener("submit", (event) => saveSettings(event).catch(showApiError));
+saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch(showApiError));
 emailTemplatesListEl.addEventListener("click", (event) => {
   const editBtn = event.target.closest(".template-edit");
   if (editBtn) {
@@ -319,21 +325,21 @@ emailTemplatesListEl.addEventListener("click", (event) => {
   }
   const deleteBtn = event.target.closest(".template-delete");
   if (deleteBtn) {
-    deleteEmailTemplate(Number(deleteBtn.dataset.id)).catch((error) => alert(error.message));
+    deleteEmailTemplate(Number(deleteBtn.dataset.id)).catch(showApiError);
   }
 });
 document.getElementById("change-password-btn").addEventListener("click", () => {
-  changePassword().catch((error) => alert(error.message));
+  changePassword().catch(showApiError);
 });
 document.getElementById("regenerate-agent-token-btn")?.addEventListener("click", () => {
   if (!confirm(t("msg.confirmRegenerateToken"))) return;
-  regenerateAgentToken().catch((error) => alert(error.message));
+  regenerateAgentToken().catch(showApiError);
 });
 document.getElementById("copy-agent-token-btn")?.addEventListener("click", () => {
-  copyAgentToken().catch((error) => alert(error.message));
+  copyAgentToken().catch(showApiError);
 });
 document.getElementById("reset-lead-prefs-btn")?.addEventListener("click", () => {
-  resetLeadPreferences().catch((error) => alert(error.message));
+  resetLeadPreferences().catch(showApiError);
 });
 
 logoutBtn.addEventListener("click", async () => {
@@ -350,7 +356,7 @@ document.querySelectorAll(".settings-rail-item").forEach((btn) => {
 });
 
 contactNoteForm.addEventListener("submit", (event) => {
-  addContactNote(event).catch((error) => alert(error.message));
+  addContactNote(event).catch(showApiError);
 });
 
 contactNotesModal.addEventListener("click", (event) => {
@@ -360,7 +366,7 @@ contactNotesModal.addEventListener("click", (event) => {
   }
   const deleteBtn = event.target.closest(".note-delete");
   if (deleteBtn) {
-    deleteContactNote(deleteBtn.dataset.noteId).catch((error) => alert(error.message));
+    deleteContactNote(deleteBtn.dataset.noteId).catch(showApiError);
   }
 });
 
@@ -394,7 +400,7 @@ contactsBody.addEventListener("click", (event) => {
   const notesBtn = event.target.closest(".action-notes");
   if (notesBtn) {
     closeAllContactActionMenus();
-    openContactNotes(notesBtn.dataset.id).catch((error) => alert(error.message));
+    openContactNotes(notesBtn.dataset.id).catch(showApiError);
     return;
   }
   const mailBtn = event.target.closest(".action-mail");
@@ -406,28 +412,26 @@ contactsBody.addEventListener("click", (event) => {
   const statusBtn = event.target.closest(".action-status");
   if (statusBtn) {
     closeAllContactActionMenus();
-    changeContactFollowUpStatus(statusBtn.dataset.id, statusBtn.dataset.status).catch((error) =>
-      alert(error.message),
-    );
+    changeContactFollowUpStatus(statusBtn.dataset.id, statusBtn.dataset.status).catch(showApiError);
     return;
   }
   const markBtn = event.target.closest(".action-mark");
   if (markBtn) {
     closeAllContactActionMenus();
-    markContactSent(markBtn.dataset.id, markBtn.dataset.sent === "1").catch((error) => alert(error.message));
+    markContactSent(markBtn.dataset.id, markBtn.dataset.sent === "1").catch(showApiError);
     return;
   }
   const enrichBtn = event.target.closest(".action-enrich-pi");
   if (enrichBtn) {
     closeAllContactActionMenus();
     const contact = state.contacts.find((item) => String(item.id) === String(enrichBtn.dataset.id));
-    enrichContactViaBackground(contact).catch((error) => alert(errorMessage(error, t("msg.enrichFailed"))));
+    enrichContactViaBackground(contact).catch((error) => showApiError(error, t("msg.enrichFailed")));
     return;
   }
   const deleteBtn = event.target.closest(".action-delete");
   if (deleteBtn) {
     closeAllContactActionMenus();
-    deleteContact(deleteBtn.dataset.id).catch((error) => alert(error.message));
+    deleteContact(deleteBtn.dataset.id).catch(showApiError);
   }
 });
 
@@ -439,19 +443,17 @@ window.addEventListener("resize", closeAllContactActionMenus);
 document.getElementById("schedules-body")?.addEventListener("click", (event) => {
   const runBtn = event.target.closest(".schedule-run");
   if (runBtn) {
-    runScheduleNow(runBtn.dataset.id).catch((error) => alert(error.message));
+    runScheduleNow(runBtn.dataset.id).catch(showApiError);
     return;
   }
   const toggleBtn = event.target.closest(".schedule-toggle");
   if (toggleBtn) {
-    toggleSchedule(toggleBtn.dataset.id, toggleBtn.dataset.enabled === "1").catch((error) =>
-      alert(error.message),
-    );
+    toggleSchedule(toggleBtn.dataset.id, toggleBtn.dataset.enabled === "1").catch(showApiError);
     return;
   }
   const deleteBtn = event.target.closest(".schedule-delete");
   if (deleteBtn) {
-    deleteSchedule(deleteBtn.dataset.id).catch((error) => alert(error.message));
+    deleteSchedule(deleteBtn.dataset.id).catch(showApiError);
   }
 });
 
@@ -477,10 +479,6 @@ leadDetailImport.addEventListener("change", () => {
   const lead = state.aiLeads[state.detailLeadIndex];
   if (lead) lead._selected = leadDetailImport.checked;
   renderAiLeads();
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !leadDetailModal.classList.contains("hidden")) closeLeadDetail();
 });
 
 resultsBody.addEventListener("change", (event) => {

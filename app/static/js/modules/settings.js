@@ -2,7 +2,7 @@ import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state, SETTINGS_FORM_CATS } from "../core/state.js";
 import { api, escapeHtml, setInputValue } from "../core/utils.js";
-import { showToast } from "../core/toast.js";
+import { notifyError, showToast } from "../core/toast.js";
 import { replayAnimation } from "../core/motion.js";
 import { loadLlmStatus } from "./leads.js";
 
@@ -189,7 +189,7 @@ export async function copyAgentToken() {
   const el = document.getElementById("setting-agent-api-token");
   const value = el.value.trim();
   if (!value) {
-    alert(t("msg.generateTokenFirst"));
+    notifyError(t("msg.generateTokenFirst"));
     return;
   }
   await navigator.clipboard.writeText(value);
@@ -301,11 +301,11 @@ export async function changePassword() {
   const confirm = document.getElementById("pwd-confirm").value;
   const statusEl = document.getElementById("password-status");
   if (!current || !newPwd) {
-    alert(t("msg.passwordFieldsRequired"));
+    notifyError(t("msg.passwordFieldsRequired"));
     return;
   }
   if (newPwd !== confirm) {
-    alert(t("msg.passwordMismatch"));
+    notifyError(t("msg.passwordMismatch"));
     return;
   }
   await api("/api/me/password", {

@@ -3,6 +3,8 @@ import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { api, escapeHtml, errorMessage, formatTime } from "../core/utils.js";
 import { deps } from "../core/deps.js";
+import { closeModal, openModal } from "../core/modal.js";
+import { notifyError, notifyInfo, showApiError, showApiSuccess } from "../core/toast.js";
 
 const {
   contactsBody,
@@ -262,7 +264,7 @@ export function getSelectedContactIds() {
 export async function bulkContactsAction(action, extra = {}) {
   const ids = getSelectedContactIds();
   if (ids.length === 0) {
-    alert(t("msg.selectContacts"));
+    notifyInfo(t("msg.selectContacts"));
     return;
   }
   const payload = { ids, action, ...extra };
@@ -287,12 +289,12 @@ export function openContactEdit(contactId) {
   contactEditLinkedin.value = contact.linkedin || "";
   contactEditX.value = contact.x || "";
   contactEditFacebook.value = contact.facebook || "";
-  contactEditModal.classList.remove("hidden");
+  openModal(contactEditModal, { initialFocus: "#contact-edit-org" });
 }
 
 export function closeContactEdit() {
   state.editingContactId = null;
-  contactEditModal.classList.add("hidden");
+  closeModal(contactEditModal);
 }
 
 export async function saveContactEdit(event) {
@@ -364,7 +366,7 @@ export async function exportContactsCsv() {
 
 export async function dedupeContacts() {
   const result = await api("/api/contacts/dedupe", { method: "POST" });
-  alert(t("msg.dedupeDone", { removed: result.removed, total: result.total }));
+  showApiSuccess(t("msg.dedupeDone", { removed: result.removed, total: result.total }));
   await loadContacts();
 }
 
@@ -384,7 +386,7 @@ export async function changeContactFollowUpStatus(contactId, currentStatus) {
   if (input === null) return;
   const index = Number(input.trim()) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= options.length) {
-    alert(t("msg.invalidIndex"));
+    notifyError(t("msg.invalidIndex"));
     return;
   }
   const follow_up_status = options[index];
@@ -423,7 +425,7 @@ export function openMailClient(contactId) {
   }
   window.location.href = url;
   if (!contact.email_sent && confirm(t("msg.confirmMarkSent"))) {
-    markContactSent(contactId, true).catch((error) => alert(error.message));
+    markContactSent(contactId, true).catch(showApiError);
   }
 }
 
@@ -484,7 +486,7 @@ export function resetTemplateForm() {
 export async function saveEmailTemplate() {
   const name = templateNameInput.value.trim();
   if (!name) {
-    alert(t("msg.templateNameRequired"));
+    notifyError(t("msg.templateNameRequired"));
     return;
   }
   const payload = {
@@ -569,7 +571,7 @@ export async function loadContactNotes(contactId) {
 
 export function closeContactNotes() {
   state.notesContactId = null;
-  contactNotesModal.classList.add("hidden");
+  closeModal(contactNotesModal);
   contactNoteBody.value = "";
 }
 
@@ -580,7 +582,7 @@ export async function openContactNotes(contactId) {
   contactNotesTitle.textContent = t("contacts.notesTimeline");
   contactNotesSubtitle.textContent = `${contact.name || "—"} · ${contact.email}`;
   contactNoteBody.value = "";
-  contactNotesModal.classList.remove("hidden");
+  openModal(contactNotesModal, { initialFocus: "#contact-note-body" });
   await loadContactNotes(contact.id);
 }
 

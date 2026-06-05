@@ -2,7 +2,8 @@ import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { api, escapeHtml, errorMessage, formatApiDetail, formatImportResult, normalizeImportRows, rowsToCsv } from "../core/utils.js";
-import { notifyInfo } from "../core/toast.js";
+import { notifyError, notifyInfo, showApiError, showApiSuccess } from "../core/toast.js";
+import { resetProgressFill, setProgressFill } from "../core/progress.js";
 import { deps } from "../core/deps.js";
 import { trackBackgroundJob } from "../jobs/index.js";
 
@@ -101,7 +102,7 @@ export function renderRows() {
 export async function runLookup() {
   const text = asnInput.value.trim();
   if (!text) {
-    alert(t("msg.enterAsnList"));
+    notifyInfo(t("msg.enterAsnList"));
     return;
   }
 
@@ -115,7 +116,7 @@ export async function runLookup() {
       trackBackgroundJob(data.job);
       notifyInfo(t("msg.jobStartedBackground"));
     } catch (error) {
-      alert(errorMessage(error, t("msg.lookupFailed")));
+      showApiError(error, t("msg.lookupFailed"));
     }
     return;
   }
@@ -125,7 +126,7 @@ export async function runLookup() {
   renderRows();
   setLoading(true);
   progressEl.classList.remove("hidden");
-  progressFill.style.width = "0%";
+  resetProgressFill(progressFill);
   progressText.textContent = t("msg.lookupStarting");
 
   const delay = Number(delayInput.value) || 0;
@@ -182,7 +183,7 @@ export async function runLookup() {
           state.allRows.push(...payload.rows);
           renderRows();
           const percent = Math.round((payload.index / payload.total) * 100);
-          progressFill.style.width = `${percent}%`;
+          setProgressFill(progressFill, percent);
           progressText.textContent = t("msg.lookupProgress", {
             asn: payload.asn,
             index: payload.index,
@@ -191,7 +192,7 @@ export async function runLookup() {
         }
 
         if (payload.type === "done") {
-          progressFill.style.width = "100%";
+          setProgressFill(progressFill, 100);
           progressText.textContent = t("msg.lookupDone");
           state.csvContent = rowsToCsv(state.allRows);
           exportBtn.disabled = state.allRows.length === 0;
@@ -200,7 +201,7 @@ export async function runLookup() {
       }
     }
   } catch (error) {
-    alert(errorMessage(error, t("msg.lookupFailed")));
+    showApiError(error, t("msg.lookupFailed"));
     progressText.textContent = t("msg.lookupFailedShort");
   } finally {
     setLoading(false);
@@ -255,7 +256,7 @@ export function downloadCsv() {
 export async function importResults() {
   const rows = getSelectedImportableRows();
   if (rows.length === 0) {
-    alert(t("msg.selectEmailsToImport"));
+    notifyInfo(t("msg.selectEmailsToImport"));
     return;
   }
 
@@ -265,11 +266,11 @@ export async function importResults() {
       method: "POST",
       body: JSON.stringify({ rows: normalizeImportRows(rows) }),
     });
-    alert(formatImportResult(result));
+    showApiSuccess(formatImportResult(result));
     await deps.loadContacts?.();
     deps.switchView?.("contacts");
   } catch (error) {
-    alert(error.message || t("msg.importFailed"));
+    showApiError(error, error.message || t("msg.importFailed"));
   } finally {
     importBtn.disabled = getSelectedImportableRows().length === 0;
   }

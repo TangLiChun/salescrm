@@ -10,7 +10,7 @@ import {
   jobStatusLabel,
   formatJobTime,
 } from "../core/toast.js";
-import { deps } from "../core/deps.js";
+import { setProgressFill } from "../core/progress.js";
 
 const {
   backgroundJobsBar,
@@ -173,7 +173,7 @@ function applyLookupJobResult(job) {
     exportBtn.disabled = state.allRows.length === 0;
     importBtn.disabled = (deps.getSelectedImportableRows?.() || []).length === 0;
     progressEl.classList.remove("hidden");
-    progressFill.style.width = "100%";
+    setProgressFill(progressFill, 100);
     progressText.textContent = t("msg.lookupDone");
   }
   const activeView = document.querySelector(".tab.active")?.dataset.view;

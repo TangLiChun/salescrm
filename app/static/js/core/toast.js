@@ -70,6 +70,14 @@ export function notifyInfo(message, options = {}) {
   showToast(message, { type: "info", ...options });
 }
 
+export function showApiError(error, fallback = "") {
+  notifyError(errorMessage(error, fallback));
+}
+
+export function showApiSuccess(message) {
+  notifySuccess(message);
+}
+
 export function jobTypeLabel(jobType) {
   const key = `jobs.type.${jobType}`;
   const label = t(key);

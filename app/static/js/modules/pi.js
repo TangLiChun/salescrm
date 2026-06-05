@@ -12,11 +12,12 @@ import {
   PI_THREADS_MAX,
 } from "../core/state.js";
 import { api, escapeHtml, errorMessage, formatApiDetail, formatImportResult, normalizeImportRows } from "../core/utils.js";
-import { notifyInfo } from "../core/toast.js";
+import { notifyError, notifyInfo, showApiError, showApiSuccess } from "../core/toast.js";
 import { deps } from "../core/deps.js";
 import { trackBackgroundJob } from "../jobs/index.js";
 import { scoreBadgeClass, formatSource } from "./leads.js";
 import { switchSettingsCat } from "./settings.js";
+import { resetProgressFill, setProgressFill } from "../core/progress.js";
 
 const {
   piChatMessagesEl, piChatForm, piChatInput, piChatSendBtn, piChatStopBtn, piChatClearBtn,
@@ -478,7 +479,7 @@ export function loadPiThreadsFromStorage(userId) {
 
 export function beginPiThread(title) {
   if (state.piChatBusy) {
-    alert(t("pi.busySwitch"));
+    notifyInfo(t("pi.busySwitch"));
     return null;
   }
   syncActivePiThreadHistory();
@@ -512,7 +513,7 @@ export function createPiThread(title) {
 export async function switchPiThread(threadId) {
   if (threadId === state.activePiThreadId) return;
   if (state.piChatBusy) {
-    alert(t("pi.busySwitch"));
+    notifyInfo(t("pi.busySwitch"));
     return;
   }
   syncActivePiThreadHistory();
@@ -526,7 +527,7 @@ export async function switchPiThread(threadId) {
 
 export async function deletePiThread(threadId) {
   if (state.piChatBusy) {
-    alert(t("pi.busySwitch"));
+    notifyInfo(t("pi.busySwitch"));
     return;
   }
   if (!window.confirm(t("pi.confirmDeleteThread"))) return;
@@ -652,11 +653,11 @@ export function buildPiLeadMessage() {
 export async function openPiAgentForLeads() {
   const message = buildPiLeadMessage();
   if (!message) {
-    alert(t("msg.describeLeads"));
+    notifyInfo(t("msg.describeLeads"));
     return;
   }
   if (!state.llmConfigured) {
-    alert(t("msg.piNotAvailable"));
+    notifyError(t("msg.piNotAvailable"));
     return;
   }
   deps.switchView("pi-agent");
@@ -667,7 +668,7 @@ export async function openPiAgentForLeads() {
 export async function openPiEnrichContact(contact) {
   if (!contact?.id) return;
   if (!state.llmConfigured) {
-    alert(t("msg.piNotAvailable"));
+    notifyError(t("msg.piNotAvailable"));
     return;
   }
   const label = contact.org || contact.email || `#${contact.id}`;
@@ -686,7 +687,7 @@ export async function openPiEnrichContact(contact) {
 export async function enrichContactViaBackground(contact) {
   if (!contact?.id) return;
   if (!state.llmConfigured) {
-    alert(t("msg.piNotAvailable"));
+    notifyError(t("msg.piNotAvailable"));
     return;
   }
   try {
@@ -701,7 +702,7 @@ export async function enrichContactViaBackground(contact) {
     trackBackgroundJob(data.job);
     notifyInfo(t("msg.jobStartedBackground"));
   } catch (error) {
-    alert(errorMessage(error, t("msg.enrichFailed")));
+    showApiError(error, t("msg.enrichFailed"));
   }
 }
 
@@ -865,7 +866,7 @@ export async function importPiChatLookup(toolEl) {
     })),
   );
   if (!payload.length) {
-    alert(t("msg.noEmailsToImport"));
+    notifyInfo(t("msg.noEmailsToImport"));
     return;
   }
   try {
@@ -873,10 +874,10 @@ export async function importPiChatLookup(toolEl) {
       method: "POST",
       body: JSON.stringify({ rows: payload }),
     });
-    alert(formatImportResult(result));
+    showApiSuccess(formatImportResult(result));
     await deps.loadContacts();
   } catch (error) {
-    alert(errorMessage(error, t("msg.importFailed")));
+    showApiError(error, t("msg.importFailed"));
   }
 }
 
@@ -963,7 +964,7 @@ export function updatePiDiscoverRdapBar(toolEl, index, total, network) {
   const safeTotal = Math.max(1, Number(total) || 1);
   const safeIndex = Math.min(Math.max(1, Number(index) || 1), safeTotal);
   const pct = Math.round((safeIndex / safeTotal) * 100);
-  fill.style.width = `${pct}%`;
+  setProgressFill(fill, pct);
   text.textContent = t("pi.rdapProgress", {
     index: safeIndex,
     total: safeTotal,
@@ -975,7 +976,7 @@ export function updatePiDiscoverRdapBar(toolEl, index, total, network) {
     preview: network || "",
   });
   if (piChatProgressFill) {
-    piChatProgressFill.style.width = `${Math.max(35, Math.min(92, 35 + pct * 0.55))}%`;
+    setProgressFill(piChatProgressFill, Math.max(35, Math.min(92, 35 + pct * 0.55)));
   }
 }
 
@@ -1205,7 +1206,7 @@ export async function importPiChatLeads(toolEl) {
       })),
   );
   if (!payload.length) {
-    alert(t("msg.noLeadsToImport"));
+    notifyInfo(t("msg.noLeadsToImport"));
     return;
   }
   try {
@@ -1213,10 +1214,10 @@ export async function importPiChatLeads(toolEl) {
       method: "POST",
       body: JSON.stringify({ rows: payload }),
     });
-    alert(formatImportResult(result));
+    showApiSuccess(formatImportResult(result));
     await deps.loadContacts();
   } catch (error) {
-    alert(errorMessage(error, t("msg.importFailed")));
+    showApiError(error, t("msg.importFailed"));
   }
 }
 
@@ -1395,7 +1396,7 @@ export function setPiChatBusy(busy) {
   updatePiAgentStatus();
   piChatProgressEl.classList.toggle("hidden", !busy);
   if (!busy) {
-    piChatProgressFill.style.width = "0%";
+    resetProgressFill(piChatProgressFill);
     piChatProgressText.textContent = "";
   }
 }
@@ -1434,7 +1435,7 @@ export async function sendPiChatMessage(message) {
   }
 
   setPiChatBusy(true);
-  piChatProgressFill.style.width = "12%";
+  setProgressFill(piChatProgressFill, 12);
   piChatProgressText.textContent = t("pi.processingShort");
   state.piChatController = new AbortController();
 
@@ -1501,7 +1502,7 @@ export async function sendPiChatMessage(message) {
                 ? appendPiChatLookupTool(payload.name)
                 : appendPiChatTool(payload.name || "tool");
           piChatProgressText.textContent = t("msg.piCallingTool", { name: payload.name });
-          piChatProgressFill.style.width = "12%";
+          setProgressFill(piChatProgressFill, 12);
           scrollPiChatToBottom();
         } else if (payload.type === "tool_progress") {
           if (activeToolEl) {
@@ -1513,7 +1514,7 @@ export async function sendPiChatMessage(message) {
           }
           if (!PI_LEAD_STREAM_TOOLS.has(payload.name)) {
             piChatProgressText.textContent = payload.message || piChatProgressText.textContent;
-            piChatProgressFill.style.width = "65%";
+            setProgressFill(piChatProgressFill, 65);
           }
         } else if (payload.type === "tool_event") {
           const event = payload.event || {};
@@ -1554,7 +1555,7 @@ export async function sendPiChatMessage(message) {
               if (importBtn && !importBtn.dataset.bound) {
                 importBtn.dataset.bound = "1";
                 importBtn.addEventListener("click", () => {
-                  importPiChatLeads(activeToolEl).catch((error) => alert(errorMessage(error, t("msg.importFailed"))));
+                  importPiChatLeads(activeToolEl).catch((error) => showApiError(error, t("msg.importFailed")));
                 });
               }
               if (payload.result?.import) {
@@ -1572,7 +1573,7 @@ export async function sendPiChatMessage(message) {
               if (importBtn && !importBtn.dataset.bound) {
                 importBtn.dataset.bound = "1";
                 importBtn.addEventListener("click", () => {
-                  importPiChatLookup(activeToolEl).catch((error) => alert(errorMessage(error, t("msg.importFailed"))));
+                  importPiChatLookup(activeToolEl).catch((error) => showApiError(error, t("msg.importFailed")));
                 });
               }
             } else if (summary) {
@@ -1586,12 +1587,12 @@ export async function sendPiChatMessage(message) {
           }
           appendPiHistoryEntry(toolEntry);
           activeToolEl = null;
-          piChatProgressFill.style.width = "85%";
+          setProgressFill(piChatProgressFill, 85);
         } else if (payload.type === "assistant_start") {
           activeAssistantEl = appendPiChatBubble("assistant", "");
           activeAssistantEl.classList.add("streaming");
           assistantStreamText = "";
-          piChatProgressFill.style.width = "90%";
+          setProgressFill(piChatProgressFill, 90);
         } else if (payload.type === "assistant_delta") {
           assistantStreamText += payload.text || "";
           updatePiChatAssistantBubble(activeAssistantEl, assistantStreamText, true);
@@ -1605,11 +1606,11 @@ export async function sendPiChatMessage(message) {
           savePiChatHistory();
           activeAssistantEl = null;
           assistantStreamText = "";
-          piChatProgressFill.style.width = "100%";
+          setProgressFill(piChatProgressFill, 100);
         } else if (payload.type === "assistant") {
           appendPiChatBubble("assistant", payload.text || "");
           appendPiHistoryEntry({ role: "assistant", content: payload.text || "" });
-          piChatProgressFill.style.width = "100%";
+          setProgressFill(piChatProgressFill, 100);
         } else if (payload.type === "error") {
           appendPiChatStatus(payload.message || t("msg.errorGeneric"));
         } else if (payload.type === "done") {

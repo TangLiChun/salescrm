@@ -3,6 +3,7 @@ import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
 import { api, escapeHtml, formatTime } from "../core/utils.js";
 import { deps } from "../core/deps.js";
+import { showApiSuccess, showApiError } from "../core/toast.js";
 
 const {
   schedulesBody,
@@ -204,9 +205,9 @@ export async function runScheduleNow(jobId) {
   if (!confirm(t("msg.confirmRunSchedule"))) return;
   const result = await api(`/api/schedules/${jobId}/run`, { method: "POST" });
   if (result.ok) {
-    alert(result.message || t("msg.runDone"));
+    showApiSuccess(result.message || t("msg.runDone"));
   } else {
-    alert(result.message || t("msg.runFailed"));
+    showApiError(null, result.message || t("msg.runFailed"));
   }
   await loadSchedules();
   deps.loadContacts?.().catch(() => {});

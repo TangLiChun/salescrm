@@ -140,17 +140,17 @@
 
         <div class="table-wrap">
           <table>
-            <thead>
+            <th scope="col"ead>
               <tr>
-                <th class="col-select" data-i18n="lookup.colSelect">选</th>
-                <th>ASN</th>
-                <th data-i18n="lookup.colOrg">组织</th>
-                <th>Role</th>
-                <th data-i18n="lookup.colName">名称</th>
-                <th class="col-email" data-i18n="lookup.colEmail">邮箱</th>
-                <th>Handle</th>
-                <th>RIR</th>
-                <th data-i18n="lookup.colStatus">状态</th>
+                <th scope="col" class="col-select" data-i18n="lookup.colSelect">选</th>
+                <th scope="col">ASN</th>
+                <th scope="col" data-i18n="lookup.colOrg">组织</th>
+                <th scope="col">Role</th>
+                <th scope="col" data-i18n="lookup.colName">名称</th>
+                <th scope="col" class="col-email" data-i18n="lookup.colEmail">邮箱</th>
+                <th scope="col">Handle</th>
+                <th scope="col">RIR</th>
+                <th scope="col" data-i18n="lookup.colStatus">状态</th>
               </tr>
             </thead>
             <tbody id="results-body">
@@ -213,16 +213,16 @@
         <div id="ai-leads-state" class="leads-state hidden"></div>
         <div class="table-wrap">
           <table>
-            <thead>
+            <th scope="col"ead>
               <tr>
-                <th class="col-select" data-i18n="lookup.colSelect">选</th>
-                <th data-i18n="aiLeads.colScore">分数</th>
-                <th data-i18n="aiLeads.colSource">来源</th>
-                <th data-i18n="lookup.colOrg">组织</th>
-                <th data-i18n="lookup.colEmail">邮箱</th>
-                <th>Role</th>
-                <th>ASN</th>
-                <th data-i18n="aiLeads.colReason">AI 理由</th>
+                <th scope="col" class="col-select" data-i18n="lookup.colSelect">选</th>
+                <th scope="col" data-i18n="aiLeads.colScore">分数</th>
+                <th scope="col" data-i18n="aiLeads.colSource">来源</th>
+                <th scope="col" data-i18n="lookup.colOrg">组织</th>
+                <th scope="col" data-i18n="lookup.colEmail">邮箱</th>
+                <th scope="col">Role</th>
+                <th scope="col">ASN</th>
+                <th scope="col" data-i18n="aiLeads.colReason">AI 理由</th>
               </tr>
             </thead>
             <tbody id="ai-leads-body">
@@ -236,7 +236,7 @@
 
       <div id="lead-detail-modal" class="contact-notes-modal hidden" role="dialog" aria-labelledby="lead-detail-title">
         <div class="contact-notes-backdrop" data-close-detail></div>
-        <div class="contact-notes-dialog">
+        <div class="contact-notes-dialog lead-detail-dialog">
           <div class="contact-notes-header">
             <h3 id="lead-detail-title" data-i18n="aiLeads.leadDetail">线索详情</h3>
             <button type="button" class="secondary-btn contact-notes-close" data-close-detail data-i18n="common.close">关闭</button>
@@ -358,15 +358,15 @@
 
       <div class="table-wrap schedule-table">
         <table>
-          <thead>
+          <th scope="col"ead>
             <tr>
-              <th data-i18n="schedules.colName">名称</th>
-              <th data-i18n="schedules.colInterval">间隔</th>
-              <th data-i18n="schedules.colStatus">状态</th>
-              <th data-i18n="schedules.colLastRun">上次运行</th>
-              <th data-i18n="schedules.colNextRun">下次运行</th>
-              <th data-i18n="schedules.colResult">结果</th>
-              <th></th>
+              <th scope="col" data-i18n="schedules.colName">名称</th>
+              <th scope="col" data-i18n="schedules.colInterval">间隔</th>
+              <th scope="col" data-i18n="schedules.colStatus">状态</th>
+              <th scope="col" data-i18n="schedules.colLastRun">上次运行</th>
+              <th scope="col" data-i18n="schedules.colNextRun">下次运行</th>
+              <th scope="col" data-i18n="schedules.colResult">结果</th>
+              <th scope="col"></th>
             </tr>
           </thead>
           <tbody id="schedules-body">
@@ -697,19 +697,19 @@
       <div class="contacts-table-shell">
       <div class="table-wrap contacts-table-wrap" tabindex="0" aria-label="Contacts table">
         <table class="contacts-table">
-          <thead>
+          <th scope="col"ead>
             <tr>
-              <th class="col-select"><input id="contacts-select-all" type="checkbox" data-i18n-title="contacts.selectAllPage" title="全选本页"></th>
-              <th class="col-status" data-i18n="lookup.colStatus">状态</th>
-              <th class="col-org" data-i18n="lookup.colOrg">组织</th>
-              <th class="col-name" data-i18n="lookup.colName">名称</th>
-              <th class="col-email" data-i18n="lookup.colEmail">邮箱</th>
-              <th class="col-role">Role</th>
-              <th class="col-asn">ASN</th>
-              <th class="col-source" data-i18n="aiLeads.colSource">来源</th>
-              <th class="col-notes" data-i18n="contacts.colNotes">备注</th>
-              <th class="col-imported" data-i18n="contacts.colImportedAt">导入时间</th>
-              <th class="col-actions" data-i18n="contacts.colActions">操作</th>
+              <th scope="col" class="col-select"><input id="contacts-select-all" type="checkbox" data-i18n-title="contacts.selectAllPage" title="全选本页"></th>
+              <th scope="col" class="col-status" data-i18n="lookup.colStatus">状态</th>
+              <th scope="col" class="col-org" data-i18n="lookup.colOrg">组织</th>
+              <th scope="col" class="col-name" data-i18n="lookup.colName">名称</th>
+              <th scope="col" class="col-email" data-i18n="lookup.colEmail">邮箱</th>
+              <th scope="col" class="col-role">Role</th>
+              <th scope="col" class="col-asn">ASN</th>
+              <th scope="col" class="col-source" data-i18n="aiLeads.colSource">来源</th>
+              <th scope="col" class="col-notes" data-i18n="contacts.colNotes">备注</th>
+              <th scope="col" class="col-imported" data-i18n="contacts.colImportedAt">导入时间</th>
+              <th scope="col" class="col-actions" data-i18n="contacts.colActions">操作</th>
             </tr>
           </thead>
           <tbody id="contacts-body">
@@ -735,11 +735,11 @@
         </label>
       </div>
 
-      <div id="contact-edit-modal" class="contact-notes-modal hidden" role="dialog">
+      <div id="contact-edit-modal" class="contact-notes-modal hidden" role="dialog" aria-modal="true" aria-labelledby="contact-edit-title">
         <div class="contact-notes-backdrop" data-close-edit></div>
         <div class="contact-notes-dialog">
           <div class="contact-notes-header">
-            <h3 data-i18n="contacts.editTitle">编辑联系人</h3>
+            <h3 id="contact-edit-title" data-i18n="contacts.editTitle">编辑联系人</h3>
             <button type="button" class="secondary-btn" data-close-edit data-i18n="common.close">关闭</button>
           </div>
           <p id="contact-edit-subtitle" class="contact-notes-subtitle"></p>
@@ -777,7 +777,7 @@
         </div>
       </div>
 
-      <div id="contact-notes-modal" class="contact-notes-modal hidden" role="dialog" aria-labelledby="contact-notes-title">
+      <div id="contact-notes-modal" class="contact-notes-modal hidden" role="dialog" aria-modal="true" aria-labelledby="contact-notes-title">
         <div class="contact-notes-backdrop" data-close-notes></div>
         <div class="contact-notes-dialog">
           <div class="contact-notes-header">
