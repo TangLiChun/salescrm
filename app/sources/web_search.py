@@ -161,10 +161,15 @@ def search_web(query: str, *, max_results: int = 8) -> list[dict[str, str]]:
     return results[:max_results]
 
 
-def search_web_many(queries: list[str], *, max_results_per_query: int = 6) -> list[dict[str, str]]:
+def search_web_many(
+    queries: list[str],
+    *,
+    max_results_per_query: int = 6,
+    max_queries: int = 4,
+) -> list[dict[str, str]]:
     merged: list[dict[str, str]] = []
     seen_urls: set[str] = set()
-    for query in queries:
+    for query in queries[: max(1, max_queries)]:
         for item in search_web(query, max_results=max_results_per_query):
             url = item.get("url") or ""
             if url and url in seen_urls:
@@ -436,15 +441,13 @@ def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, s
     rows = _parse_brightdata_response(body, query=query, max_results=max_results)
 
     if not rows and data_format == "auto":
-        for fallback in ("parsed_light", "json", "markdown"):
-            google_url = _build_brightdata_google_url(
-                query, max_results=max_results, data_format=fallback
-            )
-            payload = _build_brightdata_payload(zone, google_url, data_format=fallback)
-            body = _brightdata_fetch(api_key, payload)
-            rows = _parse_brightdata_response(body, query=query, max_results=max_results)
-            if rows:
-                break
+        fallback = "parsed_light"
+        google_url = _build_brightdata_google_url(
+            query, max_results=max_results, data_format=fallback
+        )
+        payload = _build_brightdata_payload(zone, google_url, data_format=fallback)
+        body = _brightdata_fetch(api_key, payload)
+        rows = _parse_brightdata_response(body, query=query, max_results=max_results)
 
     if not rows:
         raise RuntimeError("Bright Data SERP 响应未能解析为搜索结果（已尝试 JSON/Markdown/HTML）")

@@ -311,10 +311,42 @@ function followUpStatusBadge(status) {
 function closeAllContactActionMenus() {
   document.querySelectorAll(".contact-action-menu .action-menu-panel").forEach((panel) => {
     panel.classList.add("hidden");
+    panel.classList.remove("is-floating", "opens-up");
+    panel.style.top = "";
+    panel.style.left = "";
+    panel.style.visibility = "";
   });
   document.querySelectorAll(".contact-action-menu .action-menu-toggle").forEach((toggle) => {
     toggle.setAttribute("aria-expanded", "false");
   });
+}
+
+function positionContactActionMenu(toggle, panel) {
+  panel.classList.add("is-floating");
+  panel.classList.remove("hidden", "opens-up");
+  panel.style.visibility = "hidden";
+  panel.style.top = "0px";
+  panel.style.left = "0px";
+
+  const toggleRect = toggle.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const gap = 6;
+  const pad = 8;
+
+  let top = toggleRect.bottom + gap;
+  let left = toggleRect.right - panelRect.width;
+
+  if (top + panelRect.height > window.innerHeight - pad) {
+    top = toggleRect.top - panelRect.height - gap;
+    panel.classList.add("opens-up");
+  }
+
+  left = Math.max(pad, Math.min(left, window.innerWidth - panelRect.width - pad));
+  top = Math.max(pad, Math.min(top, window.innerHeight - panelRect.height - pad));
+
+  panel.style.top = `${Math.round(top)}px`;
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.visibility = "";
 }
 
 function contactActionsHtml(contact) {
@@ -2338,7 +2370,12 @@ async function sendPiChatMessage(message) {
       for (const chunk of chunks) {
         const line = chunk.trim();
         if (!line.startsWith("data: ")) continue;
-        const payload = JSON.parse(line.slice(6));
+        let payload;
+        try {
+          payload = JSON.parse(line.slice(6));
+        } catch {
+          continue;
+        }
 
         if (payload.type === "status") {
           piChatProgressText.textContent = payload.message || t("msg.piProcessingShort");
@@ -2450,6 +2487,24 @@ async function sendPiChatMessage(message) {
           piChatProgressText.textContent = t("pi.done");
         }
       }
+    }
+
+    if (buffer.trim()) {
+      const trailing = buffer.trim();
+      if (trailing.startsWith("data: ")) {
+        try {
+          const payload = JSON.parse(trailing.slice(6));
+          if (payload.type === "error") {
+            appendPiChatStatus(payload.message || t("msg.errorGeneric"));
+          }
+        } catch {
+          appendPiChatStatus(t("pi.streamInterrupted"));
+        }
+      }
+    }
+
+    if (piChatProgressText.textContent === t("pi.processingShort") && !assistantStreamText) {
+      appendPiChatStatus(t("pi.streamInterrupted"));
     }
   } catch (error) {
     if (error.name !== "AbortError") {
@@ -3356,7 +3411,7 @@ contactsBody.addEventListener("click", (event) => {
     const wasOpen = panel && !panel.classList.contains("hidden");
     closeAllContactActionMenus();
     if (!wasOpen && panel) {
-      panel.classList.remove("hidden");
+      positionContactActionMenu(menuToggle, panel);
       menuToggle.setAttribute("aria-expanded", "true");
     }
     return;
@@ -3407,6 +3462,13 @@ contactsBody.addEventListener("click", (event) => {
     deleteContact(deleteBtn.dataset.id).catch((error) => alert(error.message));
   }
 });
+
+document.querySelector(".contacts-table-wrap")?.addEventListener(
+  "scroll",
+  closeAllContactActionMenus,
+  { passive: true }
+);
+window.addEventListener("resize", closeAllContactActionMenus);
 
 schedulesBody.addEventListener("click", (event) => {
   const runBtn = event.target.closest(".schedule-run");

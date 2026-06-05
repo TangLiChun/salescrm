@@ -655,6 +655,7 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   z-index: 2;
   background: var(--surface);
   box-shadow: -6px 0 10px -8px oklch(0 0 0 / 0.18);
+  overflow: visible;
 }
 
 .contacts-table thead .col-actions {
@@ -690,6 +691,7 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   position: relative;
   display: inline-flex;
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .contacts-table .action-menu-toggle {
@@ -724,13 +726,20 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   position: absolute;
   right: 0;
   top: calc(100% + var(--space-1));
-  min-width: 10.5rem;
+  min-width: 11rem;
   padding: var(--space-1);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-pop);
   z-index: 10;
+}
+
+.contacts-table .action-menu-panel.is-floating {
+  position: fixed;
+  right: auto;
+  top: auto;
+  z-index: 1000;
 }
 
 .contacts-table .action-menu-panel.hidden {
@@ -740,6 +749,7 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .contacts-table .action-menu-item {
   display: block;
   width: 100%;
+  min-width: max-content;
   text-align: left;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--r-sm);

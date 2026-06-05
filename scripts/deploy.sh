@@ -18,11 +18,13 @@
 #   GIT_BRANCH      分支（默认 main）
 #   SKIP_PULL=1     跳过 git pull（仅重建容器）
 #   FORCE_REBUILD=1 构建镜像时使用 --no-cache
+#   DEPLOY_FAST=1   快速更新：跳过镜像构建（仅改代码时）、缩短健康检查、跳过 Pi 重装
+#   DEPLOY_FAST=0   完整部署：总是重建镜像 + 完整健康检查（旧行为）
 #   SKIP_PI=1       跳过 Pi Coding Agent 安装与配置
-#   DEPLOY_WAIT_CONTAINER_SEC  等待容器 running（默认 90）
-#   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health 秒数（默认 300，慢 VPS 可加大）
-#   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 20）
-#   DEPLOY_FINAL_GRACE_SEC       全部重试失败后的最终缓冲秒数（默认 90）
+#   DEPLOY_WAIT_CONTAINER_SEC  等待容器 running（默认 90；快速模式 30）
+#   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health 秒数（默认 120；快速模式 45）
+#   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 5；快速模式 2）
+#   DEPLOY_FINAL_GRACE_SEC       全部重试失败后的最终缓冲秒数（默认 30；快速模式 10）
 #   DEPLOY_STRICT_SMOKE=0|1      默认 0：HTTP /health 通过后冒烟失败仅 WARNING、部署成功；
 #                                1 时冒烟失败仍 exit 1（旧行为）
 #   SMOKE_USER                   API 冒烟登录用户名（默认 admin，传给 check.sh / smoke_check.py）
@@ -43,14 +45,21 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 APP_PORT="${APP_PORT:-8000}"
 SKIP_PULL="${SKIP_PULL:-0}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
+DEPLOY_FAST="${DEPLOY_FAST:-auto}"
 SKIP_PI="${SKIP_PI:-0}"
 DEPLOY_WAIT_CONTAINER_SEC="${DEPLOY_WAIT_CONTAINER_SEC:-90}"
-DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-300}"
-DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-20}"
-DEPLOY_FINAL_GRACE_SEC="${DEPLOY_FINAL_GRACE_SEC:-90}"
+DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-120}"
+DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-5}"
+DEPLOY_FINAL_GRACE_SEC="${DEPLOY_FINAL_GRACE_SEC:-30}"
 DEPLOY_STRICT_SMOKE="${DEPLOY_STRICT_SMOKE:-0}"
+DEPLOY_STRATEGY="${DEPLOY_STRATEGY:-auto}"
+GIT_BEFORE_HEAD=""
+GIT_AFTER_HEAD=""
 PI_ENV_FILE=""
 PI_SETUP_OK=0
+
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -111,17 +120,15 @@ ensure_repo() {
     log "使用已有目录: ${APP_DIR}"
     cd "${APP_DIR}"
     if [[ -d .git ]]; then
+      GIT_BEFORE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
       if [[ "${SKIP_PULL}" != "1" ]]; then
         log "拉取最新代码 (${GIT_BRANCH})..."
-        local before_head=""
-        before_head="$(git rev-parse HEAD 2>/dev/null || true)"
         git fetch origin "${GIT_BRANCH}"
         git checkout "${GIT_BRANCH}" 2>/dev/null || git checkout -b "${GIT_BRANCH}" "origin/${GIT_BRANCH}"
         git pull --ff-only origin "${GIT_BRANCH}"
-        local after_head=""
-        after_head="$(git rev-parse HEAD 2>/dev/null || true)"
-        if [[ -n "${before_head}" && "${before_head}" != "${after_head}" && "${DEPLOY_REEXEC:-0}" != "1" ]]; then
-          if git diff --name-only "${before_head}" "${after_head}" | grep -qE '^scripts/(deploy|check)\.sh$'; then
+        GIT_AFTER_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+        if [[ -n "${GIT_BEFORE_HEAD}" && "${GIT_BEFORE_HEAD}" != "${GIT_AFTER_HEAD}" && "${DEPLOY_REEXEC:-0}" != "1" ]]; then
+          if git diff --name-only "${GIT_BEFORE_HEAD}" "${GIT_AFTER_HEAD}" | grep -qE '^scripts/(deploy|check)\.sh$'; then
             log "部署/检查脚本已更新，使用新版本重新执行..."
             export DEPLOY_REEXEC=1
             exec bash "${SCRIPT_DIR}/deploy.sh"
@@ -129,9 +136,11 @@ ensure_repo() {
         fi
       else
         log "跳过 git pull (SKIP_PULL=1)"
+        GIT_AFTER_HEAD="${GIT_BEFORE_HEAD}"
       fi
     else
       warn "目录存在但非 git 仓库，跳过 git pull"
+      GIT_AFTER_HEAD=""
     fi
     return
   fi
@@ -149,26 +158,120 @@ ensure_repo() {
   cd "${APP_DIR}"
 }
 
+list_changed_files() {
+  if [[ -n "${GIT_BEFORE_HEAD}" && -n "${GIT_AFTER_HEAD}" && "${GIT_BEFORE_HEAD}" != "${GIT_AFTER_HEAD}" ]]; then
+    git diff --name-only "${GIT_BEFORE_HEAD}" "${GIT_AFTER_HEAD}" 2>/dev/null || true
+    return
+  fi
+  if [[ -d .git ]]; then
+    git diff --name-only HEAD~1 HEAD 2>/dev/null || true
+  fi
+}
+
+detect_deploy_strategy() {
+  if [[ "${DEPLOY_STRATEGY}" != "auto" ]]; then
+    return
+  fi
+  if [[ "${FORCE_REBUILD}" == "1" ]]; then
+    DEPLOY_STRATEGY="rebuild"
+    return
+  fi
+  if ! $SUDO docker inspect salescrm >/dev/null 2>&1; then
+    DEPLOY_STRATEGY="rebuild"
+    return
+  fi
+
+  local changed
+  changed="$(list_changed_files)"
+  if [[ -z "${changed}" ]]; then
+    DEPLOY_STRATEGY="restart"
+    return
+  fi
+  if echo "${changed}" | grep -qE '^(Dockerfile|requirements\.txt)$'; then
+    DEPLOY_STRATEGY="rebuild"
+  elif echo "${changed}" | grep -qE '^docker-compose\.yml$'; then
+    DEPLOY_STRATEGY="recreate"
+  else
+    DEPLOY_STRATEGY="restart"
+  fi
+}
+
+apply_deploy_profile() {
+  local fast=0
+  if [[ "${DEPLOY_FAST}" == "1" ]]; then
+    fast=1
+  elif [[ "${DEPLOY_FAST}" == "0" ]]; then
+    fast=0
+  elif [[ "${DEPLOY_STRATEGY}" == "restart" ]]; then
+    fast=1
+  fi
+
+  if [[ "${fast}" == "1" ]]; then
+    DEPLOY_WAIT_CONTAINER_SEC=30
+    DEPLOY_WAIT_HTTP_SEC=45
+    DEPLOY_FULL_RETRIES=2
+    DEPLOY_FINAL_GRACE_SEC=10
+    export DEPLOY_SMOKE_RETRIES=2
+  else
+    export DEPLOY_SMOKE_RETRIES=5
+  fi
+}
+
 deploy_compose() {
-  log "构建镜像 (port ${APP_PORT})..."
+  detect_deploy_strategy
+  apply_deploy_profile
+
+  log "部署策略: ${DEPLOY_STRATEGY}（DEPLOY_FAST=${DEPLOY_FAST}）"
   export APP_PORT
   local build_args=()
   if [[ "${FORCE_REBUILD}" == "1" ]]; then
     build_args+=(--no-cache)
     log "FORCE_REBUILD=1 — 无缓存构建"
   fi
-  if ! $SUDO env APP_PORT="${APP_PORT}" docker compose build "${build_args[@]}"; then
-    echo "ERROR: docker compose build 失败" >&2
-    show_failure_logs
-    exit 1
-  fi
 
-  log "启动容器..."
-  if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --remove-orphans; then
-    echo "ERROR: docker compose up 失败" >&2
-    show_failure_logs
-    exit 1
-  fi
+  case "${DEPLOY_STRATEGY}" in
+    rebuild)
+      log "构建镜像 (port ${APP_PORT})..."
+      if ! $SUDO env APP_PORT="${APP_PORT}" docker compose build "${build_args[@]}"; then
+        echo "ERROR: docker compose build 失败" >&2
+        show_failure_logs
+        exit 1
+      fi
+      log "启动容器..."
+      if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --remove-orphans; then
+        echo "ERROR: docker compose up 失败" >&2
+        show_failure_logs
+        exit 1
+      fi
+      ;;
+    recreate)
+      log "配置变更：重建应用容器（跳过 pip 安装）..."
+      if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --no-build --force-recreate salescrm; then
+        echo "ERROR: docker compose up 失败" >&2
+        show_failure_logs
+        exit 1
+      fi
+      ;;
+    restart)
+      log "代码更新：跳过镜像构建，重启应用..."
+      $SUDO env APP_PORT="${APP_PORT}" docker compose up -d postgres --no-recreate >/dev/null 2>&1 || true
+      if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --no-build --no-recreate salescrm 2>/dev/null; then
+        log "容器不存在，首次启动..."
+        if ! $SUDO env APP_PORT="${APP_PORT}" docker compose up -d --build --remove-orphans; then
+          echo "ERROR: docker compose up 失败" >&2
+          show_failure_logs
+          exit 1
+        fi
+      else
+        $SUDO env APP_PORT="${APP_PORT}" docker compose restart salescrm
+      fi
+      ;;
+    *)
+      echo "ERROR: 未知 DEPLOY_STRATEGY=${DEPLOY_STRATEGY}" >&2
+      exit 1
+      ;;
+  esac
+
   echo ""
   $SUDO docker compose ps
 }
@@ -266,11 +369,17 @@ run_full_check() {
 
 wait_healthy() {
   wait_for_container
-  # 容器 running != uvicorn 已监听；慢 VPS 上 import 可能需数十秒
-  sleep 5
+
+  if [[ "${DEPLOY_STRATEGY}" == "restart" && "${DEPLOY_FAST}" != "0" ]]; then
+    wait_for_http
+    if run_check --quick --quiet; then
+      log "快速健康检查通过"
+      return 0
+    fi
+    warn "快速检查未通过，进入完整检查…"
+  fi
+
   wait_for_http
-  # HTTP 已通，再等应用完全就绪后跑冒烟（慢 VPS 上 import / 首次 DB 查询较慢）
-  sleep 8
 
   log "运行完整检查（最多重试 ${DEPLOY_FULL_RETRIES} 次）..."
   local retry last_phase="full"
@@ -417,6 +526,15 @@ setup_pi_agent() {
     return 0
   fi
 
+  if [[ -f "${APP_DIR}/.pi-env" ]] && command -v pi >/dev/null 2>&1; then
+    if [[ "${DEPLOY_STRATEGY}" == "restart" || "${DEPLOY_FAST}" == "1" ]]; then
+      PI_ENV_FILE="${APP_DIR}/.pi-env"
+      PI_SETUP_OK=1
+      log "Pi 已安装，跳过重复配置（快速部署）"
+      return 0
+    fi
+  fi
+
   if [[ ! -d "${APP_DIR}/integrations/pi" ]]; then
     warn "未找到 ${APP_DIR}/integrations/pi，跳过 Pi 安装"
     return 0
@@ -472,6 +590,7 @@ print_summary() {
   echo " 账号:    admin / admin123  (登录后请在系统设置修改)"
   echo " 目录:    ${APP_DIR}"
   echo " 更新:    cd ${APP_DIR} && sudo ./scripts/deploy.sh"
+  echo " 快速:    cd ${APP_DIR} && sudo DEPLOY_FAST=1 ./scripts/deploy.sh"
   echo " 状态:    cd ${APP_DIR} && ./scripts/check.sh"
   if [[ "${PI_SETUP_OK}" == "1" && -n "${PI_ENV_FILE}" ]]; then
     echo " Pi:      source ${PI_ENV_FILE} && cd ${APP_DIR} && pi"

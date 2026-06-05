@@ -33,6 +33,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salescrm}
       POSTGRES_DB: ${POSTGRES_DB:-salescrm}
       DATABASE_URL: postgresql://${POSTGRES_USER:-salescrm}:${POSTGRES_PASSWORD:-salescrm}@postgres:5432/${POSTGRES_DB:-salescrm}
+    volumes:
+      # git pull 后重启容器即可生效，日常更新无需重建镜像
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./arin_lookup.py:/app/arin_lookup.py:ro
     healthcheck:
       test:
         - CMD
@@ -46,7 +51,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 20s
 
 volumes:
   salescrm_pgdata:

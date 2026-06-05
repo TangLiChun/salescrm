@@ -37,6 +37,8 @@ from app.sources import web_search
 
 MAX_TOOL_ROUNDS = 8
 MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
+MAX_WEB_SEARCH_QUERIES = 4
+TOOL_HEARTBEAT_SECONDS = 12
 
 AGENT_TOOLS: list[dict[str, Any]] = [
     {
@@ -272,7 +274,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                     "queries": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "多个搜索词（与 query 二选一）",
+                        "description": "多个搜索词（与 query 二选一，一次最多 4 条）",
                     },
                     "max_results": {
                         "type": "integer",
@@ -426,6 +428,27 @@ class ToolEmitter:
 
 def _trim_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
     return history_for_llm(history)
+
+
+def _assistant_intro_before_tools(content: str) -> str:
+    text = (content or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    cut_at = len(text)
+    for marker in (
+        "[工具",
+        "tool_calls",
+        "<|",
+        "```json",
+        '{"query',
+        '{"queries',
+        '"queries"',
+    ):
+        idx = lower.find(marker.lower())
+        if idx >= 0:
+            cut_at = min(cut_at, idx)
+    return text[:cut_at].strip()
 
 
 async def _discover_leads_tool(
@@ -663,13 +686,23 @@ async def _run_tool(
             queries = [query, *queries]
         if not queries:
             return {"error": "请提供 query 或 queries"}
+        truncated = 0
+        if len(queries) > MAX_WEB_SEARCH_QUERIES:
+            truncated = len(queries) - MAX_WEB_SEARCH_QUERIES
+            queries = queries[:MAX_WEB_SEARCH_QUERIES]
         max_results = max(1, min(int(args.get("max_results") or 8), 20))
-        emit.progress(f"联网搜索：{', '.join(queries[:3])}{'…' if len(queries) > 3 else ''}")
-        results = await asyncio.to_thread(
-            web_search.search_web_many,
-            queries,
-            max_results_per_query=max_results,
-        )
+        progress = f"联网搜索 {len(queries)} 条：{', '.join(queries[:2])}{'…' if len(queries) > 2 else ''}"
+        if truncated:
+            progress += f"（已截断 {truncated} 条，请分批搜索）"
+        emit.progress(progress)
+        try:
+            results = await asyncio.to_thread(
+                web_search.search_web_many,
+                queries,
+                max_results_per_query=max_results,
+            )
+        except Exception as exc:  # noqa: BLE001 — return tool error to LLM
+            return {"error": str(exc), "query_count": len(queries)}
         backend = results[0].get("backend") if results else web_search.get_search_config()["active_web_backend"]
         signals = web_search.extract_signals_from_results(results)
         preview = [
@@ -741,7 +774,6 @@ async def agent_chat_stream(
 
     for round_index in range(MAX_TOOL_ROUNDS):
         assistant: dict[str, Any] | None = None
-        streamed_reply = False
         content_buffer = ""
 
         async for event in _iter_llm_stream(messages, AGENT_TOOLS):
@@ -751,13 +783,8 @@ async def agent_chat_stream(
                 return
             if event_type == "content_delta":
                 piece = str(event.get("text") or "")
-                if not piece:
-                    continue
-                if not streamed_reply:
-                    streamed_reply = True
-                    yield {"type": "assistant_start"}
-                content_buffer += piece
-                yield {"type": "assistant_delta", "text": piece}
+                if piece:
+                    content_buffer += piece
             elif event_type == "message":
                 assistant = event.get("message")
 
@@ -769,12 +796,9 @@ async def agent_chat_stream(
         content = (assistant.get("content") or content_buffer or "").strip()
 
         if content and not tool_calls:
-            if streamed_reply:
-                yield {"type": "assistant_done", "text": content}
-            else:
-                yield {"type": "assistant_start"}
-                yield {"type": "assistant_delta", "text": content}
-                yield {"type": "assistant_done", "text": content}
+            yield {"type": "assistant_start"}
+            yield {"type": "assistant_delta", "text": content}
+            yield {"type": "assistant_done", "text": content}
             yield {"type": "done"}
             return
 
@@ -782,10 +806,13 @@ async def agent_chat_stream(
             yield {"type": "error", "message": "模型未返回有效回复"}
             return
 
-        if streamed_reply and content:
-            yield {"type": "assistant_done", "text": content}
+        intro = _assistant_intro_before_tools(content)
+        if intro:
+            yield {"type": "assistant_start"}
+            yield {"type": "assistant_delta", "text": intro}
+            yield {"type": "assistant_done", "text": intro}
 
-        messages.append(assistant)
+        messages.append({**assistant, "content": intro or None})
 
         for tool_call in tool_calls:
             fn = tool_call.get("function") or {}
@@ -805,12 +832,18 @@ async def agent_chat_stream(
             async def worker() -> None:
                 try:
                     result_holder["value"] = await _run_tool(user_id, name, args, emitter)
+                except Exception as exc:  # noqa: BLE001 — keep SSE stream alive
+                    result_holder["value"] = {"error": str(exc)}
                 finally:
                     await event_queue.put(None)
 
             task = asyncio.create_task(worker())
             while True:
-                item = await event_queue.get()
+                try:
+                    item = await asyncio.wait_for(event_queue.get(), timeout=TOOL_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield {"type": "status", "message": f"仍在执行 {name}…"}
+                    continue
                 if item is None:
                     break
                 kind, payload = item
@@ -836,3 +869,6 @@ async def agent_chat_stream(
             yield {"type": "assistant_delta", "text": final_text}
             yield {"type": "assistant_done", "text": final_text}
             yield {"type": "done"}
+            return
+
+    yield {"type": "error", "message": "对话未完成，请重试"}
