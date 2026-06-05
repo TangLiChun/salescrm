@@ -579,7 +579,8 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮助销售/BD 人员操作
 规则：简洁中文；屏蔽域名用 update_import_filters；导入前查重；不要编造数据。
 入库：lead_score ≥ 60 直接 import_leads 或 discover_leads auto_import，无需再问用户。
 import_leads 的 asn 必须是纯数字（如 395092），不要带 AS 前缀。
-若线索含 linkedin/x/facebook/profile_url，导入时会自动写入联系人社交链接字段。"""
+若线索含 linkedin/x/facebook/profile_url，导入时会自动写入联系人社交链接字段。
+禁止只回复「让我查一下 / 我先搜一下」等开场白就结束；需要查 CRM 或联网时必须立刻调用对应工具。"""
 
 
 async def _stream_lead_events(
@@ -786,6 +787,33 @@ def _meaningful_assistant_content(content: str) -> str:
     return visible
 
 
+def _assistant_promises_tool_use(content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return False
+    if text.endswith(("：", ":", "…", "...")):
+        return True
+    lower = text.lower()
+    markers = (
+        "我先",
+        "让我",
+        "我来",
+        "正在",
+        "接下来",
+        "马上",
+        "帮你查",
+        "帮你搜",
+        "拉一下",
+        "补查",
+        "再扫",
+        "再查",
+        "搜索 crm",
+        "查一下",
+        "筛出",
+    )
+    return any(marker in lower for marker in markers)
+
+
 def _extract_json_args(text: str) -> dict[str, Any]:
     start = text.find("{")
     if start < 0:
@@ -888,6 +916,13 @@ _EMPTY_RESPONSE_NUDGE = (
     "（系统）请用中文回复用户，并调用合适的 CRM 工具完成任务，"
     "例如 list_contacts（搜索联系人）、delete_contacts（删除联系人）。"
 )
+
+_INTRO_ONLY_NUDGE = (
+    "（系统）不要只回复开场白就停止。请立即调用 list_contacts、web_search、"
+    "lookup_asns 等工具完成用户请求，然后再总结结果。"
+)
+
+_MAX_LLM_NUDGES = 2
 
 
 def _normalize_tool_name(name: str) -> str:
@@ -1717,6 +1752,7 @@ async def agent_chat_stream(
         content_buffer = ""
         streamed_reply = False
         nudged_empty_response = False
+        llm_nudge_count = 0
         tool_calls: list[Any] = []
         content = ""
         prepared_calls: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
@@ -1773,6 +1809,14 @@ async def agent_chat_stream(
                     assistant = {**(assistant or {}), "tool_calls": tool_calls, "content": intro or None}
 
             if content and not tool_calls:
+                if _assistant_promises_tool_use(content) and llm_nudge_count < _MAX_LLM_NUDGES:
+                    llm_nudge_count += 1
+                    messages.append({"role": "assistant", "content": content})
+                    if assistant and assistant.get("reasoning_content"):
+                        messages[-1]["reasoning_content"] = assistant["reasoning_content"]
+                    messages.append({"role": "user", "content": _INTRO_ONLY_NUDGE})
+                    yield {"type": "status", "message": "模型未调用工具，正在重试…"}
+                    continue
                 if not streamed_reply:
                     yield {"type": "assistant_start"}
                     yield {"type": "assistant_delta", "text": content}
@@ -1781,8 +1825,8 @@ async def agent_chat_stream(
                 return
 
             if not tool_calls:
-                if not nudged_empty_response:
-                    nudged_empty_response = True
+                if llm_nudge_count < _MAX_LLM_NUDGES:
+                    llm_nudge_count += 1
                     messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
                     yield {"type": "status", "message": "模型未调用工具，正在重试…"}
                     continue
@@ -1801,17 +1845,25 @@ async def agent_chat_stream(
                         prepared_calls = _prepare_tool_calls(inline_calls)
                         content = _meaningful_assistant_content(intro)
             if not prepared_calls:
-                if content:
+                attempted_tools = bool(tool_calls)
+                if content and not attempted_tools:
                     if not streamed_reply:
                         yield {"type": "assistant_start"}
                         yield {"type": "assistant_delta", "text": content}
                     yield {"type": "assistant_done", "text": content}
                     yield {"type": "done"}
                     return
-                if not nudged_empty_response:
-                    nudged_empty_response = True
+                if llm_nudge_count < _MAX_LLM_NUDGES:
+                    llm_nudge_count += 1
+                    if content:
+                        messages.append({"role": "assistant", "content": content})
+                        if assistant and assistant.get("reasoning_content"):
+                            messages[-1]["reasoning_content"] = assistant["reasoning_content"]
                     messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
-                    yield {"type": "status", "message": "工具调用无效，正在重试…"}
+                    yield {
+                        "type": "status",
+                        "message": "工具调用无效，正在重试…" if attempted_tools else "模型未调用工具，正在重试…",
+                    }
                     continue
                 yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
                 yield {"type": "done"}
