@@ -19,7 +19,7 @@ from app.pi_context import (
 from app.settings_store import get_setting
 
 MAX_THREADS_PER_USER = 50
-MAX_LLM_HISTORY_MESSAGES = 160
+MAX_LLM_HISTORY_MESSAGES = 100
 
 
 def new_thread_id() -> str:

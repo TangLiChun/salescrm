@@ -15,6 +15,63 @@ REQUEST_TIMEOUT = 60.0
 AGENT_REQUEST_TIMEOUT = 180.0
 
 
+def is_deepseek_provider(*, model: str = "", base_url: str = "") -> bool:
+    text = f"{model} {base_url}".lower()
+    return "deepseek" in text
+
+
+def resolve_deepseek_thinking(*, tools: list[dict[str, Any]] | None) -> str | None:
+    """DeepSeek thinking mode: Pi tool rounds default to disabled for reliable tool calls."""
+    mode = get_setting("llm_thinking_mode", "auto").strip().lower()
+    if mode == "enabled":
+        return "enabled"
+    if mode == "disabled":
+        return "disabled"
+    if tools:
+        return "disabled"
+    return None
+
+
+def sanitize_messages_for_api(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop reasoning_content on assistant turns without tool_calls (DeepSeek API rule)."""
+    cleaned: list[dict[str, Any]] = []
+    for raw in messages:
+        if not isinstance(raw, dict):
+            continue
+        msg = dict(raw)
+        if msg.get("role") == "assistant" and not (msg.get("tool_calls") or []):
+            msg.pop("reasoning_content", None)
+            msg.pop("reasoning", None)
+        cleaned.append(msg)
+    return cleaned
+
+
+def format_assistant_message_for_api(
+    assistant: dict[str, Any] | None,
+    *,
+    content: str | None,
+    tool_calls: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Build assistant message for the next LLM request (DeepSeek tool-call turns need reasoning_content)."""
+    msg: dict[str, Any] = {"role": "assistant", "content": content or None}
+    calls = tool_calls or []
+    if calls:
+        msg["tool_calls"] = calls
+        reasoning = str(
+            (assistant or {}).get("reasoning_content") or (assistant or {}).get("reasoning") or ""
+        ).strip()
+        if reasoning:
+            msg["reasoning_content"] = reasoning
+    return msg
+
+
+def _chat_completions_url(base_url: str) -> str:
+    base = (base_url or DEFAULT_BASE_URL).rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -222,23 +279,31 @@ def chat_completion_with_tools_stream(
     *,
     temperature: float = 0.2,
     json_mode: bool = False,
+    tool_choice: str | dict[str, Any] | None = None,
 ):
     """Yield content deltas while streaming, then the assembled assistant message."""
     api_key, base_url, model = _settings()
     payload: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
-        "messages": messages,
+        "messages": sanitize_messages_for_api(messages),
         "stream": True,
     }
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
     elif json_mode:
         payload["response_format"] = {"type": "json_object"}
 
+    if is_deepseek_provider(model=model, base_url=base_url):
+        thinking = resolve_deepseek_thinking(tools=tools)
+        if thinking:
+            payload["thinking"] = {"type": thinking}
+            if thinking == "enabled" and tools:
+                payload["reasoning_effort"] = "high"
+
     req = urllib.request.Request(
-        f"{base_url}/chat/completions",
+        _chat_completions_url(base_url),
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",

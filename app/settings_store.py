@@ -26,6 +26,7 @@ DEFAULTS: dict[str, str] = {
     "llm_api_key": "",
     "llm_base_url": "",
     "llm_model": "",
+    "llm_thinking_mode": "auto",
     "tavily_api_key": "",
     "serpapi_key": "",
     "brave_search_key": "",

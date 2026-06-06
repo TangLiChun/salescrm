@@ -32,7 +32,11 @@ from app.database import (
 from app.lead_preferences import get_prefs, preference_hints_for_llm, reset_prefs
 from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
-from app.llm import LLMError, chat_completion_with_tools_stream
+from app.llm import (
+    LLMError,
+    chat_completion_with_tools_stream,
+    format_assistant_message_for_api,
+)
 from app.pi_chat_store import (
     MAX_LLM_HISTORY_MESSAGES,
     compress_thread_context_until_current,
@@ -1718,13 +1722,19 @@ async def _run_tool(
 async def _iter_llm_stream(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
+    *,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
     def worker() -> None:
         try:
-            for event in chat_completion_with_tools_stream(messages, tools):
+            for event in chat_completion_with_tools_stream(
+                messages,
+                tools,
+                tool_choice=tool_choice,
+            ):
                 loop.call_soon_threadsafe(queue.put_nowait, event)
         except LLMError as exc:
             loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
@@ -1828,7 +1838,11 @@ async def agent_chat_stream(
             streamed_reply = False
             last_streamed_visible = ""
 
-            async for event in _iter_llm_stream(messages, AGENT_TOOLS):
+            tool_choice: str | dict[str, Any] | None = (
+                "required" if llm_nudge_count > 0 and AGENT_TOOLS else None
+            )
+
+            async for event in _iter_llm_stream(messages, AGENT_TOOLS, tool_choice=tool_choice):
                 event_type = event.get("type")
                 if event_type == "error":
                     yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
@@ -1957,11 +1971,11 @@ async def agent_chat_stream(
 
         executed_calls = [tool_call for tool_call, _, _ in prepared_calls]
         messages.append(
-            {
-                **assistant,
-                "content": intro or None,
-                "tool_calls": executed_calls,
-            }
+            format_assistant_message_for_api(
+                assistant,
+                content=intro or None,
+                tool_calls=executed_calls,
+            )
         )
 
         for tool_call, name, args in prepared_calls:

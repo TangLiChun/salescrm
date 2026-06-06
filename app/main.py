@@ -240,6 +240,7 @@ class SettingsUpdateRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_thinking_mode: str | None = None
     tavily_api_key: str | None = None
     serpapi_key: str | None = None
     brave_search_key: str | None = None

@@ -201,6 +201,7 @@ export async function loadSettingsForm() {
   setInputValue("setting-default-admin-user", data.default_admin_user);
   setInputValue("setting-llm-base-url", data.llm_base_url);
   setInputValue("setting-llm-model", data.llm_model);
+  setInputValue("setting-llm-thinking-mode", data.llm_thinking_mode || "auto");
   setInputValue("setting-zhipu-search-engine", data.zhipu_search_engine || "search_pro");
   setInputValue("setting-brightdata-serp-zone", data.brightdata_serp_zone || "");
   setInputValue("setting-brightdata-serp-format", data.brightdata_serp_data_format || "auto");
@@ -264,6 +265,7 @@ export async function saveSettings(event) {
     default_admin_user: document.getElementById("setting-default-admin-user").value.trim(),
     llm_base_url: document.getElementById("setting-llm-base-url").value.trim(),
     llm_model: document.getElementById("setting-llm-model").value.trim(),
+    llm_thinking_mode: document.getElementById("setting-llm-thinking-mode").value.trim(),
     zhipu_search_engine: document.getElementById("setting-zhipu-search-engine").value.trim(),
     brightdata_serp_zone: document.getElementById("setting-brightdata-serp-zone").value.trim(),
     brightdata_serp_data_format: document.getElementById("setting-brightdata-serp-format").value.trim(),

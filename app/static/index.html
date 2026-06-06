@@ -506,6 +506,13 @@
                   <input id="setting-llm-base-url" type="url"></label>
                 <label class="field"><span>Model</span>
                   <input id="setting-llm-model" type="text"></label>
+                <label class="field"><span data-i18n="settings.llmThinkingMode">DeepSeek 思考模式</span>
+                  <select id="setting-llm-thinking-mode">
+                    <option value="auto" data-i18n="settings.llmThinkingAuto">自动（Pi 工具调用时关闭）</option>
+                    <option value="disabled" data-i18n="settings.llmThinkingDisabled">关闭（推荐 Tool Calls）</option>
+                    <option value="enabled" data-i18n="settings.llmThinkingEnabled">开启（推理更强，工具稍慢）</option>
+                  </select></label>
+                <p class="hint" data-i18n="settings.llmDeepseekHint">DeepSeek V4：Base URL 填 https://api.deepseek.com，Model 填 deepseek-v4-pro 或 deepseek-v4-flash。Pi 默认关闭思考模式以提高 Tool Calls 稳定性。</p>
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.zhipuWebSearch">智谱联网搜索（推荐）</legend>

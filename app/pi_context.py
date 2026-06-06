@@ -11,7 +11,7 @@ from app.llm import LLMError, chat_completion
 MAX_STORED_MESSAGES = 800
 
 # Sent to LLM with full user/assistant/tool-summary text
-MAX_RECENT_FULL_MESSAGES = 160
+MAX_RECENT_FULL_MESSAGES = 100
 
 # Compact one-line fallback for middle tier (between summary and recent)
 MAX_MIDDLE_COMPACT_LINES = 240
