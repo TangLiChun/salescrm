@@ -62,12 +62,12 @@ Pi 是 Sales CRM 内的 AI 助手,帮销售/BD 操作网络运营商联系人库
 | `app/pi_decisions.py` | 主循环 2059-2179 的分支 → `decide_turn()` 状态机 + `Decision` 类型 | 纯函数 |
 | `app/pi_reply_heuristics.py` | `_meaningful_assistant_content` / `_assistant_intro_before_tools` / `_assistant_promises_tool_use` / `_user_requests_continuation` / `_assistant_response_empty` / `_infer_continuation_query` / `_make_discover_fallback_call` / `_fallback_prepared_calls` / `_content_looks_like_tool_call` / `_content_is_tool_json_fragment` | 纯函数 |
 | `app/pi_tool_calls.py` | `_prepare_tool_calls` / `_parse_tool_call` / `_extract_tool_calls_from_content` / `_parse_inline_tool_calls` / `_normalize_raw_tool_entry` / `_normalize_tool_name` / `_infer_tool_name` / `_coerce_list_contacts_args` / `_ensure_tool_call_id` / `_extract_json_args` | 纯函数 |
-| `app/pi_tools.py` | `AGENT_TOOLS` schema + `KNOWN_TOOL_NAMES` + `_run_tool` 分发表 + 各 `_*_tool` 包装 | 分发表(可注入) |
 | `app/pi_stream_parser.py` | `llm.py` 的 `_parse_sse_or_json_lines` / `_consume_stream_chunk` / `_merge_tool_call_delta` / `_apply_complete_message` | 纯函数 |
 | `app/pi_llm_client.py` | 新:async httpx 真流式 + 重试/退避/超时 + 类型化事件 | I/O(可注入) |
-| `app/pi_events.py` | 新:agent 事件流的 TypedDict 契约(`status`/`assistant_start`/`assistant_delta`/`assistant_done`/`tool_start`/`tool_progress`/`tool_event`/`tool_result`/`context`/`error`/`done`) | 纯类型 |
 
-`pi_context.py`、`pi_chat_store.py` 保持原位,只补测试。`llm.py` 保留 `chat_completion`/`chat_completion_with_tools`(摘要、评分等非流式用途),其流式工具调用部分改为委托 `pi_llm_client`;SSE/delta 解析改为复用 `pi_stream_parser`。
+`pi_context.py`、`pi_chat_store.py` 保持原位,只补测试。
+
+**本子项目内延后(2026-06-06 决定):** `pi_tools.py`(~28 工具的 `AGENT_TOOLS` schema + `_run_tool` 分发表)与 `pi_events.py`(事件 TypedDict 契约)不在本子项目抽离 —— 工具分发与事件类型并非可靠性热点,拆它们是高 churn、低价值、且会动到正常工作的工具层(YAGNI)。它们暂留 `agent_chat.py`,可在后续子项目按需抽离。本决定不影响 §3 的任何 DoD 判据。`llm.py` 保留 `chat_completion`/`chat_completion_with_tools`(摘要、评分等非流式用途),其流式工具调用部分改为委托 `pi_llm_client`;SSE/delta 解析改为复用 `pi_stream_parser`。
 
 ## 5. 核心修复:agent 决策状态机
 
@@ -190,6 +190,6 @@ async def agent_chat_stream(
 
 ## 14. 交付物
 
-- 新模块:`app/pi_decisions.py`、`app/pi_reply_heuristics.py`、`app/pi_tool_calls.py`、`app/pi_tools.py`、`app/pi_stream_parser.py`、`app/pi_llm_client.py`、`app/pi_events.py`。
+- 新模块:`app/pi_decisions.py`、`app/pi_reply_heuristics.py`、`app/pi_tool_calls.py`、`app/pi_stream_parser.py`、`app/pi_llm_client.py`。(`pi_tools.py` / `pi_events.py` 本子项目内延后,见 §4 说明。)
 - 瘦身后的 `app/agent_chat.py`(驱动 + 门面);委托改造后的 `app/llm.py`。
 - `tests/`(含 `FakeLLM`、四层测试)、`pyproject.toml`、`requirements-dev.txt`、`requirements.txt`(+httpx)、`.github/workflows/ci.yml`、`scripts/test.sh`。
