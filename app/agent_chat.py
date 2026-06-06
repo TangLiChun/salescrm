@@ -1956,11 +1956,13 @@ async def _iter_llm_stream(
 
 async def _stream_text_reply(
     messages: list[dict[str, Any]],
+    llm_client: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
 ) -> tuple[str, bool]:
     """One text-only LLM turn (no tools). Returns (text, ok)."""
+    client = llm_client or _iter_llm_stream
     assistant: dict[str, Any] | None = None
     content_buffer = ""
-    async for event in _iter_llm_stream(messages, None):
+    async for event in client(messages, None):
         event_type = event.get("type")
         if event_type == "error":
             return "", False
@@ -1981,12 +1983,16 @@ async def agent_chat_stream(
     *,
     thread_id: str | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    llm_client: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
+    tool_runner: Callable[..., Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     if cancel_check and cancel_check():
         yield {"type": "error", "message": "任务已停止"}
         yield {"type": "done"}
         return
     yield {"type": "status", "message": "Pi 助手思考中…"}
+    llm_client = llm_client or _iter_llm_stream
+    tool_runner = tool_runner or _run_tool
 
     thread: dict[str, Any] | None = None
     if thread_id:
@@ -2059,7 +2065,7 @@ async def agent_chat_stream(
                 "required" if llm_nudge_count > 0 and AGENT_TOOLS else None
             )
 
-            async for event in _iter_llm_stream(messages, AGENT_TOOLS, tool_choice=tool_choice):
+            async for event in llm_client(messages, AGENT_TOOLS, tool_choice=tool_choice):
                 event_type = event.get("type")
                 if event_type == "error":
                     yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
@@ -2255,7 +2261,7 @@ async def agent_chat_stream(
 
             async def worker() -> None:
                 try:
-                    result_holder["value"] = await _run_tool(user_id, name, args, emitter)
+                    result_holder["value"] = await tool_runner(user_id, name, args, emitter)
                 except Exception as exc:  # noqa: BLE001 — keep SSE stream alive
                     result_holder["value"] = {"error": str(exc)}
                 finally:
@@ -2298,7 +2304,7 @@ async def agent_chat_stream(
                     ),
                 }
             )
-            final_text, ok = await _stream_text_reply(messages)
+            final_text, ok = await _stream_text_reply(messages, llm_client)
             if not ok:
                 final_text = "已达到最大工具调用轮次，请简化问题后重试。"
             yield {"type": "assistant_start"}
