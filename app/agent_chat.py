@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -31,7 +30,6 @@ from app.lead_discovery import discover_leads_stream
 from app.lead_preferences import get_prefs, preference_hints_for_llm, reset_prefs
 from app.llm import (
     LLMError,
-    chat_completion_with_tools_stream,
     format_assistant_message_for_api,
 )
 from app.pi_chat_store import (
@@ -48,6 +46,7 @@ from app.pi_decisions import (
     Retry,
     decide_turn,
 )
+from app.pi_llm_client import stream_chat
 from app.pi_reply_heuristics import (
     _MAX_LLM_NUDGES,
     _assistant_intro_before_tools,
@@ -1360,30 +1359,11 @@ async def _iter_llm_stream(
     *,
     tool_choice: str | dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def worker() -> None:
-        try:
-            for event in chat_completion_with_tools_stream(
-                messages,
-                tools,
-                tool_choice=tool_choice,
-            ):
-                loop.call_soon_threadsafe(queue.put_nowait, event)
-        except LLMError as exc:
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
-        except Exception as exc:  # noqa: BLE001 — surface unexpected LLM stream failures
-            loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(exc)})
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    threading.Thread(target=worker, daemon=True).start()
-    while True:
-        item = await queue.get()
-        if item is None:
-            break
-        yield item
+    try:
+        async for event in stream_chat(messages, tools, tool_choice=tool_choice):
+            yield event
+    except LLMError as exc:
+        yield {"type": "error", "message": str(exc)}
 
 
 async def _stream_text_reply(
