@@ -48,6 +48,23 @@ def test_assemble_message_assigns_missing_id():
     assert msg["tool_calls"][0]["id"].startswith("call_")
 
 
+def test_finish_reason_is_preserved():
+    content, reasoning, tools, emitted, finish_reasons = [], [], {}, [False], []
+    events = consume_stream_chunk(
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": "length"}]},
+        content_parts=content,
+        reasoning_parts=reasoning,
+        tool_calls=tools,
+        emit_content_delta=True,
+        tool_status_emitted=emitted,
+        finish_reasons=finish_reasons,
+    )
+    msg = assemble_message(content, reasoning, tools, finish_reasons)
+    assert finish_reasons == ["length"]
+    assert msg["finish_reason"] == "length"
+    assert {"type": "content_delta", "text": "hi"} in events
+
+
 def test_parse_sse_line():
     assert parse_sse_line("data: [DONE]") is None
     assert parse_sse_line("") is None

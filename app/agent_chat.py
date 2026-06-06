@@ -73,6 +73,7 @@ MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
 MAX_WEB_SEARCH_QUERIES = 4
 TOOL_HEARTBEAT_SECONDS = 12
 MAX_LLM_CALLS_PER_TURN = 30
+MAX_EXECUTED_TOOL_CALLS_PER_TURN = 8
 
 
 def _social_profile_tool(
@@ -183,7 +184,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "discover_leads",
-            "description": "首选线索工具：PeeringDB 直连 + 全球 RDAP + 联网搜索 + LLM 评分/入库。找 peering 联系人、挖 ASN 邮箱、批量线索请用这个，不要手动串联 web_search",
+            "description": "首选线索工具：PeeringDB 直连 + 全球 RDAP + 联网搜索 + LLM 评分/入库。找 peering 联系人、批量挖潜在线索请用这个，不要手动串联 web_search。若用户已给明确 ASN 列表且只要 RDAP/role 邮箱，必须改用 lookup_asns",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -205,7 +206,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "lookup_asns",
-            "description": "批量 RDAP 查询 ASN role 邮箱（ARIN/RIPE/APNIC 等），支持混排文本自动去重",
+            "description": "批量 RDAP 查询已知 ASN 的 role 邮箱（ARIN/RIPE/APNIC 等），支持混排文本自动去重；查完直接总结，不要再扩展 discover_leads 或 web_search",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -560,17 +561,19 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮销售/BD 操作网络运
 1. 需要查 CRM 或联网时立刻调用工具。禁止只回「让我查一下 / 我先搜一下」等开场白就停——结论与动作先行，说明放到工具结果之后。
 2. 能并行的工具调用一次性发出（如一次查多个 ASN、多个搜索词）；拿到足够结果就总结收尾，不要反复重查同一目标。
 3. 简洁中文；不编造数据；lead_score ≥ 60 直接入库（import_leads 或 discover_leads 的 auto_import），无需再问用户。
+4. 商用护栏：discover_leads 是完整线索流水线（PeeringDB + RDAP + 联网搜索 + 评分 + 入库）。一旦本轮调用 discover_leads，立即根据结果总结，禁止继续调用 web_search、get_search_config、get_lead_preferences、list_contacts、get_stats、get_contact、enrich_contact 做二次补搜或查配置，除非用户明确要求这些工具本身。
+5. 若用户已给出明确 ASN 列表且只要 role/RDAP/abuse/NOC 邮箱，本轮只调用 lookup_asns；禁止升级为 discover_leads 或 web_search。
 
 选哪个工具（按场景对号入座）：
-- 找 peering 联系人 / 挖 ASN 邮箱 / 批量找线索 → discover_leads（auto_import=true, min_score=60）。这是首选，别用 web_search 替代，也别手动串联多次 web_search。
-- 已有明确 ASN 列表、只要 RDAP role 邮箱 → lookup_asns
+- 找 peering 联系人 / 批量找线索 / 挖潜在客户 → discover_leads（auto_import=true, min_score=60）。这是首选，别用 web_search 替代，也别手动串联多次 web_search。
+- 已有明确 ASN 列表、只要 RDAP role 邮箱 → 只调用 lookup_asns；不要再调用 discover_leads/web_search，除非用户还要求找更多公司、找线索或导入。
 - 给已有 CRM 联系人扩展更多联系方式 → enrich_contact
 - 写 outreach / 续跟 / 总结下一步 → 先 get_contact + list_contact_notes 看历史，必要时 add_contact_note 记结论
 - 已有社交 profile URL → 对应 collect_linkedin/x/facebook_profiles；批量找线索仍用 discover_leads（会自动从结果提取 URL）
 - 抓 peering/contact/NOC 页面正文 → fetch_web_pages；查主机/VPS 论坛 → search_hosting_forums
-- web_search 只用于快速查证单个资料，不用于线索挖掘主流程
-- 用户问数据渠道/搜索引擎配置 → 先 get_search_config 再回答
-- 用户问「为什么搜得更严 / 避开某类域名」→ get_lead_preferences 解释；要清空学习结果需用户明确同意后 reset_lead_preferences
+- web_search 只用于快速查证单个资料，不用于线索挖掘主流程；如果同批或此前已调用 discover_leads，不要再调用 web_search。
+- 用户问数据渠道/搜索引擎配置 → 先 get_search_config 再回答；找线索时不要顺手查配置。
+- 用户问「为什么搜得更严 / 避开某类域名」→ get_lead_preferences 解释；找线索时不要顺手查偏好；要清空学习结果需用户明确同意后 reset_lead_preferences。
 
 入库与数据规则：
 - import_leads 每行必须含 email，尽量带 org 和 name；asn 必须是纯数字（如 395092，不要带 AS 前缀）。
@@ -851,6 +854,126 @@ def append_user_turn_to_messages(
     ):
         return
     messages.append({"role": "user", "content": user_text})
+
+
+def _is_asn_role_lookup_turn(user_message: str) -> bool:
+    text = (user_message or "").lower()
+    if not text or not parse_asns_from_text(user_message):
+        return False
+    lookup_tokens = (
+        "role",
+        "rdap",
+        "邮箱",
+        "email",
+        "mail",
+        "abuse",
+        "noc",
+        "technical",
+        "admin",
+        "tech-c",
+        "admin-c",
+    )
+    discovery_tokens = (
+        "线索",
+        "潜在客户",
+        "客户",
+        "公司",
+        "导入",
+        "import",
+        "找更多",
+        "挖掘",
+    )
+    return any(token in text for token in lookup_tokens) and not any(
+        token in text for token in discovery_tokens
+    )
+
+
+def _is_lead_discovery_turn(user_message: str) -> bool:
+    text = (user_message or "").lower()
+    if not text:
+        return False
+    if _is_asn_role_lookup_turn(user_message):
+        return False
+    action_tokens = ("找", "搜", "挖", "discover", "search", "查找", "扩展")
+    lead_tokens = (
+        "peering",
+        "noc",
+        "isp",
+        "运营商",
+        "线索",
+        "联系人",
+        "客户",
+        "公司",
+        "asn 邮箱",
+        "role 邮箱",
+    )
+    return any(token in text for token in action_tokens) and any(
+        token in text for token in lead_tokens
+    )
+
+
+def _blocked_tool_result(name: str, reason: str) -> dict[str, Any]:
+    return {
+        "blocked": True,
+        "tool": name,
+        "reason": reason,
+        "message": "该工具调用已被 Pi 商用护栏拦截，请根据已有结果直接总结。",
+    }
+
+
+def _tool_block_reason(
+    name: str,
+    *,
+    user_message: str,
+    current_batch_names: set[str],
+    executed_names: list[str],
+    executed_count: int,
+) -> str | None:
+    if executed_count >= MAX_EXECUTED_TOOL_CALLS_PER_TURN:
+        return f"本轮工具调用预算已达 {MAX_EXECUTED_TOOL_CALLS_PER_TURN} 次"
+
+    if _is_asn_role_lookup_turn(user_message):
+        if name == "lookup_asns" and "lookup_asns" in executed_names:
+            return "lookup_asns 本轮已完成明确 ASN role 邮箱查询，禁止重复查询"
+        if name != "lookup_asns":
+            return "明确 ASN role/RDAP 邮箱查询必须使用 lookup_asns，禁止扩展为线索搜索或网页搜索"
+
+    discover_seen = "discover_leads" in executed_names or "discover_leads" in current_batch_names
+    if not discover_seen:
+        return None
+
+    if name == "discover_leads" and "discover_leads" in executed_names:
+        return "discover_leads 本轮已完成，禁止重复线索搜索"
+
+    blocked_after_discover = {
+        "web_search",
+        "get_search_config",
+        "get_lead_preferences",
+        "list_contacts",
+        "get_stats",
+        "get_contact",
+        "enrich_contact",
+    }
+    if name in blocked_after_discover and (
+        "discover_leads" in executed_names or _is_lead_discovery_turn(user_message)
+    ):
+        return "discover_leads 已覆盖线索搜索/评分/入库，禁止继续调用辅助搜索或配置工具"
+    return None
+
+
+async def _finalize_with_summary(
+    messages: list[dict[str, Any]],
+    llm_client: Callable[..., AsyncIterator[dict[str, Any]]],
+    instruction: str,
+) -> AsyncIterator[dict[str, Any]]:
+    messages.append({"role": "user", "content": instruction})
+    final_text, ok = await _stream_text_reply(messages, llm_client)
+    if not ok:
+        final_text = "工具结果已整理完毕，请查看上方结果并按需继续缩小范围。"
+    yield {"type": "assistant_start"}
+    yield {"type": "assistant_delta", "text": final_text}
+    yield {"type": "assistant_done", "text": final_text}
+    yield {"type": "done"}
 
 
 async def _discover_leads_tool(
@@ -1445,6 +1568,8 @@ async def agent_chat_stream(
     append_user_turn_to_messages(messages, history or [], message)
 
     llm_call_count = 0
+    executed_tool_names: list[str] = []
+    executed_tool_count = 0
     for round_index in range(MAX_TOOL_ROUNDS):
         if cancel_check and cancel_check():
             yield {"type": "error", "message": "任务已停止"}
@@ -1580,8 +1705,44 @@ async def agent_chat_stream(
             )
         )
 
+        current_batch_names = {name for _, name, _ in prepared_calls}
+        should_force_summary = False
+
         for tool_call, name, args in prepared_calls:
+            block_reason = _tool_block_reason(
+                name,
+                user_message=message,
+                current_batch_names=current_batch_names,
+                executed_names=executed_tool_names,
+                executed_count=executed_tool_count,
+            )
+            if block_reason:
+                blocked_result = _blocked_tool_result(name, block_reason)
+                yield {
+                    "type": "tool_blocked",
+                    "name": name,
+                    "args": args,
+                    "reason": block_reason,
+                }
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": compress_tool_result_for_llm(name, blocked_result),
+                    }
+                )
+                allow_asn_lookup_correction = (
+                    block_reason.startswith("明确 ASN")
+                    and "lookup_asns" not in executed_tool_names
+                    and "lookup_asns" not in current_batch_names
+                )
+                if not allow_asn_lookup_correction:
+                    should_force_summary = True
+                continue
+
             yield {"type": "tool_start", "name": name, "args": args}
+            executed_tool_count += 1
+            executed_tool_names.append(name)
 
             event_queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
             emitter = ToolEmitter(event_queue)
@@ -1621,6 +1782,21 @@ async def agent_chat_stream(
                     "content": tool_content,
                 }
             )
+            if (
+                name == "discover_leads"
+                or (name == "lookup_asns" and _is_asn_role_lookup_turn(message))
+                or executed_tool_count >= MAX_EXECUTED_TOOL_CALLS_PER_TURN
+            ):
+                should_force_summary = True
+
+        if should_force_summary:
+            reason = (
+                "（系统）关键工具已完成，或本轮工具预算/商用护栏已触发。"
+                "请立即根据已有工具结果给出简洁总结和下一步建议，不要再调用任何工具。"
+            )
+            async for event in _finalize_with_summary(messages, llm_client, reason):
+                yield event
+            return
 
         if round_index == MAX_TOOL_ROUNDS - 1:
             messages.append(

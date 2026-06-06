@@ -1,18 +1,21 @@
 """Deterministic tests for the live-eval scoring logic (no network).
 
-The live run in scripts/eval_pi_prompt.py needs a real LLM, but its scoring
+The live run in scripts/pi_agent_harness.py needs a real LLM, but its scoring
 function must itself be correct — these tests pin that with synthetic event
 streams shaped like real agent_chat_stream output.
 """
 
-import sys
-from pathlib import Path
+import json
 
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from scripts.eval_pi_prompt import Scenario, score_run  # noqa: E402
+from app.pi_harness import (
+    SCENARIOS,
+    Scenario,
+    load_scenarios_from_file,
+    result_record,
+    scenario_from_dict,
+    score_run,
+)
+from scripts.pi_agent_harness import build_summary
 
 
 def _tool_start(name, args=None):
@@ -62,6 +65,7 @@ def test_no_tool_call_fails():
     r = score_run(events, scenario)
     assert r.first_tool is None
     assert not r.selected_expected
+    assert r.lonely_intro
     assert not r.passed
 
 
@@ -92,3 +96,143 @@ def test_either_expected_tool_accepted():
     scenario = Scenario("x", "m", expect_tools={"lookup_asns", "discover_leads"})
     events = [_tool_start("lookup_asns", {"text": "AS15169 13335"}), _DONE]
     assert score_run(events, scenario).selected_expected
+
+
+def test_builtin_asn_scenario_requires_lookup_only():
+    scenario = next(s for s in SCENARIOS if s.name == "asn-roleemail-lookup")
+    assert scenario.expect_tools == {"lookup_asns"}
+    assert {"discover_leads", "web_search"} <= scenario.forbid_tools
+    assert score_run(
+        [_tool_start("discover_leads", {"query": "AS15169 role"})], scenario
+    ).failure_reasons
+
+
+def test_error_without_done_fails_cleanliness():
+    scenario = Scenario("x", "m", expect_tools={"list_contacts"})
+    events = [{"type": "error", "message": "LLM 请求失败"}]
+    r = score_run(events, scenario)
+    assert r.had_error
+    assert not r.stopped_cleanly
+    assert "stream_did_not_end_with_done" in r.failure_reasons
+    assert not r.passed
+
+
+def test_blocked_tools_are_reported_without_counting_as_executed():
+    scenario = Scenario("x", "m", expect_tools={"discover_leads"}, forbid_tools={"web_search"})
+    events = [
+        _tool_start("discover_leads", {"query": "isp"}),
+        {"type": "tool_blocked", "name": "web_search", "reason": "discover_leads 已覆盖"},
+        _DONE,
+    ]
+    r = score_run(events, scenario)
+    assert not r.passed
+    assert r.blocked_tools == ["web_search"]
+    assert r.all_tools == ["discover_leads"]
+    assert "blocked_tool_attempted=['web_search']" in r.failure_reasons
+
+
+def test_blocked_tools_can_be_allowed_for_diagnostic_scenarios():
+    scenario = Scenario(
+        "x",
+        "m",
+        expect_tools={"discover_leads"},
+        forbid_tools={"web_search"},
+        fail_on_blocked_tools=False,
+    )
+    events = [
+        _tool_start("discover_leads", {"query": "isp"}),
+        {"type": "tool_blocked", "name": "web_search", "reason": "discover_leads 已覆盖"},
+        _DONE,
+    ]
+    r = score_run(events, scenario)
+    assert r.passed
+    assert r.blocked_tools == ["web_search"]
+
+
+def test_retry_budget_can_be_relaxed_per_scenario():
+    scenario = Scenario(
+        "x",
+        "m",
+        expect_tools={"list_contacts"},
+        max_retries=1,
+        require_immediate=False,
+    )
+    events = [_RETRY, _tool_start("list_contacts", {"q": "google"}), _DONE]
+    r = score_run(events, scenario)
+    assert "retry_budget_exceeded=1>0" not in r.failure_reasons
+    assert "needed_retry_before_first_tool" not in r.failure_reasons
+    assert r.passed
+
+
+def test_result_record_is_json_serializable():
+    scenario = Scenario("x", "m", expect_tools={"list_contacts"})
+    events = [_tool_start("list_contacts", {"q": "google"}), _DONE]
+    record = result_record(scenario, score_run(events, scenario), events, run={"index": 1})
+    encoded = json.dumps(record, ensure_ascii=False)
+    assert '"passed": true' in encoded
+    assert record["run"]["index"] == 1
+
+
+def test_scenario_from_dict_uses_named_arg_check():
+    scenario = scenario_from_dict(
+        {
+            "name": "custom",
+            "message": "查 ASN 15169",
+            "expect_tools": ["lookup_asns"],
+            "arg_check": "asn_text",
+            "require_immediate": "false",
+            "fail_on_blocked_tools": "false",
+            "max_retries": 1,
+        }
+    )
+    assert scenario.name == "custom"
+    assert scenario.arg_check is not None
+    assert not scenario.require_immediate
+    assert not scenario.fail_on_blocked_tools
+    assert scenario.max_retries == 1
+    assert score_run([_tool_start("lookup_asns", {"text": "AS15169"}), _DONE], scenario).passed
+
+
+def test_load_scenarios_from_file(tmp_path):
+    path = tmp_path / "scenarios.json"
+    path.write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "name": "from-file",
+                        "message": "列出 Google 联系人",
+                        "expect_tools": ["list_contacts"],
+                        "arg_check": "list_contacts_non_empty",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    scenarios = load_scenarios_from_file(path)
+    assert len(scenarios) == 1
+    assert scenarios[0].name == "from-file"
+
+
+def test_build_summary_extracts_failures():
+    good = result_record(
+        Scenario("good", "m", expect_tools={"list_contacts"}),
+        score_run(
+            [_tool_start("list_contacts", {"q": "x"}), _DONE],
+            Scenario("good", "m", expect_tools={"list_contacts"}),
+        ),
+        [_tool_start("list_contacts", {"q": "x"}), _DONE],
+    )
+    bad_scenario = Scenario("bad", "m", expect_tools={"discover_leads"})
+    bad = result_record(
+        bad_scenario,
+        score_run([_tool_start("web_search", {"query": "x"}), _DONE], bad_scenario),
+        [_tool_start("web_search", {"query": "x"}), _DONE],
+    )
+    summary = build_summary([good, bad])
+    assert summary["total"] == 2
+    assert summary["failed"] == 1
+    assert summary["failures"][0]["name"] == "bad"
+    assert summary["failures"][0]["blocked_tools"] == []

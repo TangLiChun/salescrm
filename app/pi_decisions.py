@@ -54,6 +54,12 @@ class Fail:
 
 Decision = EmitToolCalls | FinalReply | Retry | FallbackToolCalls | Fail
 
+_INTERRUPTED_RESPONSE_REASONS = {"length", "insufficient_system_resource"}
+_INTERRUPTED_RESPONSE_NUDGE = (
+    "（系统）上一轮模型输出被截断或上游推理资源中断。"
+    "请重新完成用户请求；需要工具时立即调用工具，不要只回复开场白。"
+)
+
 
 def _assistant_response_empty(assistant: dict[str, Any] | None, content_buffer: str) -> bool:
     """Mirror agent_chat.py _assistant_response_empty (lines 863-871)."""
@@ -110,9 +116,25 @@ def decide_turn(
         return Fail()
 
     assistant = assistant or {}
+    finish_reason = str(assistant.get("finish_reason") or "").strip()
+    if finish_reason == "content_filter":
+        return Fail("模型输出被内容安全策略过滤，请换种说法或缩小请求范围。")
+    if finish_reason in _INTERRUPTED_RESPONSE_REASONS:
+        if nudge_count < max_nudges:
+            return Retry(_INTERRUPTED_RESPONSE_NUDGE, finish_reason)
+        return Fail("模型输出被截断或上游推理资源中断，请稍后重试。")
+
     raw_tool_calls: list[Any] = assistant.get("tool_calls") or []
     raw_content = (assistant.get("content") or content_buffer or "").strip()
     content = _meaningful_assistant_content(raw_content)
+
+    if finish_reason == "tool_calls" and not raw_tool_calls:
+        if nudge_count < max_nudges:
+            return Retry(_EMPTY_RESPONSE_NUDGE, "missing_tool_calls")
+        fallback_calls = _fallback_prepared_calls(user_message, history)
+        if fallback_calls:
+            return FallbackToolCalls(fallback_calls, "工具调用缺失，正在直接搜索 CRM…")
+        return Fail()
 
     # -----------------------------------------------------------------------
     # Path 2: Inline tool calls found in content (lines 1553-1562)

@@ -98,6 +98,7 @@ async def stream_chat(
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
+        finish_reasons: list[str] = []
         status_emitted = [False]
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -131,12 +132,18 @@ async def stream_chat(
                             tool_calls=tool_calls,
                             emit_content_delta=True,
                             tool_status_emitted=status_emitted,
+                            finish_reasons=finish_reasons,
                         ):
                             emitted_any = True
                             yield event
             yield {
                 "type": "message",
-                "message": assemble_message(content_parts, reasoning_parts, tool_calls),
+                "message": assemble_message(
+                    content_parts,
+                    reasoning_parts,
+                    tool_calls,
+                    finish_reasons,
+                ),
             }
             return
         except (httpx.TransportError, httpx.TimeoutException) as exc:

@@ -17,6 +17,13 @@ def _assistant(content=None, tool_calls=None, reasoning=None):
     return msg
 
 
+def _assistant_with_finish(content=None, finish_reason=None, tool_calls=None):
+    msg = _assistant(content, tool_calls)
+    if finish_reason:
+        msg["finish_reason"] = finish_reason
+    return msg
+
+
 def _valid_call(name="list_contacts", args='{"q": "isp"}'):
     return {"id": "c1", "type": "function", "function": {"name": name, "arguments": args}}
 
@@ -124,6 +131,45 @@ def test_empty_response_with_reasoning_is_not_empty():
     # no-visible-content path, which Retries (not Fail) while nudges remain.
     assert isinstance(d, Retry)
     assert d.reason == "no_visible_content"
+
+
+def test_interrupted_finish_reason_retries_instead_of_final_reply():
+    d = decide_turn(
+        _assistant_with_finish("我来帮你查一下", "insufficient_system_resource"),
+        "我来帮你查一下",
+        user_message="列出运营商联系人",
+        history=[],
+        nudge_count=0,
+        max_nudges=2,
+    )
+    assert isinstance(d, Retry)
+    assert d.reason == "insufficient_system_resource"
+
+
+def test_missing_streamed_tool_calls_retries_or_falls_back():
+    d = decide_turn(
+        _assistant_with_finish("我来查一下", "tool_calls"),
+        "我来查一下",
+        user_message="列出运营商联系人",
+        history=[],
+        nudge_count=0,
+        max_nudges=2,
+    )
+    assert isinstance(d, Retry)
+    assert d.reason == "missing_tool_calls"
+
+
+def test_content_filter_finish_reason_fails_clearly():
+    d = decide_turn(
+        _assistant_with_finish("部分内容", "content_filter"),
+        "部分内容",
+        user_message="x",
+        history=[],
+        nudge_count=0,
+        max_nudges=2,
+    )
+    assert isinstance(d, Fail)
+    assert "过滤" in d.error
 
 
 def test_invalid_tool_calls_retries_then_falls_back():

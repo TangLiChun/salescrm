@@ -25,6 +25,7 @@ def content_message(
     *,
     tool_calls: list[dict[str, Any]] | None = None,
     reasoning: str | None = None,
+    finish_reason: str | None = None,
     stream_text: bool = True,
 ) -> list[dict[str, Any]]:
     """Build one scripted response: optional streamed content + final message event."""
@@ -36,6 +37,8 @@ def content_message(
         message["reasoning_content"] = reasoning
     if tool_calls:
         message["tool_calls"] = tool_calls
+    if finish_reason:
+        message["finish_reason"] = finish_reason
     events.append({"type": "message", "message": message})
     return events
 

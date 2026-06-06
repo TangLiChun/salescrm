@@ -138,7 +138,8 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="asn-roleemail-lookup",
         message="查这几个 ASN 的 role 邮箱：AS15169, 13335, AS3356",
-        expect_tools={"lookup_asns", "discover_leads"},
+        expect_tools={"lookup_asns"},
+        forbid_tools={"discover_leads", "web_search"},
         arg_check=_asn_text_ok,
     ),
     Scenario(
@@ -185,6 +186,26 @@ def _configure_settings_from_env() -> None:
     ac.get_setting = _get_setting
 
 
+def _canned_tool_result(name: str) -> dict[str, Any]:
+    """Plausible non-empty result per tool, so the model isn't pushed into a
+    fallback by an artificially empty result during evaluation."""
+    sample_lead = {
+        "org": "Example Net",
+        "email": "noc@example.net",
+        "asn": "395092",
+        "lead_score": 72,
+    }
+    if name in ("discover_leads", "enrich_contact"):
+        return {"lead_count": 1, "leads": [sample_lead], "import": {"imported": 1}}
+    if name == "lookup_asns":
+        return {"asns": ["15169"], "email_count": 1, "rows": [sample_lead]}
+    if name == "list_contacts":
+        return {"contacts": [{"id": 1, "org": "Google", "email": "peering@google.com"}], "total": 1}
+    if name == "get_contact":
+        return {"contact": {"id": 5, "org": "Example Net", "email": "noc@example.net"}}
+    return {"ok": True}
+
+
 async def _run_scenario(scenario: Scenario) -> list[dict[str, Any]]:
     from app.agent_chat import agent_chat_stream
 
@@ -192,8 +213,9 @@ async def _run_scenario(scenario: Scenario) -> list[dict[str, Any]]:
 
     async def recording_tools(user_id, name, args, emit):  # noqa: ANN001
         calls.append({"name": name, "args": args})
-        # Canned, benign results so a turn can progress without real side effects.
-        return {"ok": True, "contacts": [], "total": 0, "leads": [], "lead_count": 0}
+        # Canned, *non-empty* results so the model sees "found something" and we
+        # measure tool selection under success, not empty-result fallback.
+        return _canned_tool_result(name)
 
     events: list[dict[str, Any]] = []
     async for event in agent_chat_stream(1, scenario.message, [], tool_runner=recording_tools):

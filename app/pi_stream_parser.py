@@ -124,9 +124,13 @@ def consume_stream_chunk(
     tool_calls: dict[int, dict[str, Any]],
     emit_content_delta: bool,
     tool_status_emitted: list[bool],
+    finish_reasons: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for choice in chunk.get("choices") or [{}]:
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and finish_reasons is not None:
+            finish_reasons.append(str(finish_reason))
         delta = choice.get("delta") or {}
         piece = delta.get("content")
         if piece:
@@ -178,11 +182,14 @@ def assemble_message(
     content_parts: list[str],
     reasoning_parts: list[str],
     tool_calls: dict[int, dict[str, Any]],
+    finish_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
     """Assemble the final assistant message from accumulated stream state."""
     import uuid
 
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
+    if finish_reasons:
+        message["finish_reason"] = finish_reasons[-1]
     if reasoning_parts:
         message["reasoning_content"] = "".join(reasoning_parts)
     assembled: list[dict[str, Any]] = []

@@ -27,6 +27,114 @@ async def test_regression_intro_only_does_not_stop_25733dc():
 
 
 @pytest.mark.asyncio
+async def test_regression_deepseek_interrupted_intro_retries():
+    fake = FakeLLM(
+        [
+            content_message("我来帮你查一下", finish_reason="insufficient_system_resource"),
+            content_message("好的", tool_calls=[tool_call("list_contacts", {"q": "isp"})]),
+            content_message("已查完。"),
+        ]
+    )
+    events = await collect_events(
+        agent_chat_stream(1, "列出运营商联系人", [], llm_client=fake, tool_runner=_noop_tools)
+    )
+    assistant_done_texts = [
+        str(e.get("text") or "") for e in events if e["type"] == "assistant_done"
+    ]
+    assert "我来帮你查一下" not in assistant_done_texts
+    assert any(e["type"] == "tool_start" for e in events)
+    assert event_types(events)[-1] == "done"
+
+
+@pytest.mark.asyncio
+async def test_regression_discover_leads_blocks_web_search_sprawl():
+    seen: list[str] = []
+
+    async def tools(user_id, name, args, emit):
+        seen.append(name)
+        return {"lead_count": 1, "leads": [{"org": "Example Net"}], "import": {"imported": 1}}
+
+    fake = FakeLLM(
+        [
+            content_message(
+                "我来找线索。",
+                tool_calls=[
+                    tool_call(
+                        "discover_leads",
+                        {"query": "美国中型 ISP peering NOC", "auto_import": True},
+                    ),
+                    tool_call("web_search", {"queries": ["US mid size ISP peering NOC"]}),
+                    tool_call("get_search_config", {}),
+                ],
+            ),
+            content_message("已找到并导入 1 条线索。"),
+        ]
+    )
+
+    events = await collect_events(
+        agent_chat_stream(
+            1,
+            "帮我找美国中型 ISP 的 peering 和 NOC 联系人",
+            [],
+            llm_client=fake,
+            tool_runner=tools,
+        )
+    )
+
+    assert seen == ["discover_leads"]
+    assert any(e["type"] == "tool_blocked" and e["name"] == "web_search" for e in events)
+    assert any(e["type"] == "tool_blocked" and e["name"] == "get_search_config" for e in events)
+    assert "已找到并导入" in assistant_text(events)
+    assert event_types(events)[-1] == "done"
+
+
+@pytest.mark.asyncio
+async def test_regression_asn_role_lookup_blocks_discovery_sprawl():
+    seen: list[str] = []
+
+    async def tools(user_id, name, args, emit):
+        seen.append(name)
+        return {
+            "asns": ["15169", "13335"],
+            "email_count": 2,
+            "rows": [
+                {"asn": 15169, "org": "Google", "email": "network-abuse@google.com"},
+                {"asn": 13335, "org": "Cloudflare", "email": "abuse@cloudflare.com"},
+            ],
+        }
+
+    fake = FakeLLM(
+        [
+            content_message(
+                "我查 RDAP role 邮箱。",
+                tool_calls=[
+                    tool_call("lookup_asns", {"text": "AS15169, AS13335"}),
+                    tool_call("discover_leads", {"query": "AS15169 AS13335 role email"}),
+                    tool_call("web_search", {"queries": ["AS15169 role email"]}),
+                ],
+            ),
+            content_message("已查到 2 条 ASN role 邮箱。"),
+        ]
+    )
+
+    events = await collect_events(
+        agent_chat_stream(
+            1,
+            "查这几个 ASN 的 role 邮箱：AS15169, AS13335",
+            [],
+            llm_client=fake,
+            tool_runner=tools,
+        )
+    )
+
+    assert seen == ["lookup_asns"]
+    assert any(e["type"] == "tool_blocked" and e["name"] == "discover_leads" for e in events)
+    assert any(e["type"] == "tool_blocked" and e["name"] == "web_search" for e in events)
+    assert "已查到 2 条" in assistant_text(events)
+    assert event_types(events)[-1] == "done"
+
+
+@pytest.mark.asyncio
 async def test_regression_empty_reply_no_blank_bubble_0a34da1():
     fake = FakeLLM([content_message(""), content_message(""), content_message("")])
     events = await collect_events(

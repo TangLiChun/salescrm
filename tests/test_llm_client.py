@@ -3,6 +3,23 @@ import pytest
 from app.pi_llm_client import RETRYABLE_STATUS, _next_backoff, stream_chat
 
 
+def test_llm_settings_defaults_deepseek_model_when_blank(monkeypatch):
+    from app import llm as mod
+
+    values = {
+        "llm_api_key": "key",
+        "llm_base_url": "https://api.deepseek.com",
+        "llm_model": "",
+    }
+    monkeypatch.setattr(mod, "get_setting", lambda key, default="": values.get(key, default))
+
+    assert mod._settings() == (
+        "key",
+        "https://api.deepseek.com",
+        mod.DEFAULT_DEEPSEEK_MODEL,
+    )
+
+
 def test_backoff_increases_and_is_bounded():
     delays = [_next_backoff(i) for i in range(5)]
     assert delays[0] < delays[1] < delays[2]

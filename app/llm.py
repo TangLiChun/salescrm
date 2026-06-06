@@ -18,6 +18,7 @@ from app.settings_store import get_setting
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
 REQUEST_TIMEOUT = 60.0
 AGENT_REQUEST_TIMEOUT = 180.0
 
@@ -91,8 +92,16 @@ def _settings() -> tuple[str, str, str]:
     api_key = get_setting("llm_api_key", "").strip()
     if not api_key:
         raise LLMError("未配置 LLM API Key，请在系统设置中填写")
-    base_url = get_setting("llm_base_url", DEFAULT_BASE_URL).rstrip("/")
-    model = get_setting("llm_model", DEFAULT_MODEL)
+    base_url = (get_setting("llm_base_url", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL).rstrip(
+        "/"
+    )
+    configured_model = get_setting("llm_model", DEFAULT_MODEL).strip()
+    if configured_model:
+        model = configured_model
+    elif is_deepseek_provider(base_url=base_url):
+        model = DEFAULT_DEEPSEEK_MODEL
+    else:
+        model = DEFAULT_MODEL
     return api_key, base_url, model
 
 
@@ -148,6 +157,7 @@ def chat_completion_with_tools(
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
+    finish_reasons: list[str] = []
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -168,11 +178,14 @@ def chat_completion_with_tools(
             tool_calls=tool_calls,
             emit_content_delta=False,
             tool_status_emitted=tool_status_emitted,
+            finish_reasons=finish_reasons,
         ):
             if event.get("type") == "error":
                 raise LLMError(event.get("message") or "LLM 请求失败")
 
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
+    if finish_reasons:
+        message["finish_reason"] = finish_reasons[-1]
     if reasoning_parts:
         message["reasoning_content"] = "".join(reasoning_parts)
     if tool_calls:

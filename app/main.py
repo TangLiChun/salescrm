@@ -898,7 +898,7 @@ async def agent_chat_stream_route(
                     else:
                         errored = True
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event_type in ("done", "error"):
+                if event_type == "done":
                     break
         finally:
             watch_task.cancel()
