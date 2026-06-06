@@ -11,6 +11,7 @@ KNOWN_TOOL_NAMES = {
     "list_contacts",
     "import_leads",
     "get_contact",
+    "get_stats",
     "update_contact",
     "mark_contact_sent",
     "delete_contacts",
