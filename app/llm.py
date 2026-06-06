@@ -112,32 +112,8 @@ def chat_completion_with_tools(
     *,
     temperature: float = 0.2,
     json_mode: bool = False,
-) -> dict[str, Any]:
-    message = None
-    for event in chat_completion_with_tools_stream(
-        messages,
-        tools,
-        temperature=temperature,
-        json_mode=json_mode,
-    ):
-        if event.get("type") == "message":
-            message = event["message"]
-        elif event.get("type") == "error":
-            raise LLMError(event.get("message") or "LLM 请求失败")
-    if not message:
-        raise LLMError("LLM 返回空内容")
-    return message
-
-
-def chat_completion_with_tools_stream(
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]] | None,
-    *,
-    temperature: float = 0.2,
-    json_mode: bool = False,
     tool_choice: str | dict[str, Any] | None = None,
-):
-    """Yield content deltas while streaming, then the assembled assistant message."""
+) -> dict[str, Any]:
     api_key, base_url, model = _settings()
     payload: dict[str, Any] = {
         "model": model,
@@ -178,11 +154,9 @@ def chat_completion_with_tools_stream(
             raw_body = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        yield {"type": "error", "message": f"LLM 请求失败 ({exc.code}): {detail[:300]}"}
-        return
+        raise LLMError(f"LLM 请求失败 ({exc.code}): {detail[:300]}") from exc
     except urllib.error.URLError as exc:
-        yield {"type": "error", "message": f"无法连接 LLM 服务: {exc.reason}"}
-        return
+        raise LLMError(f"无法连接 LLM 服务: {exc.reason}") from exc
 
     tool_status_emitted = [False]
 
@@ -192,10 +166,11 @@ def chat_completion_with_tools_stream(
             content_parts=content_parts,
             reasoning_parts=reasoning_parts,
             tool_calls=tool_calls,
-            emit_content_delta=True,
+            emit_content_delta=False,
             tool_status_emitted=tool_status_emitted,
         ):
-            yield event
+            if event.get("type") == "error":
+                raise LLMError(event.get("message") or "LLM 请求失败")
 
     message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
     if reasoning_parts:
@@ -214,7 +189,9 @@ def chat_completion_with_tools_stream(
             assembled.append(slot)
         if assembled:
             message["tool_calls"] = assembled
-    yield {"type": "message", "message": message}
+    if not message.get("content") and not message.get("tool_calls"):
+        raise LLMError("LLM 返回空内容")
+    return message
 
 
 def parse_json_response(raw: str) -> dict[str, Any]:
