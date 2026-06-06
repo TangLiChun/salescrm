@@ -72,6 +72,7 @@ MAX_TOOL_ROUNDS = 12
 MAX_HISTORY = MAX_LLM_HISTORY_MESSAGES
 MAX_WEB_SEARCH_QUERIES = 4
 TOOL_HEARTBEAT_SECONDS = 12
+MAX_LLM_CALLS_PER_TURN = 30
 
 
 def _social_profile_tool(
@@ -1446,6 +1447,7 @@ async def agent_chat_stream(
     messages.extend(history)
     append_user_turn_to_messages(messages, history or [], message)
 
+    llm_call_count = 0
     for round_index in range(MAX_TOOL_ROUNDS):
         if cancel_check and cancel_check():
             yield {"type": "error", "message": "任务已停止"}
@@ -1466,6 +1468,13 @@ async def agent_chat_stream(
                 yield {"type": "error", "message": "任务已停止"}
                 yield {"type": "done"}
                 return
+            if llm_call_count >= MAX_LLM_CALLS_PER_TURN:
+                msg = "本次对话已达调用上限，请简化问题后重试。"
+                yield {"type": "assistant_start"}
+                yield {"type": "assistant_delta", "text": msg}
+                yield {"type": "assistant_done", "text": msg}
+                yield {"type": "done"}
+                return
             assistant = None
             content_buffer = ""
             streamed_reply = False
@@ -1475,6 +1484,7 @@ async def agent_chat_stream(
                 "required" if llm_nudge_count > 0 and AGENT_TOOLS else None
             )
 
+            llm_call_count += 1
             async for event in llm_client(messages, AGENT_TOOLS, tool_choice=tool_choice):
                 event_type = event.get("type")
                 if event_type == "error":
