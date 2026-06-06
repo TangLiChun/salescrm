@@ -28,8 +28,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
       - name: Install deps
         run: python -m pip install -r requirements-dev.txt
+      - name: Install frontend deps
+        run: npm ci
+      - name: Frontend check
+        run: npm run check:frontend
+      - name: Frontend build artifacts current
+        run: git diff --exit-code -- app/static/i18n.js app/static/login.js app/static/js
       - name: Lint
         run: ruff check .
       - name: Format check

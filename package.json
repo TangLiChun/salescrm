@@ -1,0 +1,14 @@
+{
+  "name": "salescrm-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:frontend": "tsc -p tsconfig.frontend.json",
+    "typecheck": "tsc -p tsconfig.frontend.json --noEmit",
+    "check:frontend": "npm run typecheck && npm run build:frontend && node --check app/static/js/main.js && node --check app/static/js/modules/pi.js && node --check app/static/login.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

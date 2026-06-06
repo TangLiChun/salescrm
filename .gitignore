@@ -2,11 +2,13 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+node_modules/
 .env
 .pi-env
 .DS_Store
 *.csv
 data/*.db
+artifacts/pi-harness-replay-*
 
 # Local AI / design tooling (not part of the CRM app)
 .claude/

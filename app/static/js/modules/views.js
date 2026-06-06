@@ -14,101 +14,103 @@ import { renderSchedules } from "./schedules.js";
 import { loadWorkbench } from "./workbench.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
 import { showApiError } from "../core/api-feedback.js";
-
 const { tabs, workbenchView, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
-
 const VIEW_ELEMENTS = {
-  workbench: workbenchView,
-  lookup: lookupView,
-  "ai-leads": aiLeadsView,
-  "pi-agent": piAgentView,
-  schedules: schedulesView,
-  settings: settingsView,
-  contacts: contactsView,
-  stats: statsView,
+    workbench: workbenchView,
+    lookup: lookupView,
+    "ai-leads": aiLeadsView,
+    "pi-agent": piAgentView,
+    schedules: schedulesView,
+    settings: settingsView,
+    contacts: contactsView,
+    stats: statsView,
 };
-
 function animatePageTitle() {
-  if (!pageTitle) return;
-  replayAnimation(pageTitle, "title-enter");
+    if (!pageTitle)
+        return;
+    replayAnimation(pageTitle, "title-enter");
 }
-
 export function switchView(view) {
-  tabs.forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.view === view);
-  });
-
-  workbenchView.classList.toggle("hidden", view !== "workbench");
-  lookupView.classList.toggle("hidden", view !== "lookup");
-  aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
-  piAgentView.classList.toggle("hidden", view !== "pi-agent");
-  schedulesView.classList.toggle("hidden", view !== "schedules");
-  settingsView.classList.toggle("hidden", view !== "settings");
-  contactsView.classList.toggle("hidden", view !== "contacts");
-  statsView.classList.toggle("hidden", view !== "stats");
-
-  replayAnimation(VIEW_ELEMENTS[view], "motion-enter");
-  animatePageTitle();
-
-  if (view === "workbench") {
-    pageTitle.textContent = t("page.workbench.title");
-    loadWorkbench().catch(showApiError);
-  } else if (view === "lookup") {
-    pageTitle.textContent = t("page.lookup.title");
-  } else if (view === "ai-leads") {
-    pageTitle.textContent = t("page.aiLeads.title");
-  } else if (view === "pi-agent") {
-    pageTitle.textContent = t("page.piAgent.title");
-    setPiMobilePanel("chat");
-    refreshPiAgentChrome();
-    updatePiAgentStatus();
-    settlePiChatAtBottom();
-  } else if (view === "schedules") {
-    pageTitle.textContent = t("page.schedules.title");
-    loadSchedules().catch(showApiError);
-    startSchedulesAutoRefresh();
-  } else if (view === "settings") {
-    switchSettingsCat(state.activeSettingsCat);
-    loadSettingsForm().catch(showApiError);
-    loadEmailTemplates().catch(showApiError);
-  } else if (view === "stats") {
-    pageTitle.textContent = t("page.stats.title");
-    loadStats().catch(showApiError);
-  } else {
-    pageTitle.textContent = t("page.contacts.title");
-    loadContacts().catch(showApiError);
-    loadEmailTemplates().catch(() => {});
-  }
-  if (view !== "schedules") {
-    stopSchedulesAutoRefresh();
-  }
+    tabs.forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.view === view);
+    });
+    workbenchView.classList.toggle("hidden", view !== "workbench");
+    lookupView.classList.toggle("hidden", view !== "lookup");
+    aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
+    piAgentView.classList.toggle("hidden", view !== "pi-agent");
+    schedulesView.classList.toggle("hidden", view !== "schedules");
+    settingsView.classList.toggle("hidden", view !== "settings");
+    contactsView.classList.toggle("hidden", view !== "contacts");
+    statsView.classList.toggle("hidden", view !== "stats");
+    replayAnimation(VIEW_ELEMENTS[view], "motion-enter");
+    animatePageTitle();
+    if (view === "workbench") {
+        pageTitle.textContent = t("page.workbench.title");
+        loadWorkbench().catch(showApiError);
+    }
+    else if (view === "lookup") {
+        pageTitle.textContent = t("page.lookup.title");
+    }
+    else if (view === "ai-leads") {
+        pageTitle.textContent = t("page.aiLeads.title");
+    }
+    else if (view === "pi-agent") {
+        pageTitle.textContent = t("page.piAgent.title");
+        setPiMobilePanel("chat");
+        refreshPiAgentChrome();
+        updatePiAgentStatus();
+        settlePiChatAtBottom();
+    }
+    else if (view === "schedules") {
+        pageTitle.textContent = t("page.schedules.title");
+        loadSchedules().catch(showApiError);
+        startSchedulesAutoRefresh();
+    }
+    else if (view === "settings") {
+        switchSettingsCat(state.activeSettingsCat);
+        loadSettingsForm().catch(showApiError);
+        loadEmailTemplates().catch(showApiError);
+    }
+    else if (view === "stats") {
+        pageTitle.textContent = t("page.stats.title");
+        loadStats().catch(showApiError);
+    }
+    else {
+        pageTitle.textContent = t("page.contacts.title");
+        loadContacts().catch(showApiError);
+        loadEmailTemplates().catch(() => { });
+    }
+    if (view !== "schedules") {
+        stopSchedulesAutoRefresh();
+    }
 }
-
 export function refreshUiOnLanguageChange() {
-  const activeView = document.querySelector(".tab.active")?.dataset.view || "lookup";
-  switchView(activeView);
-  renderRows();
-  renderContacts();
-  renderAiLeads();
-  renderSchedules();
-  renderMailTemplateSelect();
-  renderEmailTemplatesList();
-  updatePiChatHistoryHint();
-  refreshPiAgentChrome();
-  updateAiLeadsStats();
-  if (state.allRows.length === 0 && statsEl) {
-    statsEl.textContent = t("common.notYetQueried");
-  } else {
-    updateStats();
-  }
-  refreshAsnPreview().catch(() => {});
-  if (state.llmConfigured) {
-    loadLlmStatus().catch(() => {});
-  } else {
-    updatePiAgentStatus();
-  }
-  renderBackgroundJobsBar();
-  if (activeView === "workbench") {
-    loadWorkbench().catch(() => {});
-  }
+    const activeView = document.querySelector(".tab.active")?.dataset.view || "lookup";
+    switchView(activeView);
+    renderRows();
+    renderContacts();
+    renderAiLeads();
+    renderSchedules();
+    renderMailTemplateSelect();
+    renderEmailTemplatesList();
+    updatePiChatHistoryHint();
+    refreshPiAgentChrome();
+    updateAiLeadsStats();
+    if (state.allRows.length === 0 && statsEl) {
+        statsEl.textContent = t("common.notYetQueried");
+    }
+    else {
+        updateStats();
+    }
+    refreshAsnPreview().catch(() => { });
+    if (state.llmConfigured) {
+        loadLlmStatus().catch(() => { });
+    }
+    else {
+        updatePiAgentStatus();
+    }
+    renderBackgroundJobsBar();
+    if (activeView === "workbench") {
+        loadWorkbench().catch(() => { });
+    }
 }

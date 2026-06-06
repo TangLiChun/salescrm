@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -112,6 +113,7 @@ from arin_lookup import lookup_asns_batch, parse_asns_from_text, rows_to_csv
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 MAX_ASNS = 200
+logger = logging.getLogger(__name__)
 
 
 class VersionedStaticFiles(StaticFiles):
@@ -900,15 +902,26 @@ async def agent_chat_stream_route(
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 if event_type == "done":
                     break
+        except Exception as exc:  # noqa: BLE001 - keep the browser SSE stream explainable
+            errored = True
+            logger.exception("Pi agent stream failed")
+            message = str(exc).strip() or "Pi 助手执行失败，请稍后重试"
+            event = {"type": "error", "message": f"Pi 助手执行失败：{message[:500]}"}
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         finally:
             watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watch_task
-            await persist_stream_entries(
-                new_entries,
-                compress=bool(new_entries) and not cancelled and not errored,
-            )
-            release_pi_thread(user_id, thread_id)
+            try:
+                await persist_stream_entries(
+                    new_entries,
+                    compress=bool(new_entries) and not cancelled and not errored,
+                )
+            except Exception:  # noqa: BLE001 - never leave the Pi thread locked
+                logger.exception("Failed to persist Pi stream entries")
+            finally:
+                release_pi_thread(user_id, thread_id)
 
     return StreamingResponse(
         event_generator(),

@@ -15,9 +15,11 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape, quoteattr
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -52,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         help="Scenario name to run. May be repeated. Defaults to all scenarios.",
     )
     parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="Run only scenarios with any matching tag. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
         "--jsonl",
         type=Path,
         help="Write one JSON object per scenario with score and compact event trace.",
@@ -73,6 +81,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed run.")
     parser.add_argument("--summary-json", type=Path, help="Write aggregate summary JSON.")
+    parser.add_argument("--markdown", type=Path, help="Write a human-readable Markdown report.")
+    parser.add_argument("--junit-xml", type=Path, help="Write a JUnit XML report for CI.")
     parser.add_argument(
         "--replay-jsonl",
         type=Path,
@@ -135,17 +145,34 @@ def load_all_scenarios(paths: list[Path]) -> list[Scenario]:
     return scenarios
 
 
-def select_scenarios(scenarios: list[Scenario], names: list[str]) -> list[Scenario]:
-    if not names:
-        return list(scenarios)
-    wanted = set()
-    for raw in names:
-        wanted.update(name.strip() for name in raw.split(",") if name.strip())
-    selected = [scenario for scenario in scenarios if scenario.name in wanted]
+def select_scenarios(
+    scenarios: list[Scenario],
+    names: list[str],
+    tags: list[str] | None = None,
+) -> list[Scenario]:
+    selected = list(scenarios)
+
+    wanted_tags = _csv_set(tags or [])
+    if wanted_tags:
+        selected = [scenario for scenario in selected if scenario.tags & wanted_tags]
+        if not selected:
+            raise SystemExit(f"No scenarios matched tag(s): {', '.join(sorted(wanted_tags))}")
+
+    wanted = _csv_set(names)
+    if not wanted:
+        return selected
+    selected = [scenario for scenario in selected if scenario.name in wanted]
     missing = sorted(wanted - {scenario.name for scenario in selected})
     if missing:
         raise SystemExit(f"Unknown scenario(s): {', '.join(missing)}")
     return selected
+
+
+def _csv_set(values: list[str]) -> set[str]:
+    wanted: set[str] = set()
+    for raw in values:
+        wanted.update(name.strip() for name in raw.split(",") if name.strip())
+    return wanted
 
 
 async def run_harness(
@@ -217,6 +244,8 @@ def print_scenarios(scenarios: list[Scenario]) -> None:
         print(
             f"{scenario.name:<32} expect={','.join(sorted(scenario.expect_tools)) or '-'} "
             f"forbid={','.join(sorted(scenario.forbid_tools)) or '-'} "
+            f"allowed={','.join(sorted(scenario.allowed_tools)) or '-'} "
+            f"tags={','.join(sorted(scenario.tags)) or '-'} "
             f"message={scenario.message}"
         )
 
@@ -285,9 +314,111 @@ def write_summary_json(path: Path, records: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def write_markdown_report(path: Path, records: list[dict[str, Any]]) -> None:
+    summary = build_summary(records)
+    lines = [
+        "# Pi Agent Harness Report",
+        "",
+        f"- Generated: `{summary['generated_at']}`",
+        f"- Result: `{summary['passed']}/{summary['total']}` passed",
+        f"- Pass rate: `{summary['pass_rate']:.0%}`",
+        f"- Failed: `{summary['failed']}`",
+        "",
+        "## Runs",
+        "",
+        "| Scenario | Run | First Tool | Pass | Duration | Blocked | Reasons |",
+        "|---|---:|---|---|---:|---|---|",
+    ]
+    for record in records:
+        result = record.get("result") or {}
+        run = record.get("run") or {}
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _md(result.get("name")),
+                    _md(run.get("index", 1)),
+                    _md(result.get("first_tool") or ""),
+                    "yes" if result.get("passed") else "no",
+                    _md(run.get("duration_ms", "")),
+                    _md(", ".join(result.get("blocked_tools") or [])),
+                    _md("; ".join(result.get("failure_reasons") or [])),
+                ]
+            )
+            + " |"
+        )
+
+    lines.extend(["", "## Scenario Stability", ""])
+    lines.append("| Scenario | Passed | Pass Rate | p95 ms | First Tools |")
+    lines.append("|---|---:|---:|---:|---|")
+    for row in summary["scenarios"]:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _md(row["name"]),
+                    f"{row['passed']}/{row['total']}",
+                    f"{row['pass_rate']:.0%}",
+                    _md(row.get("duration_p95_ms", "")),
+                    _md(_counts_text(row.get("first_tool_counts") or {})),
+                ]
+            )
+            + " |"
+        )
+
+    if summary["failures"]:
+        lines.extend(["", "## Failures", ""])
+        for failure in summary["failures"]:
+            lines.append(
+                f"- `{failure['name']}` run `{failure['run']}`: "
+                f"{_md('; '.join(failure['failure_reasons']))}"
+            )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_junit_xml(path: Path, records: list[dict[str, Any]]) -> None:
+    failures = [record for record in records if not record.get("result", {}).get("passed")]
+    duration_s = sum(_duration_seconds(record) for record in records)
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        (
+            f'<testsuite name="pi_agent_harness" tests="{len(records)}" '
+            f'failures="{len(failures)}" errors="0" skipped="0" time="{duration_s:.3f}">'
+        ),
+    ]
+    for record in records:
+        result = record.get("result") or {}
+        run = record.get("run") or {}
+        name = f"{result.get('name') or 'scenario'}#{run.get('index', 1)}"
+        case_time = _duration_seconds(record)
+        lines.append(
+            f'  <testcase classname="pi_agent_harness" '
+            f'name={quoteattr(str(name))} time="{case_time:.3f}">'
+        )
+        if not result.get("passed"):
+            reasons = "; ".join(result.get("failure_reasons") or ["failed"])
+            lines.append(
+                f"    <failure message={quoteattr(reasons[:240])}>{escape(reasons)}</failure>"
+            )
+        lines.append("  </testcase>")
+    lines.append("</testsuite>")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def build_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(records)
     passed = sum(1 for record in records if record.get("result", {}).get("passed"))
+    failure_reason_counts = Counter(
+        reason
+        for record in records
+        if not record.get("result", {}).get("passed")
+        for reason in (record.get("result", {}).get("failure_reasons") or [])
+    )
+    blocked_tool_counts = Counter(
+        tool for record in records for tool in (record.get("result", {}).get("blocked_tools") or [])
+    )
     failures = [
         {
             "name": record.get("result", {}).get("name"),
@@ -304,8 +435,73 @@ def build_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         "passed": passed,
         "failed": total - passed,
         "pass_rate": passed / total if total else 0.0,
+        "failure_reason_counts": dict(sorted(failure_reason_counts.items())),
+        "blocked_tool_counts": dict(sorted(blocked_tool_counts.items())),
+        "scenarios": scenario_summaries(records),
         "failures": failures,
     }
+
+
+def scenario_summaries(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for name in sorted({str((record.get("result") or {}).get("name") or "") for record in records}):
+        group = [record for record in records if (record.get("result") or {}).get("name") == name]
+        passed = sum(1 for record in group if (record.get("result") or {}).get("passed"))
+        durations = [
+            int((record.get("run") or {}).get("duration_ms"))
+            for record in group
+            if isinstance((record.get("run") or {}).get("duration_ms"), int)
+        ]
+        first_tools = Counter(
+            str((record.get("result") or {}).get("first_tool") or "none") for record in group
+        )
+        failure_reasons = Counter(
+            reason
+            for record in group
+            if not (record.get("result") or {}).get("passed")
+            for reason in ((record.get("result") or {}).get("failure_reasons") or [])
+        )
+        blocked_tools = Counter(
+            tool
+            for record in group
+            for tool in ((record.get("result") or {}).get("blocked_tools") or [])
+        )
+        rows.append(
+            {
+                "name": name,
+                "total": len(group),
+                "passed": passed,
+                "failed": len(group) - passed,
+                "pass_rate": passed / len(group) if group else 0.0,
+                "duration_avg_ms": round(sum(durations) / len(durations)) if durations else None,
+                "duration_p95_ms": percentile(durations, 95) if durations else None,
+                "first_tool_counts": dict(sorted(first_tools.items())),
+                "failure_reason_counts": dict(sorted(failure_reasons.items())),
+                "blocked_tool_counts": dict(sorted(blocked_tools.items())),
+            }
+        )
+    return rows
+
+
+def percentile(values: list[int], pct: int) -> int:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, round((pct / 100) * (len(ordered) - 1))))
+    return ordered[index]
+
+
+def _duration_seconds(record: dict[str, Any]) -> float:
+    duration_ms = (record.get("run") or {}).get("duration_ms")
+    return (duration_ms / 1000) if isinstance(duration_ms, (int, float)) else 0.0
+
+
+def _counts_text(counts: dict[str, int]) -> str:
+    return ", ".join(f"{key}:{value}" for key, value in sorted(counts.items()))
+
+
+def _md(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
 
 
 def _mark(value: bool) -> str:
@@ -314,7 +510,7 @@ def _mark(value: bool) -> str:
 
 def main() -> int:
     args = parse_args()
-    scenarios = select_scenarios(load_all_scenarios(args.scenario_file), args.scenario)
+    scenarios = select_scenarios(load_all_scenarios(args.scenario_file), args.scenario, args.tag)
     if args.list:
         print_scenarios(scenarios)
         return 0
@@ -326,6 +522,12 @@ def main() -> int:
         if args.summary_json:
             write_summary_json(args.summary_json, records)
             print(f"Wrote {args.summary_json}")
+        if args.markdown:
+            write_markdown_report(args.markdown, records)
+            print(f"Wrote {args.markdown}")
+        if args.junit_xml:
+            write_junit_xml(args.junit_xml, records)
+            print(f"Wrote {args.junit_xml}")
         return 0 if rate >= args.min_pass_rate else 1
 
     if not args.live and os.getenv("PI_LIVE_LLM") != "1":
@@ -356,6 +558,12 @@ def main() -> int:
     if args.summary_json:
         write_summary_json(args.summary_json, records)
         print(f"Wrote {args.summary_json}")
+    if args.markdown:
+        write_markdown_report(args.markdown, records)
+        print(f"Wrote {args.markdown}")
+    if args.junit_xml:
+        write_junit_xml(args.junit_xml, records)
+        print(f"Wrote {args.junit_xml}")
     return 0 if rate >= args.min_pass_rate else 1
 
 

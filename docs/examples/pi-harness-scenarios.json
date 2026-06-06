@@ -5,15 +5,21 @@
       "message": "列出库里 Google 相关联系人",
       "expect_tools": ["list_contacts"],
       "forbid_tools": ["web_search"],
+      "allowed_tools": ["list_contacts"],
+      "tags": ["crm-search", "smoke"],
       "arg_check": "list_contacts_non_empty",
       "max_retries": 0,
-      "require_immediate": true
+      "require_immediate": true,
+      "expect_final_contains": ["联系人"],
+      "forbid_final_contains": ["无法"]
     },
     {
       "name": "asn-role-email-custom",
       "message": "查 AS15169 和 AS13335 的 role 邮箱",
       "expect_tools": ["lookup_asns"],
       "forbid_tools": ["discover_leads", "web_search"],
+      "allowed_tools": ["lookup_asns"],
+      "tags": ["rdap", "asn", "smoke"],
       "arg_check": "asn_text",
       "max_retries": 0,
       "require_immediate": true,

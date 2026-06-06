@@ -5,33 +5,22 @@ import { api, escapeHtml, formatImportResult } from "../core/utils.js";
 import { showApiError, showApiSuccess } from "../core/api-feedback.js";
 import { deps } from "../core/deps.js";
 import { scoreBadgeClass, formatSource } from "./leads.js";
-
-const {
-  workbenchStatsEl,
-  workbenchMetricsEl,
-  leadReviewStatsEl,
-  leadReviewBody,
-  importReviewedLeadsBtn,
-  workbenchFollowupsEl,
-  workbenchNewContactsEl,
-} = dom;
-
+const { workbenchStatsEl, workbenchMetricsEl, leadReviewStatsEl, leadReviewBody, importReviewedLeadsBtn, workbenchFollowupsEl, workbenchNewContactsEl, } = dom;
 function metricCard(value, label, tone = "") {
-  return `
+    return `
     <div class="stat-card ${tone ? `stat-card-${tone}` : ""}">
       <strong>${escapeHtml(String(value ?? 0))}</strong>
       <span>${escapeHtml(label)}</span>
     </div>`;
 }
-
 function contactActionItem(contact) {
-  const roles = String(contact.roles || "")
-    .split(",")
-    .filter(Boolean)
-    .slice(0, 3)
-    .map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`)
-    .join("");
-  return `
+    const roles = String(contact.roles || "")
+        .split(",")
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`)
+        .join("");
+    return `
     <div class="action-list-item">
       <div>
         <strong>${escapeHtml(contact.org || contact.name || contact.email || "—")}</strong>
@@ -41,27 +30,25 @@ function contactActionItem(contact) {
       <a class="link-btn" href="mailto:${encodeURIComponent(contact.email || "")}">${escapeHtml(t("contacts.actionMail"))}</a>
     </div>`;
 }
-
 function renderActionList(container, items, emptyText) {
-  if (!container) return;
-  if (!items?.length) {
-    container.innerHTML = `<p class="stats">${escapeHtml(emptyText)}</p>`;
-    return;
-  }
-  container.innerHTML = items.map(contactActionItem).join("");
+    if (!container)
+        return;
+    if (!items?.length) {
+        container.innerHTML = `<p class="stats">${escapeHtml(emptyText)}</p>`;
+        return;
+    }
+    container.innerHTML = items.map(contactActionItem).join("");
 }
-
 function leadRolesHtml(lead) {
-  return (lead.roles || [])
-    .slice(0, 4)
-    .map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`)
-    .join("");
+    return (lead.roles || [])
+        .slice(0, 4)
+        .map((role) => `<span class="role-tag">${escapeHtml(role)}</span>`)
+        .join("");
 }
-
 function reviewRow(review) {
-  const lead = review.lead || {};
-  const checked = state.selectedLeadReviewIds.has(review.id) ? "checked" : "";
-  return `
+    const lead = review.lead || {};
+    const checked = state.selectedLeadReviewIds.has(review.id) ? "checked" : "";
+    return `
     <tr class="motion-row-in">
       <td class="col-select"><input type="checkbox" class="lead-review-select" data-id="${review.id}" ${checked}></td>
       <td><span class="${scoreBadgeClass(review.score || lead.lead_score)}">${escapeHtml(String(review.score || lead.lead_score || 0))}</span></td>
@@ -76,102 +63,100 @@ function reviewRow(review) {
       </td>
     </tr>`;
 }
-
 export function updateLeadReviewSelection() {
-  const currentIds = new Set(state.leadReviews.map((item) => item.id));
-  for (const id of [...state.selectedLeadReviewIds]) {
-    if (!currentIds.has(id)) state.selectedLeadReviewIds.delete(id);
-  }
-  if (leadReviewStatsEl) {
-    leadReviewStatsEl.textContent = t("workbench.reviewStats", {
-      total: state.leadReviews.length,
-      selected: state.selectedLeadReviewIds.size,
-    });
-  }
-  if (importReviewedLeadsBtn) {
-    importReviewedLeadsBtn.disabled = state.selectedLeadReviewIds.size === 0;
-  }
+    const currentIds = new Set(state.leadReviews.map((item) => item.id));
+    for (const id of [...state.selectedLeadReviewIds]) {
+        if (!currentIds.has(id))
+            state.selectedLeadReviewIds.delete(id);
+    }
+    if (leadReviewStatsEl) {
+        leadReviewStatsEl.textContent = t("workbench.reviewStats", {
+            total: state.leadReviews.length,
+            selected: state.selectedLeadReviewIds.size,
+        });
+    }
+    if (importReviewedLeadsBtn) {
+        importReviewedLeadsBtn.disabled = state.selectedLeadReviewIds.size === 0;
+    }
 }
-
 export function renderLeadReviews() {
-  if (!leadReviewBody) return;
-  if (!state.leadReviews.length) {
-    leadReviewBody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(t("workbench.noReviewLeads"))}</td></tr>`;
+    if (!leadReviewBody)
+        return;
+    if (!state.leadReviews.length) {
+        leadReviewBody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(t("workbench.noReviewLeads"))}</td></tr>`;
+        updateLeadReviewSelection();
+        return;
+    }
+    leadReviewBody.innerHTML = state.leadReviews.map(reviewRow).join("");
     updateLeadReviewSelection();
-    return;
-  }
-  leadReviewBody.innerHTML = state.leadReviews.map(reviewRow).join("");
-  updateLeadReviewSelection();
 }
-
 export function renderWorkbench(data) {
-  if (workbenchStatsEl) {
-    workbenchStatsEl.textContent = t("workbench.stats", { date: data.today || "" });
-  }
-  if (workbenchMetricsEl) {
-    workbenchMetricsEl.innerHTML = [
-      metricCard(data.pending_reviews, t("workbench.metricPending"), "accent"),
-      metricCard(data.due_followups, t("workbench.metricDue"), "caution"),
-      metricCard(data.unsent_new, t("workbench.metricUnsent"), ""),
-      metricCard(data.warm_contacts, t("workbench.metricWarm"), "positive"),
-      metricCard(data.imported_today, t("workbench.metricToday"), ""),
-    ].join("");
-  }
-  state.leadReviews = data.review_items || [];
-  renderLeadReviews();
-  renderActionList(workbenchFollowupsEl, data.followup_items || [], t("workbench.noFollowups"));
-  renderActionList(workbenchNewContactsEl, data.new_items || [], t("workbench.noNewContacts"));
+    if (workbenchStatsEl) {
+        workbenchStatsEl.textContent = t("workbench.stats", { date: data.today || "" });
+    }
+    if (workbenchMetricsEl) {
+        workbenchMetricsEl.innerHTML = [
+            metricCard(data.pending_reviews, t("workbench.metricPending"), "accent"),
+            metricCard(data.due_followups, t("workbench.metricDue"), "caution"),
+            metricCard(data.unsent_new, t("workbench.metricUnsent"), ""),
+            metricCard(data.warm_contacts, t("workbench.metricWarm"), "positive"),
+            metricCard(data.imported_today, t("workbench.metricToday"), ""),
+        ].join("");
+    }
+    state.leadReviews = data.review_items || [];
+    renderLeadReviews();
+    renderActionList(workbenchFollowupsEl, data.followup_items || [], t("workbench.noFollowups"));
+    renderActionList(workbenchNewContactsEl, data.new_items || [], t("workbench.noNewContacts"));
 }
-
 export async function loadWorkbench() {
-  if (workbenchStatsEl) workbenchStatsEl.textContent = t("common.loading");
-  const data = await api("/api/workbench");
-  renderWorkbench(data);
+    if (workbenchStatsEl)
+        workbenchStatsEl.textContent = t("common.loading");
+    const data = await api("/api/workbench");
+    renderWorkbench(data);
 }
-
 export async function importSelectedLeadReviews(ids = [...state.selectedLeadReviewIds]) {
-  if (!ids.length) return;
-  const result = await api("/api/lead-reviews/import", {
-    method: "POST",
-    body: JSON.stringify({ ids }),
-  });
-  state.selectedLeadReviewIds.clear();
-  showApiSuccess(formatImportResult(result));
-  await Promise.all([
-    loadWorkbench(),
-    deps.loadContacts?.(),
-  ]);
+    if (!ids.length)
+        return;
+    const result = await api("/api/lead-reviews/import", {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+    });
+    state.selectedLeadReviewIds.clear();
+    showApiSuccess(formatImportResult(result));
+    await Promise.all([
+        loadWorkbench(),
+        deps.loadContacts?.(),
+    ]);
 }
-
 export async function skipLeadReview(id) {
-  await api(`/api/lead-reviews/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status: "skipped" }),
-  });
-  state.selectedLeadReviewIds.delete(Number(id));
-  await loadWorkbench();
+    await api(`/api/lead-reviews/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "skipped" }),
+    });
+    state.selectedLeadReviewIds.delete(Number(id));
+    await loadWorkbench();
 }
-
 export function handleLeadReviewSelection(event) {
-  const check = event.target.closest(".lead-review-select");
-  if (!check) return;
-  const id = Number(check.dataset.id);
-  if (check.checked) {
-    state.selectedLeadReviewIds.add(id);
-  } else {
-    state.selectedLeadReviewIds.delete(id);
-  }
-  updateLeadReviewSelection();
+    const check = event.target.closest(".lead-review-select");
+    if (!check)
+        return;
+    const id = Number(check.dataset.id);
+    if (check.checked) {
+        state.selectedLeadReviewIds.add(id);
+    }
+    else {
+        state.selectedLeadReviewIds.delete(id);
+    }
+    updateLeadReviewSelection();
 }
-
 export function handleLeadReviewAction(event) {
-  const importBtn = event.target.closest(".lead-review-import");
-  if (importBtn) {
-    importSelectedLeadReviews([Number(importBtn.dataset.id)]).catch(showApiError);
-    return;
-  }
-  const skipBtn = event.target.closest(".lead-review-skip");
-  if (skipBtn) {
-    skipLeadReview(Number(skipBtn.dataset.id)).catch(showApiError);
-  }
+    const importBtn = event.target.closest(".lead-review-import");
+    if (importBtn) {
+        importSelectedLeadReviews([Number(importBtn.dataset.id)]).catch(showApiError);
+        return;
+    }
+    const skipBtn = event.target.closest(".lead-review-skip");
+    if (skipBtn) {
+        skipLeadReview(Number(skipBtn.dataset.id)).catch(showApiError);
+    }
 }

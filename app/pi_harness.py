@@ -22,6 +22,10 @@ class Scenario:
     message: str
     expect_tools: set[str]
     forbid_tools: set[str] = field(default_factory=set)
+    allowed_tools: set[str] = field(default_factory=set)
+    tags: set[str] = field(default_factory=set)
+    expect_final_contains: list[str] = field(default_factory=list)
+    forbid_final_contains: list[str] = field(default_factory=list)
     arg_check: Callable[[str, dict[str, Any]], bool] | None = None
     arg_check_name: str | None = None
     max_retries: int = 0
@@ -43,6 +47,7 @@ class ScenarioResult:
     had_error: bool = False
     lonely_intro: bool = False
     blocked_tools: list[str] = field(default_factory=list)
+    final_text: str = ""
     failure_reasons: list[str] = field(default_factory=list)
 
     @property
@@ -76,12 +81,16 @@ SCENARIOS: list[Scenario] = [
         message="帮我找美国中型 ISP 的 peering 和 NOC 联系人",
         expect_tools={"discover_leads"},
         forbid_tools={"web_search"},
+        allowed_tools={"discover_leads"},
+        tags={"lead-discovery", "network"},
     ),
     Scenario(
         name="asn-roleemail-lookup",
         message="查这几个 ASN 的 role 邮箱：AS15169, 13335, AS3356",
         expect_tools={"lookup_asns"},
         forbid_tools={"discover_leads", "web_search"},
+        allowed_tools={"lookup_asns"},
+        tags={"rdap", "asn"},
         arg_check=_asn_text_ok,
         arg_check_name="asn_text",
     ),
@@ -89,6 +98,8 @@ SCENARIOS: list[Scenario] = [
         name="search-crm-immediately",
         message="列出库里所有 Google 相关的联系人",
         expect_tools={"list_contacts"},
+        allowed_tools={"list_contacts"},
+        tags={"crm-search"},
         arg_check=_list_contacts_ok,
         arg_check_name="list_contacts_non_empty",
     ),
@@ -96,6 +107,8 @@ SCENARIOS: list[Scenario] = [
         name="update-status-valid-enum",
         message="把联系人 #5 标记为已联系",
         expect_tools={"update_contact"},
+        allowed_tools={"update_contact"},
+        tags={"crm-write"},
         arg_check=_status_ok,
         arg_check_name="follow_up_status",
     ),
@@ -128,6 +141,10 @@ def scenario_from_dict(raw: dict[str, Any]) -> Scenario:
         message=message,
         expect_tools=_string_set(raw.get("expect_tools")),
         forbid_tools=_string_set(raw.get("forbid_tools")),
+        allowed_tools=_string_set(raw.get("allowed_tools")),
+        tags=_string_set(raw.get("tags")),
+        expect_final_contains=_string_list(raw.get("expect_final_contains")),
+        forbid_final_contains=_string_list(raw.get("forbid_final_contains")),
         arg_check=arg_check,
         arg_check_name=arg_check_name,
         max_retries=max(0, int(raw.get("max_retries") or 0)),
@@ -171,6 +188,7 @@ def score_run(events: list[dict[str, Any]], scenario: Scenario) -> ScenarioResul
     )
     selected_expected = (first_tool in scenario.expect_tools) if scenario.expect_tools else True
     avoided_forbidden = not (set(all_tools) & scenario.forbid_tools)
+    allowed_only = not scenario.allowed_tools or not (set(all_tools) - scenario.allowed_tools)
 
     args_ok = True
     if scenario.arg_check is not None:
@@ -191,6 +209,16 @@ def score_run(events: list[dict[str, Any]], scenario: Scenario) -> ScenarioResul
         and not tool_starts
         and any(e.get("type") == "assistant_done" for e in events)
     )
+    final_text = final_assistant_text(events)
+    final_text_lower = final_text.lower()
+    missing_final = [
+        text
+        for text in scenario.expect_final_contains
+        if text and text.lower() not in final_text_lower
+    ]
+    forbidden_final = [
+        text for text in scenario.forbid_final_contains if text and text.lower() in final_text_lower
+    ]
 
     failure_reasons: list[str] = []
     if not stopped_cleanly:
@@ -205,6 +233,10 @@ def score_run(events: list[dict[str, Any]], scenario: Scenario) -> ScenarioResul
         failure_reasons.append(
             f"forbidden_tool_used={sorted(set(all_tools) & scenario.forbid_tools)}"
         )
+    if not allowed_only:
+        failure_reasons.append(
+            f"unallowed_tool_used={sorted(set(all_tools) - scenario.allowed_tools)}"
+        )
     if not args_ok:
         failure_reasons.append("args_check_failed")
     if scenario.require_immediate and not acted_immediately:
@@ -215,6 +247,10 @@ def score_run(events: list[dict[str, Any]], scenario: Scenario) -> ScenarioResul
         failure_reasons.append("assistant_intro_without_tool")
     if scenario.fail_on_blocked_tools and blocked_tools:
         failure_reasons.append(f"blocked_tool_attempted={blocked_tools[:5]}")
+    if missing_final:
+        failure_reasons.append(f"final_text_missing={missing_final[:5]}")
+    if forbidden_final:
+        failure_reasons.append(f"final_text_forbidden={forbidden_final[:5]}")
 
     return ScenarioResult(
         name=scenario.name,
@@ -229,8 +265,19 @@ def score_run(events: list[dict[str, Any]], scenario: Scenario) -> ScenarioResul
         had_error=bool(errors),
         lonely_intro=lonely_intro,
         blocked_tools=blocked_tools,
+        final_text=final_text,
         failure_reasons=failure_reasons,
     )
+
+
+def final_assistant_text(events: list[dict[str, Any]]) -> str:
+    """Return the last complete assistant text from an event stream."""
+    for event in reversed(events):
+        if event.get("type") in {"assistant_done", "assistant"}:
+            text = str(event.get("text") or "").strip()
+            if text:
+                return text
+    return ""
 
 
 def canned_tool_result(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -297,6 +344,10 @@ def result_record(
             "message": scenario.message,
             "expect_tools": sorted(scenario.expect_tools),
             "forbid_tools": sorted(scenario.forbid_tools),
+            "allowed_tools": sorted(scenario.allowed_tools),
+            "tags": sorted(scenario.tags),
+            "expect_final_contains": list(scenario.expect_final_contains),
+            "forbid_final_contains": list(scenario.forbid_final_contains),
             "arg_check": scenario.arg_check_name,
             "max_retries": scenario.max_retries,
             "require_immediate": scenario.require_immediate,
@@ -377,6 +428,17 @@ def _string_set(value: Any) -> set[str]:
     if isinstance(value, list):
         return {str(item).strip() for item in value if str(item).strip()}
     raise ValueError("tool fields must be strings or arrays of strings")
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    raise ValueError("text assertion fields must be strings or arrays of strings")
 
 
 def _bool(value: Any) -> bool:

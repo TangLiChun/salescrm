@@ -10,12 +10,18 @@ import json
 from app.pi_harness import (
     SCENARIOS,
     Scenario,
+    final_assistant_text,
     load_scenarios_from_file,
     result_record,
     scenario_from_dict,
     score_run,
 )
-from scripts.pi_agent_harness import build_summary
+from scripts.pi_agent_harness import (
+    build_summary,
+    select_scenarios,
+    write_junit_xml,
+    write_markdown_report,
+)
 
 
 def _tool_start(name, args=None):
@@ -47,6 +53,23 @@ def test_wrong_tool_fails_selection():
     assert not r.selected_expected
     assert not r.avoided_forbidden
     assert not r.passed
+
+
+def test_unallowed_tool_fails_even_when_first_tool_is_expected():
+    scenario = Scenario(
+        "x",
+        "m",
+        expect_tools={"discover_leads"},
+        allowed_tools={"discover_leads"},
+    )
+    events = [
+        _tool_start("discover_leads", {"query": "isp"}),
+        _tool_start("list_contacts", {"q": "isp"}),
+        _DONE,
+    ]
+    r = score_run(events, scenario)
+    assert not r.passed
+    assert "unallowed_tool_used=['list_contacts']" in r.failure_reasons
 
 
 def test_retry_before_first_tool_marks_not_immediate():
@@ -117,6 +140,32 @@ def test_error_without_done_fails_cleanliness():
     assert not r.passed
 
 
+def test_final_text_assertions_are_scored():
+    scenario = Scenario(
+        "x",
+        "m",
+        expect_tools={"list_contacts"},
+        expect_final_contains=["已列出"],
+        forbid_final_contains=["编造"],
+    )
+    good = [
+        _tool_start("list_contacts", {"q": "google"}),
+        {"type": "assistant_done", "text": "已列出 1 个联系人。"},
+        _DONE,
+    ]
+    bad = [
+        _tool_start("list_contacts", {"q": "google"}),
+        {"type": "assistant_done", "text": "我编造了一个联系人。"},
+        _DONE,
+    ]
+    assert score_run(good, scenario).passed
+    result = score_run(bad, scenario)
+    assert not result.passed
+    assert "final_text_missing=['已列出']" in result.failure_reasons
+    assert "final_text_forbidden=['编造']" in result.failure_reasons
+    assert final_assistant_text(bad) == "我编造了一个联系人。"
+
+
 def test_blocked_tools_are_reported_without_counting_as_executed():
     scenario = Scenario("x", "m", expect_tools={"discover_leads"}, forbid_tools={"web_search"})
     events = [
@@ -179,6 +228,10 @@ def test_scenario_from_dict_uses_named_arg_check():
             "name": "custom",
             "message": "查 ASN 15169",
             "expect_tools": ["lookup_asns"],
+            "allowed_tools": ["lookup_asns"],
+            "tags": ["rdap", "asn"],
+            "expect_final_contains": ["邮箱"],
+            "forbid_final_contains": ["无法"],
             "arg_check": "asn_text",
             "require_immediate": "false",
             "fail_on_blocked_tools": "false",
@@ -186,11 +239,22 @@ def test_scenario_from_dict_uses_named_arg_check():
         }
     )
     assert scenario.name == "custom"
+    assert scenario.allowed_tools == {"lookup_asns"}
+    assert scenario.tags == {"rdap", "asn"}
+    assert scenario.expect_final_contains == ["邮箱"]
+    assert scenario.forbid_final_contains == ["无法"]
     assert scenario.arg_check is not None
     assert not scenario.require_immediate
     assert not scenario.fail_on_blocked_tools
     assert scenario.max_retries == 1
-    assert score_run([_tool_start("lookup_asns", {"text": "AS15169"}), _DONE], scenario).passed
+    assert score_run(
+        [
+            _tool_start("lookup_asns", {"text": "AS15169"}),
+            {"type": "assistant_done", "text": "已查到邮箱。"},
+            _DONE,
+        ],
+        scenario,
+    ).passed
 
 
 def test_load_scenarios_from_file(tmp_path):
@@ -216,6 +280,13 @@ def test_load_scenarios_from_file(tmp_path):
     assert scenarios[0].name == "from-file"
 
 
+def test_select_scenarios_filters_by_tags_and_names():
+    selected = select_scenarios(SCENARIOS, [], ["rdap"])
+    assert [scenario.name for scenario in selected] == ["asn-roleemail-lookup"]
+    selected = select_scenarios(SCENARIOS, ["asn-roleemail-lookup"], ["rdap"])
+    assert [scenario.name for scenario in selected] == ["asn-roleemail-lookup"]
+
+
 def test_build_summary_extracts_failures():
     good = result_record(
         Scenario("good", "m", expect_tools={"list_contacts"}),
@@ -236,3 +307,25 @@ def test_build_summary_extracts_failures():
     assert summary["failed"] == 1
     assert summary["failures"][0]["name"] == "bad"
     assert summary["failures"][0]["blocked_tools"] == []
+    assert summary["failure_reason_counts"]
+    assert summary["scenarios"][0]["first_tool_counts"]
+
+
+def test_markdown_and_junit_reports_are_written(tmp_path):
+    scenario = Scenario("good", "m", expect_tools={"list_contacts"})
+    record = result_record(
+        scenario,
+        score_run([_tool_start("list_contacts", {"q": "x"}), _DONE], scenario),
+        [_tool_start("list_contacts", {"q": "x"}), _DONE],
+        run={"index": 1, "duration_ms": 123},
+    )
+    md_path = tmp_path / "report.md"
+    junit_path = tmp_path / "junit.xml"
+
+    write_markdown_report(md_path, [record])
+    write_junit_xml(junit_path, [record])
+
+    assert "Pi Agent Harness Report" in md_path.read_text(encoding="utf-8")
+    junit = junit_path.read_text(encoding="utf-8")
+    assert 'tests="1"' in junit
+    assert 'failures="0"' in junit
