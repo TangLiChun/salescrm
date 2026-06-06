@@ -812,17 +812,100 @@ def _assistant_promises_tool_use(content: str) -> bool:
         "正在",
         "接下来",
         "马上",
+        "这就",
         "帮你查",
         "帮你搜",
         "拉一下",
         "补查",
         "再扫",
         "再查",
+        "再搜",
+        "再找",
+        "继续",
+        "接着",
+        "开始搜",
+        "开始查",
+        "去搜",
+        "去查",
         "搜索 crm",
         "查一下",
         "筛出",
+        "搜索更多",
+        "继续搜索",
+        "继续查找",
+        "再看看",
+        "找找",
+    )
+    if any(marker in lower for marker in markers):
+        return True
+    if len(text) <= 120 and any(
+        verb in text for verb in ("搜索", "查找", "查询", "筛选", "挖掘", "扩展")
+    ):
+        if any(prefix in text for prefix in ("好的", "行", "嗯", "OK", "ok", "继续", "马上", "正在")):
+            return True
+    return False
+
+
+def _user_requests_continuation(message: str) -> bool:
+    text = (message or "").strip()
+    if not text or len(text) > 48:
+        return False
+    lower = text.lower()
+    markers = (
+        "继续",
+        "再看看",
+        "再看",
+        "还有吗",
+        "再来",
+        "接着",
+        "再搜",
+        "再查",
+        "再找",
+        "更多",
+        "continue",
+        "more",
     )
     return any(marker in lower for marker in markers)
+
+
+def _infer_continuation_query(history: list[dict[str, Any]], user_message: str) -> str:
+    substantive: list[str] = []
+    saw_discover = False
+    for item in history:
+        role = item.get("role")
+        if role == "user":
+            content = str(item.get("content") or "").strip()
+            if content and not _user_requests_continuation(content):
+                substantive.append(content)
+        elif role == "tool" and item.get("name") == "discover_leads":
+            saw_discover = True
+
+    if not substantive and not saw_discover:
+        return ""
+
+    base = substantive[-1] if substantive else "扩展线索搜索，找更多符合条件的组织和联系人"
+    if not _user_requests_continuation(user_message):
+        return base
+
+    lead_tokens = ("线索", "公司", "isp", "运营商", "peering", "asn", "大企业", "大公司", "知名")
+    lower_base = base.lower()
+    if saw_discover or any(token in lower_base for token in lead_tokens):
+        return f"{base}（用户要求继续，请扩展搜索范围并找更多结果）"
+    return f"{base}（继续）"
+
+
+def _make_discover_fallback_call(query: str) -> dict[str, Any]:
+    return {
+        "id": f"fallback-{uuid.uuid4().hex[:8]}",
+        "type": "function",
+        "function": {
+            "name": "discover_leads",
+            "arguments": json.dumps(
+                {"query": query, "min_score": 60, "auto_import": True},
+                ensure_ascii=False,
+            ),
+        },
+    }
 
 
 def _extract_json_args(text: str) -> dict[str, Any]:
@@ -996,19 +1079,45 @@ _EMPTY_RESPONSE_NUDGE = (
 )
 
 _INTRO_ONLY_NUDGE = (
-    "（系统）不要只回复开场白就停止。请立即调用 list_contacts、web_search、"
+    "（系统）不要只回复开场白就停止。请立即调用 list_contacts、discover_leads、web_search、"
     "lookup_asns 等工具完成用户请求，然后再总结结果。"
+)
+
+_CONTINUE_NUDGE = (
+    "（系统）用户要求继续上一任务。不要只回复「好的、继续」就结束。"
+    "请立即调用 discover_leads、list_contacts、lookup_asns 等工具继续执行，然后再总结。"
 )
 
 _MAX_LLM_NUDGES = 2
 
 
-def _fallback_prepared_calls(user_message: str) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+def _fallback_prepared_calls(
+    user_message: str,
+    history: list[dict[str, Any]] | None = None,
+) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
     """When the model keeps intro-only replies, run a sensible default CRM search."""
     text = (user_message or "").strip()
     lower = text.lower()
     if not text:
         return []
+
+    if _user_requests_continuation(text):
+        query = _infer_continuation_query(history or [], text)
+        if query:
+            return _prepare_tool_calls([_make_discover_fallback_call(query)])
+
+    if _user_requests_continuation(text):
+        raw_calls = [
+            {
+                "id": f"fallback-{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {
+                    "name": "list_contacts",
+                    "arguments": json.dumps({"q": "", "limit": 100}, ensure_ascii=False),
+                },
+            }
+        ]
+        return _prepare_tool_calls(raw_calls)
 
     queries: list[str] = []
     if any(token in text for token in ("运营商", "operator", " isp", "isp ", "电信", "联通", "移动")) or (
@@ -1969,17 +2078,31 @@ async def agent_chat_stream(
                     assistant = {**(assistant or {}), "tool_calls": tool_calls, "content": intro or None}
 
             if content and not tool_calls:
-                if _assistant_promises_tool_use(content) and llm_nudge_count < _MAX_LLM_NUDGES:
+                continue_request = _user_requests_continuation(message)
+                promises = _assistant_promises_tool_use(content)
+                should_act = promises or continue_request
+
+                if should_act and llm_nudge_count < _MAX_LLM_NUDGES:
                     llm_nudge_count += 1
-                    messages.append({"role": "user", "content": _INTRO_ONLY_NUDGE})
+                    nudge = _CONTINUE_NUDGE if continue_request else _INTRO_ONLY_NUDGE
+                    messages.append({"role": "user", "content": nudge})
                     yield {"type": "status", "message": "模型未调用工具，正在重试…"}
                     continue
-                fallback_calls = _fallback_prepared_calls(message)
-                if fallback_calls and _assistant_promises_tool_use(content):
+                fallback_calls = _fallback_prepared_calls(message, history or [])
+                if fallback_calls and should_act:
                     prepared_calls = fallback_calls
                     assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
-                    yield {"type": "status", "message": "模型未调用工具，正在直接搜索 CRM…"}
+                    status_msg = (
+                        "正在直接继续上一任务…"
+                        if continue_request
+                        else "模型未调用工具，正在直接搜索 CRM…"
+                    )
+                    yield {"type": "status", "message": status_msg}
                     break
+                if continue_request:
+                    yield {"type": "error", "message": "无法继续上一任务，请补充更具体的搜索描述"}
+                    yield {"type": "done"}
+                    return
                 if not streamed_reply:
                     yield {"type": "assistant_start"}
                     yield {"type": "assistant_delta", "text": content}
@@ -2010,6 +2133,23 @@ async def agent_chat_stream(
             if not prepared_calls:
                 attempted_tools = bool(tool_calls)
                 if content and not attempted_tools:
+                    continue_request = _user_requests_continuation(message)
+                    if continue_request or _assistant_promises_tool_use(content):
+                        fallback_calls = _fallback_prepared_calls(message, history or [])
+                        if fallback_calls:
+                            prepared_calls = fallback_calls
+                            assistant = {
+                                **(assistant or {}),
+                                "role": "assistant",
+                                "content": content or None,
+                            }
+                            status_msg = (
+                                "正在直接继续上一任务…"
+                                if continue_request
+                                else "模型未调用工具，正在直接搜索 CRM…"
+                            )
+                            yield {"type": "status", "message": status_msg}
+                            break
                     if not streamed_reply:
                         yield {"type": "assistant_start"}
                         yield {"type": "assistant_delta", "text": content}
@@ -2024,8 +2164,12 @@ async def agent_chat_stream(
                         "message": "工具调用无效，正在重试…" if attempted_tools else "模型未调用工具，正在重试…",
                     }
                     continue
-                fallback_calls = _fallback_prepared_calls(message)
-                if fallback_calls and (attempted_tools or _assistant_promises_tool_use(content)):
+                fallback_calls = _fallback_prepared_calls(message, history or [])
+                if fallback_calls and (
+                    attempted_tools
+                    or _assistant_promises_tool_use(content)
+                    or _user_requests_continuation(message)
+                ):
                     prepared_calls = fallback_calls
                     assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
                     yield {"type": "status", "message": "工具调用无效，正在直接搜索 CRM…"}
