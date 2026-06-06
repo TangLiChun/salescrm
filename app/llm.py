@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 from app.settings_store import get_setting
+
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
 REQUEST_TIMEOUT = 60.0
@@ -243,7 +244,9 @@ def _consume_stream_chunk(
 
 
 def chat_completion(messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
-    message = chat_completion_with_tools(messages, tools=None, temperature=temperature, json_mode=True)
+    message = chat_completion_with_tools(
+        messages, tools=None, temperature=temperature, json_mode=True
+    )
     content = message.get("content")
     if not content:
         raise LLMError("LLM 返回空内容")

@@ -87,14 +87,10 @@ def init_settings(conn) -> None:
 
 def _migrate_bing_to_brave(conn) -> None:
     """One-time: copy legacy bing_search_key into brave_search_key."""
-    bing = conn.execute(
-        "SELECT value FROM app_settings WHERE key = 'bing_search_key'"
-    ).fetchone()
+    bing = conn.execute("SELECT value FROM app_settings WHERE key = 'bing_search_key'").fetchone()
     if not bing or not (bing["value"] or "").strip():
         return
-    brave = conn.execute(
-        "SELECT value FROM app_settings WHERE key = 'brave_search_key'"
-    ).fetchone()
+    brave = conn.execute("SELECT value FROM app_settings WHERE key = 'brave_search_key'").fetchone()
     if brave and (brave["value"] or "").strip():
         return
     now = utc_now()

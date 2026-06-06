@@ -112,7 +112,10 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
     if name == "import_leads":
         return _truncate_json_text(
             json.dumps(
-                {k: result.get(k) for k in ("imported", "duplicates", "skipped", "filtered", "total")},
+                {
+                    k: result.get(k)
+                    for k in ("imported", "duplicates", "skipped", "filtered", "total")
+                },
                 ensure_ascii=False,
             )
         )
@@ -167,7 +170,9 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
 
     if name in ("shodan_search", "web_search", "fetch_web_pages", "search_hosting_forums"):
         networks = result.get("networks") or []
-        web_results = result.get("web_results") or result.get("results") or result.get("pages") or []
+        web_results = (
+            result.get("web_results") or result.get("results") or result.get("pages") or []
+        )
         payload = {
             "query": result.get("query"),
             "match_count": result.get("match_count") or result.get("result_count"),
@@ -195,7 +200,9 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
 def tool_summary_for_storage(name: str, result: Any, *, fallback: str = "") -> str:
     if isinstance(result, dict) and result.get("error"):
         return str(result["error"])[:MAX_STORED_TOOL_SUMMARY_CHARS]
-    compressed = compress_tool_result_for_llm(name, result if isinstance(result, dict) else {"value": result})
+    compressed = compress_tool_result_for_llm(
+        name, result if isinstance(result, dict) else {"value": result}
+    )
     if len(compressed) <= MAX_STORED_TOOL_SUMMARY_CHARS:
         return compressed
     if fallback.strip():
@@ -206,7 +213,7 @@ def tool_summary_for_storage(name: str, result: Any, *, fallback: str = "") -> s
 def _truncate_json_text(text: str) -> str:
     if len(text) <= MAX_TOOL_JSON_CHARS:
         return text
-    return text[:MAX_TOOL_JSON_CHARS] + f'…[truncated, {len(text)} chars total]'
+    return text[:MAX_TOOL_JSON_CHARS] + f"…[truncated, {len(text)} chars total]"
 
 
 def compact_history_line(item: dict[str, Any], *, verbose: bool = False) -> str | None:
@@ -367,7 +374,9 @@ def context_stats(
     message_chars = sum(len(str(m.get("content") or "")) for m in llm_messages)
     summary = (context_summary or "").strip()
     compressed = bool(summary) or int(summary_through or 0) > 0
-    middle_count = max(0, len(history) - max(int(summary_through or 0), 0) - MAX_RECENT_FULL_MESSAGES)
+    middle_count = max(
+        0, len(history) - max(int(summary_through or 0), 0) - MAX_RECENT_FULL_MESSAGES
+    )
     overhead = max(0, int(system_chars)) + max(0, int(tools_chars))
     if compressed and not overhead:
         overhead = 15_000

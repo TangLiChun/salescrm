@@ -26,7 +26,9 @@ def get_current_user(request: Request) -> dict:
     user = get_user_by_id(user_id)
     if not user:
         request.session.clear()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录已失效，请重新登录")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="登录已失效，请重新登录"
+        )
 
     return {"id": user["id"], "username": user["username"]}
 

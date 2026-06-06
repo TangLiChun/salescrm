@@ -12,9 +12,13 @@ from arin_lookup import load_asns, lookup_asn, write_csv
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch ARIN role emails for ASN list")
-    parser.add_argument("input", nargs="?", help="ASN list file (one ASN per line). Read stdin if omitted.")
+    parser.add_argument(
+        "input", nargs="?", help="ASN list file (one ASN per line). Read stdin if omitted."
+    )
     parser.add_argument("-o", "--output", default="arin_asn_roles.csv", help="Output CSV path")
-    parser.add_argument("--delay", type=float, default=1.0, help="Delay between requests in seconds")
+    parser.add_argument(
+        "--delay", type=float, default=1.0, help="Delay between requests in seconds"
+    )
     parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout in seconds")
     args = parser.parse_args()
 

@@ -47,9 +47,7 @@ def zone_name() -> str:
 
 def is_configured() -> bool:
     return (
-        bool(get_setting("brightdata_api_key", "").strip())
-        and bool(zone_name())
-        and is_enabled()
+        bool(get_setting("brightdata_api_key", "").strip()) and bool(zone_name()) and is_enabled()
     )
 
 

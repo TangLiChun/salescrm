@@ -66,7 +66,7 @@ def _linkedin_web_result(profile: dict[str, Any]) -> dict[str, str]:
         profile.get("org") or "",
         profile.get("city") or "",
         profile.get("about") or "",
-        * (profile.get("experience_preview") or []),
+        *(profile.get("experience_preview") or []),
     ]
     return {
         "title": profile.get("name") or profile.get("org") or "LinkedIn profile",
@@ -79,7 +79,13 @@ def _linkedin_web_result(profile: dict[str, Any]) -> dict[str, str]:
 
 def _linkedin_lead_preview(profile: dict[str, Any]) -> dict[str, Any]:
     notes = " · ".join(
-        part for part in (profile.get("position") or "", profile.get("city") or "", profile.get("url") or "") if part
+        part
+        for part in (
+            profile.get("position") or "",
+            profile.get("city") or "",
+            profile.get("url") or "",
+        )
+        if part
     )
     url = profile.get("url") or ""
     return {
@@ -204,7 +210,9 @@ def _facebook_web_result(profile: dict[str, Any]) -> dict[str, str]:
 
 def _facebook_lead_preview(profile: dict[str, Any]) -> dict[str, Any]:
     notes = " · ".join(
-        part for part in (profile.get("org") or "", profile.get("about") or "", profile.get("url") or "") if part
+        part
+        for part in (profile.get("org") or "", profile.get("about") or "", profile.get("url") or "")
+        if part
     )
     url = profile.get("url") or ""
     return {

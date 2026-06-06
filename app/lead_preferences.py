@@ -156,7 +156,13 @@ def _coerce_prefs(raw: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(stats, dict):
         stats = {}
     prefs["stats"] = {**DEFAULT_PREFS["stats"], **stats}
-    for list_key in ("preferred_roles", "keyword_hints", "avoid_orgs", "avoid_domains", "liked_orgs"):
+    for list_key in (
+        "preferred_roles",
+        "keyword_hints",
+        "avoid_orgs",
+        "avoid_domains",
+        "liked_orgs",
+    ):
         value = prefs.get(list_key)
         if not isinstance(value, list):
             prefs[list_key] = []
@@ -395,7 +401,9 @@ def apply_prefs_to_plan(plan: dict[str, Any], prefs: dict[str, Any]) -> dict[str
     merged = dict(plan)
     preferred = _merge_roles(prefs.get("preferred_roles") or [], prefs.get("role_weights") or {})
     if preferred:
-        existing = [str(item).strip() for item in merged.get("preferred_roles") or [] if str(item).strip()]
+        existing = [
+            str(item).strip() for item in merged.get("preferred_roles") or [] if str(item).strip()
+        ]
         combined: list[str] = []
         for role in preferred + existing:
             if role not in combined:

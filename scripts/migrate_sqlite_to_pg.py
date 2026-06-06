@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import sys
@@ -112,7 +111,9 @@ def main() -> int:
         contact_count = conn.execute("SELECT COUNT(*) AS count FROM contacts").fetchone()["count"]
         force = os.getenv("FORCE_MIGRATE", "").strip() in {"1", "true", "yes"}
         if user_count and (contact_count or not force):
-            print("PostgreSQL already has data; skipping migration (set FORCE_MIGRATE=1 to replace).")
+            print(
+                "PostgreSQL already has data; skipping migration (set FORCE_MIGRATE=1 to replace)."
+            )
             return 0
 
         if user_count:
@@ -144,14 +145,23 @@ def main() -> int:
                     f"INSERT INTO {table} ({col_sql}) VALUES ({placeholders})",
                     values,
                 )
-            if table in {"users", "contacts", "scheduled_jobs", "contact_notes", "job_runs", "email_templates", "background_jobs"}:
+            if table in {
+                "users",
+                "contacts",
+                "scheduled_jobs",
+                "contact_notes",
+                "job_runs",
+                "email_templates",
+                "background_jobs",
+            }:
                 conn.execute(
                     f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE(MAX(id), 1)) FROM {table}"
                 )
             print(f"Migrated {len(rows)} rows from {table}")
 
         if "asn_lookup_cache" in {
-            row[0] for row in src.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            row[0]
+            for row in src.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }:
             rows = src.execute("SELECT * FROM asn_lookup_cache").fetchall()
             for row in rows:

@@ -13,7 +13,6 @@ from app.lead_checkpoint import (
     checkpoint_resume_message,
     phase_at_least,
 )
-from app.llm import LLMError, extract_leads_from_web, plan_lead_search, score_leads
 from app.lead_preferences import (
     apply_prefs_to_plan,
     effective_min_score,
@@ -22,16 +21,16 @@ from app.lead_preferences import (
     preference_hints_for_llm,
     record_search_feedback,
 )
-from app.sources import list_channels
-from app.sources import peeringdb as peeringdb_source
-from app.sources import shodan as shodan_source
-from app.sources import web_search
+from app.llm import LLMError, extract_leads_from_web, plan_lead_search, score_leads
+from app.social_contacts import enrich_candidates_with_social
 from app.sources import brightdata_social as bs
 from app.sources import forums as forums_source
+from app.sources import list_channels, web_search
+from app.sources import peeringdb as peeringdb_source
+from app.sources import shodan as shodan_source
 from app.sources import web_unlocker as web_unlocker_source
 from app.sources.forum_registry import FORUM_CHANNELS
 from app.sources.social_registry import SOCIAL_CHANNELS, extract_all_social_urls_from_web_results
-from app.social_contacts import enrich_candidates_with_social
 from arin_lookup import lookup_asn
 
 
@@ -42,7 +41,9 @@ def _row_has_preferred_role(row: dict[str, Any], preferred_roles: list[str]) -> 
     return any(role in preferred_roles for role in roles)
 
 
-def _contact_candidates(rows: list[dict[str, Any]], preferred_roles: list[str]) -> list[dict[str, Any]]:
+def _contact_candidates(
+    rows: list[dict[str, Any]], preferred_roles: list[str]
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for row in rows:
         if row.get("error") or not row.get("email"):
@@ -190,11 +191,15 @@ async def discover_leads_stream(
             "phase": PHASE_SOURCES_DONE,
         }
 
-        peeringdb_task = asyncio.to_thread(peeringdb_source.discover_asns, keywords, max_asns=max_asns)
+        peeringdb_task = asyncio.to_thread(
+            peeringdb_source.discover_asns, keywords, max_asns=max_asns
+        )
         web_task = asyncio.to_thread(
             web_search.search_web_many,
             web_queries,
-            max_results_per_query=max(4, plan.get("max_web_results", 20) // max(len(web_queries), 1)),
+            max_results_per_query=max(
+                4, plan.get("max_web_results", 20) // max(len(web_queries), 1)
+            ),
         )
         forum_task = asyncio.to_thread(forums_source.discover_from_keywords, keywords)
         shodan_task = None

@@ -31,7 +31,9 @@ def extract_profile_urls_from_web_results(results: list[dict[str, Any]]) -> list
     return bs.extract_urls_from_web_results(LINKEDIN, results)
 
 
-def collect_profiles_by_url(urls: list[str], *, max_urls: int = MAX_LINKEDIN_URLS) -> list[dict[str, Any]]:
+def collect_profiles_by_url(
+    urls: list[str], *, max_urls: int = MAX_LINKEDIN_URLS
+) -> list[dict[str, Any]]:
     return bs.collect_profiles_by_url(LINKEDIN, urls, max_urls=max_urls)
 
 

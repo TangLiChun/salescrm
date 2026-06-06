@@ -10,10 +10,9 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from io import StringIO
-from typing import Iterable
 
 DEFAULT_LOOKUP_WORKERS = 6
 
@@ -102,7 +101,9 @@ def parse_asns_from_text(text: str) -> list[int]:
         for match in ASN_PREFIX_RE.finditer(stripped):
             _add_asn(int(match.group(1)), seen, ordered)
 
-        parts = [part.strip().strip("'\"") for part in re.split(r"[\s,;|]+", stripped) if part.strip()]
+        parts = [
+            part.strip().strip("'\"") for part in re.split(r"[\s,;|]+", stripped) if part.strip()
+        ]
         for part in parts:
             if re.fullmatch(r"\d{1,10}", part):
                 _add_asn(int(part), seen, ordered)
@@ -249,7 +250,9 @@ def lookup_asn(asn: int, timeout: float = 20.0) -> list[RoleContact]:
 
     port43 = bootstrap.get("port43")
     if not port43:
-        return [RoleContact(asn=asn, org=bootstrap.get("name"), error="unknown RIR (missing port43)")]
+        return [
+            RoleContact(asn=asn, org=bootstrap.get("name"), error="unknown RIR (missing port43)")
+        ]
 
     rir_url = RIR_RDAP.get(port43)
     if not rir_url:
@@ -270,7 +273,11 @@ def lookup_asn(asn: int, timeout: float = 20.0) -> list[RoleContact]:
     try:
         data = fetch_rdap(rir_url.format(asn=asn), timeout)
     except urllib.error.HTTPError as exc:
-        return [RoleContact(asn=asn, org=bootstrap.get("name"), rir=label, error=f"HTTP {exc.code} from {label}")]
+        return [
+            RoleContact(
+                asn=asn, org=bootstrap.get("name"), rir=label, error=f"HTTP {exc.code} from {label}"
+            )
+        ]
     except urllib.error.URLError as exc:
         return [RoleContact(asn=asn, org=bootstrap.get("name"), rir=label, error=str(exc.reason))]
 

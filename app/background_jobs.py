@@ -22,7 +22,11 @@ from app.database import (
     update_background_job,
     utc_now,
 )
-from app.lead_checkpoint import parse_checkpoint, checkpoint_resume_message, progress_from_checkpoint
+from app.lead_checkpoint import (
+    checkpoint_resume_message,
+    parse_checkpoint,
+    progress_from_checkpoint,
+)
 from app.lead_discovery import discover_leads_stream
 from app.pi_chat_store import (
     append_pi_thread_history_entries,
@@ -142,7 +146,9 @@ def _progress_event_label(event: dict[str, Any]) -> str:
     return event_type
 
 
-def _merge_progress_events(job_id: int, slim: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+def _merge_progress_events(
+    job_id: int, slim: dict[str, Any], event: dict[str, Any]
+) -> dict[str, Any]:
     job = get_background_job(job_id)
     current: dict[str, Any] = {}
     if job and job.get("progress_json"):
@@ -690,7 +696,7 @@ async def iter_job_events(user_id: int):
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=30.0)
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 yield ": keepalive\n\n"
     finally:
         unsubscribe_job_events(user_id, queue)

@@ -6,23 +6,28 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from arin_lookup import lookup_asn
-from app.database import get_contact, import_contacts, list_contact_emails, update_contact_social_fields
+from app.database import (
+    get_contact,
+    import_contacts,
+    list_contact_emails,
+    update_contact_social_fields,
+)
 from app.lead_discovery import _contact_candidates, _dedupe_candidates
-from app.llm import LLMError, extract_leads_from_web, score_leads
 from app.lead_preferences import (
     effective_min_score,
     filter_avoided_candidates,
     get_prefs,
     preference_hints_for_llm,
 )
-from app.sources import peeringdb as peeringdb_source
-from app.sources import web_search
+from app.llm import LLMError, extract_leads_from_web, score_leads
+from app.social_contacts import enrich_candidates_with_social
 from app.sources import brightdata_social as bs
 from app.sources import forums as forums_source
+from app.sources import peeringdb as peeringdb_source
+from app.sources import web_search
 from app.sources import web_unlocker as web_unlocker_source
 from app.sources.social_registry import SOCIAL_CHANNELS, extract_all_social_urls_from_web_results
-from app.social_contacts import enrich_candidates_with_social
+from arin_lookup import lookup_asn
 
 GENERIC_EMAIL_DOMAINS = frozenset(
     {
@@ -85,7 +90,9 @@ def _enrich_user_query(contact: dict[str, Any]) -> str:
     return "；".join(parts)
 
 
-def _row_from_rdap(row: dict[str, Any], *, contact: dict[str, Any], network_name: str = "") -> dict[str, Any]:
+def _row_from_rdap(
+    row: dict[str, Any], *, contact: dict[str, Any], network_name: str = ""
+) -> dict[str, Any]:
     roles = row.get("roles") or []
     if isinstance(roles, str):
         roles = [part.strip() for part in roles.split(",") if part.strip()]
@@ -155,7 +162,14 @@ async def enrich_contact_stream(
             "target_profile": f"与 {contact.get('org') or anchor_email} 相关的其他联系方式",
             "keywords": [contact.get("org") or ""],
             "web_queries": _build_enrich_queries(contact),
-            "preferred_roles": ["abuse", "peering", "noc", "technical", "administrative", "routing"],
+            "preferred_roles": [
+                "abuse",
+                "peering",
+                "noc",
+                "technical",
+                "administrative",
+                "routing",
+            ],
         },
     }
 
@@ -188,7 +202,9 @@ async def enrich_contact_stream(
     queries = _build_enrich_queries(contact)
     web_results: list[dict[str, str]] = []
     if queries:
-        web_results = await asyncio.to_thread(web_search.search_web_many, queries, max_results_per_query=5)
+        web_results = await asyncio.to_thread(
+            web_search.search_web_many, queries, max_results_per_query=5
+        )
         yield {
             "type": "source_result",
             "source": "web_search",
@@ -198,7 +214,9 @@ async def enrich_contact_stream(
 
     forum_keywords = [org] if org else []
     if forum_keywords:
-        forum_results = await asyncio.to_thread(forums_source.discover_from_keywords, forum_keywords)
+        forum_results = await asyncio.to_thread(
+            forums_source.discover_from_keywords, forum_keywords
+        )
         if forum_results:
             seen_web = {(item.get("url") or "").strip() for item in web_results if item.get("url")}
             added = 0
@@ -346,7 +364,9 @@ async def enrich_contact_stream(
             email = (row.get("email") or "").lower()
             if not email or email == anchor_email or email in known_emails:
                 continue
-            candidates.append(_row_from_rdap(row, contact=contact, network_name=network.get("name") or ""))
+            candidates.append(
+                _row_from_rdap(row, contact=contact, network_name=network.get("name") or "")
+            )
 
         yield {
             "type": "asn_result",
@@ -360,7 +380,9 @@ async def enrich_contact_stream(
     candidates = [
         row
         for row in candidates
-        if row.get("email") and row["email"].lower() not in known_emails and row["email"].lower() != anchor_email
+        if row.get("email")
+        and row["email"].lower() not in known_emails
+        and row["email"].lower() != anchor_email
     ]
     candidates = enrich_candidates_with_social(
         candidates,
@@ -394,7 +416,9 @@ async def enrich_contact_stream(
         return
 
     leads = [
-        row for row in scored if row.get("lead_relevant") and row.get("lead_score", 0) >= score_threshold
+        row
+        for row in scored
+        if row.get("lead_relevant") and row.get("lead_score", 0) >= score_threshold
     ]
     leads.sort(key=lambda item: item.get("lead_score", 0), reverse=True)
 

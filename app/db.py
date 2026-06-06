@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 from urllib.parse import quote_plus
 
 import psycopg
@@ -24,9 +25,7 @@ def database_url() -> str:
     host = os.getenv("POSTGRES_HOST", DEFAULT_PG_HOST)
     port = os.getenv("POSTGRES_PORT", DEFAULT_PG_PORT)
     db = os.getenv("POSTGRES_DB", DEFAULT_PG_DB)
-    return (
-        f"postgresql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{quote_plus(db)}"
-    )
+    return f"postgresql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{quote_plus(db)}"
 
 
 def db_path() -> str:

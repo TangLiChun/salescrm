@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.database import get_conn, utc_now
 
@@ -49,7 +49,7 @@ def set_cached_rows(asn: int, rows: list[dict], *, rir: str | None = None) -> No
     key = _cache_key(asn, rir)
     created = utc_now()
     expires = (
-        datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=cache_ttl_seconds())
+        datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=cache_ttl_seconds())
     ).isoformat()
     primary_rir = rir
     if not primary_rir:

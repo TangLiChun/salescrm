@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import psycopg
 
-from arin_lookup import parse_asn
-from app.db import db_path, get_conn
+from app.db import get_conn
 from app.security import hash_password
+from arin_lookup import parse_asn
 
 FOLLOW_UP_STATUSES = ("new", "contacted", "replied", "invalid", "interested")
 LEAD_REVIEW_STATUSES = ("pending", "approved", "skipped", "imported")
@@ -21,7 +21,7 @@ CONTACT_SELECT_SQL = """
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def _iso(value: object) -> str | None:
@@ -49,18 +49,12 @@ def _table_columns(conn, table: str) -> set[str]:
 def _migrate_contacts(conn) -> None:
     columns = _table_columns(conn, "contacts")
     if "email_sent" not in columns:
-        conn.execute(
-            "ALTER TABLE contacts ADD COLUMN email_sent BOOLEAN NOT NULL DEFAULT FALSE"
-        )
+        conn.execute("ALTER TABLE contacts ADD COLUMN email_sent BOOLEAN NOT NULL DEFAULT FALSE")
     if "email_sent_at" not in columns:
         conn.execute("ALTER TABLE contacts ADD COLUMN email_sent_at TIMESTAMPTZ")
     if "follow_up_status" not in columns:
-        conn.execute(
-            "ALTER TABLE contacts ADD COLUMN follow_up_status TEXT NOT NULL DEFAULT 'new'"
-        )
-        conn.execute(
-            "UPDATE contacts SET follow_up_status = 'contacted' WHERE email_sent = TRUE"
-        )
+        conn.execute("ALTER TABLE contacts ADD COLUMN follow_up_status TEXT NOT NULL DEFAULT 'new'")
+        conn.execute("UPDATE contacts SET follow_up_status = 'contacted' WHERE email_sent = TRUE")
     for social_col in ("linkedin", "x", "facebook"):
         if social_col not in columns:
             conn.execute(f"ALTER TABLE contacts ADD COLUMN {social_col} TEXT NOT NULL DEFAULT ''")
@@ -357,7 +351,9 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(enabled, next_run_at)"
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id, ran_at DESC)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_email_templates_user ON email_templates(user_id, updated_at DESC)"
         )
@@ -625,7 +621,7 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 continue
 
             existing = conn.execute(
-                f"""
+                """
                 SELECT id, org, name, roles, notes, linkedin, x, facebook
                 FROM contacts WHERE user_id = %s AND lower(email) = %s
                 """,
@@ -668,7 +664,11 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
                 )
                 continue
 
-            roles = ",".join(row.get("roles") or []) if isinstance(row.get("roles"), list) else (row.get("roles") or "")
+            roles = (
+                ",".join(row.get("roles") or [])
+                if isinstance(row.get("roles"), list)
+                else (row.get("roles") or "")
+            )
             notes = row.get("notes") or ""
             social = merge_social_fields({}, row)
             conn.execute(
@@ -730,7 +730,12 @@ def import_contacts(user_id: int, rows: list[dict]) -> dict:
         except Exception:
             pass
 
-    return {"imported": imported, "skipped": skipped, "duplicates": duplicates, "filtered": filtered}
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "duplicates": duplicates,
+        "filtered": filtered,
+    }
 
 
 def _lead_review_payload(lead: dict, *, query: str = "") -> dict:
@@ -935,12 +940,16 @@ def import_lead_reviews(user_id: int, review_ids: list[int]) -> dict:
         payload.append({**lead, "source": source, "notes": notes.strip(" ·")})
         row_ids.append(int(row["id"]))
 
-    result = import_contacts(user_id, payload) if payload else {
-        "imported": 0,
-        "skipped": len(ids),
-        "duplicates": 0,
-        "filtered": 0,
-    }
+    result = (
+        import_contacts(user_id, payload)
+        if payload
+        else {
+            "imported": 0,
+            "skipped": len(ids),
+            "duplicates": 0,
+            "filtered": 0,
+        }
+    )
     if row_ids:
         now = utc_now()
         with get_conn() as conn:
@@ -957,7 +966,7 @@ def import_lead_reviews(user_id: int, review_ids: list[int]) -> dict:
 
 
 def get_workbench_summary(user_id: int) -> dict:
-    now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+    now_dt = datetime.now(UTC).replace(microsecond=0)
     today = now_dt.date().isoformat()
     followup_before = (now_dt - timedelta(days=3)).isoformat()
     with get_conn() as conn:
@@ -1078,7 +1087,9 @@ def list_contact_organizations(user_id: int, *, limit: int = 80) -> list[dict]:
         group["count"] = len(group["contacts"])
         group["contacts"] = group["contacts"][:8]
         items.append(group)
-    items.sort(key=lambda item: (item["warm"], item["count"], item.get("latest_at") or ""), reverse=True)
+    items.sort(
+        key=lambda item: (item["warm"], item["count"], item.get("latest_at") or ""), reverse=True
+    )
     return items[: min(max(int(limit), 1), 200)]
 
 
@@ -1128,9 +1139,7 @@ def mark_contact_sent(user_id: int, contact_id: int, *, sent: bool = True) -> bo
         return cursor.rowcount > 0
 
 
-def update_contact_follow_up_status(
-    user_id: int, contact_id: int, follow_up_status: str
-) -> bool:
+def update_contact_follow_up_status(user_id: int, contact_id: int, follow_up_status: str) -> bool:
     if follow_up_status not in FOLLOW_UP_STATUSES:
         return False
     now = utc_now()
@@ -1567,7 +1576,7 @@ def delete_scheduled_job(user_id: int, job_id: int) -> bool:
 def list_due_scheduled_jobs(*, stale_running_minutes: int = 180) -> list[dict]:
     now = utc_now()
     stale_before = (
-        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=stale_running_minutes)
+        datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=stale_running_minutes)
     ).isoformat()
     with get_conn() as conn:
         rows = conn.execute(
@@ -1591,9 +1600,7 @@ def list_due_scheduled_jobs(*, stale_running_minutes: int = 180) -> list[dict]:
 
 def claim_scheduled_job(job_id: int) -> bool:
     now = utc_now()
-    stale_before = (
-        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=3)
-    ).isoformat()
+    stale_before = (datetime.now(UTC).replace(microsecond=0) - timedelta(hours=3)).isoformat()
     with get_conn() as conn:
         cursor = conn.execute(
             """
@@ -1617,7 +1624,7 @@ def mark_job_run(
     run_mode: str = "interval",
     cooldown_minutes: int = 15,
 ) -> None:
-    now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+    now_dt = datetime.now(UTC).replace(microsecond=0)
     mode = "continuous" if str(run_mode).strip().lower() == "continuous" else "interval"
     if mode == "continuous":
         delay_minutes = max(5, min(int(cooldown_minutes or 15), 1440))
@@ -1724,9 +1731,7 @@ def get_email_template(user_id: int, template_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def create_email_template(
-    user_id: int, *, name: str, subject: str = "", body: str = ""
-) -> dict:
+def create_email_template(user_id: int, *, name: str, subject: str = "", body: str = "") -> dict:
     now = utc_now()
     with get_conn() as conn:
         row = conn.execute(
@@ -1812,8 +1817,7 @@ def get_contact_stats(user_id: int) -> dict:
             recent[row["day"]] = recent.get(row["day"], 0) + 1
 
     recent_imports = [
-        {"date": day, "count": count}
-        for day, count in sorted(recent.items(), reverse=True)[:14]
+        {"date": day, "count": count} for day, count in sorted(recent.items(), reverse=True)[:14]
     ]
     recent_imports.reverse()
 

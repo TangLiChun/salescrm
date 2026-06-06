@@ -234,7 +234,9 @@ def compress_thread_context_until_current(
     return thread
 
 
-def create_pi_thread(user_id: int, *, title: str = "", history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def create_pi_thread(
+    user_id: int, *, title: str = "", history: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     now = utc_now()
     thread_id = new_thread_id()
     payload = _normalize_history(history or [])

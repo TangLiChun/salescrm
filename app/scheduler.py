@@ -66,7 +66,9 @@ async def run_scheduled_job(job: dict) -> dict:
             user_id=user_id,
         )
         schedule_kwargs = {
-            "interval_minutes": int(job.get("interval_minutes") or job.get("interval_hours", 24) * 60),
+            "interval_minutes": int(
+                job.get("interval_minutes") or job.get("interval_hours", 24) * 60
+            ),
             "run_mode": job.get("run_mode") or "interval",
             "cooldown_minutes": int(job.get("cooldown_minutes") or 15),
         }

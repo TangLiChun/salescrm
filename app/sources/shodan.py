@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
-from arin_lookup import parse_asn
 from app.settings_store import get_setting
+from arin_lookup import parse_asn
 
 SHODAN_API_BASE = "https://api.shodan.io"
 DEFAULT_TIMEOUT = 25.0

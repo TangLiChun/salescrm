@@ -140,10 +140,7 @@ def attach_web_social_urls(
         cand_name = _norm_text(row.get("name"))
         cand_email = str(row.get("email") or "").lower()
         for item in web_results:
-            blob = " ".join(
-                str(item.get(key) or "")
-                for key in ("title", "snippet", "url")
-            )
+            blob = " ".join(str(item.get(key) or "") for key in ("title", "snippet", "url"))
             blob_lower = blob.lower()
             emails_in_blob = {email.lower() for email in email_re.findall(blob)}
             name_hit = cand_name and cand_name in blob_lower

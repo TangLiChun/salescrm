@@ -19,10 +19,8 @@ GOOGLE_SNIPPET_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 GOOGLE_HREF_RE = re.compile(r'href="(/url\?[^"]+|https?://[^"]+)"', re.IGNORECASE)
-MARKDOWN_LINK_RE = re.compile(r'\[([^\]]+)\]\((https?://[^)]+)\)')
-BRIGHTDATA_DATA_FORMATS = frozenset(
-    {"auto", "raw", "parsed_light", "parsed", "json", "markdown"}
-)
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+BRIGHTDATA_DATA_FORMATS = frozenset({"auto", "raw", "parsed_light", "parsed", "json", "markdown"})
 
 from app.settings_store import get_setting
 
@@ -129,7 +127,9 @@ def get_search_config() -> dict[str, Any]:
     }
 
 
-def _normalize_result(title: str, url: str, snippet: str, *, backend: str, query: str) -> dict[str, str]:
+def _normalize_result(
+    title: str, url: str, snippet: str, *, backend: str, query: str
+) -> dict[str, str]:
     return {
         "title": title.strip(),
         "url": url.strip(),
@@ -256,7 +256,9 @@ def _is_junk_google_url(url: str) -> bool:
     return any(part in lowered for part in GOOGLE_JUNK_URL_PARTS)
 
 
-def _parse_brightdata_json(data: dict[str, Any], *, query: str, max_results: int) -> list[dict[str, str]]:
+def _parse_brightdata_json(
+    data: dict[str, Any], *, query: str, max_results: int
+) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for item in data.get("organic") or []:
         if not isinstance(item, dict):
@@ -275,7 +277,9 @@ def _parse_brightdata_json(data: dict[str, Any], *, query: str, max_results: int
     return rows
 
 
-def _parse_brightdata_json_payload(data: Any, *, query: str, max_results: int) -> list[dict[str, str]]:
+def _parse_brightdata_json_payload(
+    data: Any, *, query: str, max_results: int
+) -> list[dict[str, str]]:
     if isinstance(data, dict):
         rows = _parse_brightdata_json(data, query=query, max_results=max_results)
         if rows:
@@ -296,9 +300,7 @@ def _parse_brightdata_json_payload(data: Any, *, query: str, max_results: int) -
             snippet = str(item.get("description") or item.get("snippet") or "")
             if not link.startswith("http") or _is_junk_google_url(link):
                 continue
-            rows.append(
-                _normalize_result(title, link, snippet, backend="brightdata", query=query)
-            )
+            rows.append(_normalize_result(title, link, snippet, backend="brightdata", query=query))
             if len(rows) >= max_results:
                 break
         return rows
@@ -334,9 +336,7 @@ def _parse_brightdata_markdown(text: str, *, query: str, max_results: int) -> li
                 if snippet:
                     break
             seen_urls.add(url)
-            rows.append(
-                _normalize_result(title, url, snippet, backend="brightdata", query=query)
-            )
+            rows.append(_normalize_result(title, url, snippet, backend="brightdata", query=query))
             if len(rows) >= max_results:
                 return rows
     return rows
@@ -357,9 +357,7 @@ def _parse_google_serp_html(html: str, *, query: str, max_results: int) -> list[
         if snippet_match:
             snippet = _strip_html(snippet_match.group(1))
         seen_urls.add(url)
-        rows.append(
-            _normalize_result(title, url, snippet, backend="brightdata", query=query)
-        )
+        rows.append(_normalize_result(title, url, snippet, backend="brightdata", query=query))
         if len(rows) >= max_results:
             return rows
 
@@ -495,7 +493,9 @@ def _search_brightdata_serp(query: str, *, max_results: int) -> list[dict[str, s
         return []
 
     if not rows:
-        raise RuntimeError("Bright Data SERP 响应未能解析为搜索结果（已尝试 JSON/parsed_light/Markdown/HTML）")
+        raise RuntimeError(
+            "Bright Data SERP 响应未能解析为搜索结果（已尝试 JSON/parsed_light/Markdown/HTML）"
+        )
     return rows
 
 

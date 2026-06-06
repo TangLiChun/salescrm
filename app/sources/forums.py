@@ -9,9 +9,13 @@ import urllib.request
 from html import unescape
 from typing import Any
 
-from app.sources import web_search
-from app.sources import web_unlocker
-from app.sources.forum_registry import FORUM_CHANNELS, ForumSpec, configured_channels, get_all_configs, is_channel_enabled
+from app.sources import web_search, web_unlocker
+from app.sources.forum_registry import (
+    ForumSpec,
+    configured_channels,
+    get_all_configs,
+    is_channel_enabled,
+)
 
 USER_AGENT = "SalesCRM/1.0 (+forum-lead-discovery)"
 DEFAULT_TIMEOUT = 25.0

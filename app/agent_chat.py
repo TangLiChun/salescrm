@@ -8,14 +8,13 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from arin_lookup import lookup_asn, parse_asns_from_text
 from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     bulk_delete_contacts,
     count_contacts,
     create_contact_note,
-    dedupe_contacts,
     create_scheduled_job,
+    dedupe_contacts,
     delete_contact,
     get_contact,
     get_contact_stats,
@@ -29,9 +28,9 @@ from app.database import (
     update_contact_follow_up_status,
     update_scheduled_job,
 )
-from app.lead_preferences import get_prefs, preference_hints_for_llm, reset_prefs
 from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
+from app.lead_preferences import get_prefs, preference_hints_for_llm, reset_prefs
 from app.llm import (
     LLMError,
     chat_completion_with_tools_stream,
@@ -48,10 +47,11 @@ from app.settings_store import get_setting, update_settings
 from app.sources import brightdata_social as bs
 from app.sources import forums as forums_source
 from app.sources import shodan as shodan_source
-from app.sources import web_unlocker as web_unlocker_source
 from app.sources import web_search
+from app.sources import web_unlocker as web_unlocker_source
 from app.sources.channel_registry import get_channel_config
-from app.sources.social_registry import FACEBOOK, LINKEDIN, SOCIAL_CHANNELS, X
+from app.sources.social_registry import FACEBOOK, LINKEDIN, X
+from arin_lookup import lookup_asn, parse_asns_from_text
 
 SOCIAL_PROFILE_TOOLS: dict[str, bs.SocialChannelSpec] = {
     "collect_linkedin_profiles": LINKEDIN,
@@ -92,6 +92,7 @@ KNOWN_TOOL_NAMES = {
     "collect_x_profiles",
     "collect_facebook_profiles",
 }
+
 
 def _social_profile_tool(
     tool_name: str,
@@ -183,7 +184,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "contact_id": {"type": "integer", "description": "CRM 联系人 ID"},
                     "min_score": {"type": "integer", "description": "最低相关度，默认 60"},
-                    "auto_import": {"type": "boolean", "description": "≥60 分线索自动导入，默认 true"},
+                    "auto_import": {
+                        "type": "boolean",
+                        "description": "≥60 分线索自动导入，默认 true",
+                    },
                 },
                 "required": ["contact_id"],
             },
@@ -199,7 +203,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "query": {"type": "string"},
                     "min_score": {"type": "integer", "description": "最低相关度，默认 60"},
-                    "auto_import": {"type": "boolean", "description": "≥60 分线索自动导入，默认 true"},
+                    "auto_import": {
+                        "type": "boolean",
+                        "description": "≥60 分线索自动导入，默认 true",
+                    },
                 },
                 "required": ["query"],
             },
@@ -424,7 +431,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "keyword": {"type": "string", "description": "搜索关键词，如公司名、ASN、VPS provider"},
+                    "keyword": {
+                        "type": "string",
+                        "description": "搜索关键词，如公司名、ASN、VPS provider",
+                    },
                     "forums": {
                         "type": "array",
                         "items": {"type": "string", "enum": ["lowendtalk", "webhostingtalk"]},
@@ -501,7 +511,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "任务名称"},
-                    "query": {"type": "string", "description": "与 discover_leads 相同的自然语言搜索描述"},
+                    "query": {
+                        "type": "string",
+                        "description": "与 discover_leads 相同的自然语言搜索描述",
+                    },
                     "run_mode": {
                         "type": "string",
                         "enum": ["continuous", "interval"],
@@ -644,9 +657,7 @@ async def _stream_lead_events(
                     "candidate_count": event.get("candidate_count", 0),
                 }
             )
-            emit.progress(
-                f"AS{event.get('asn')} · {event.get('candidate_count', 0)} 个邮箱候选"
-            )
+            emit.progress(f"AS{event.get('asn')} · {event.get('candidate_count', 0)} 个邮箱候选")
         elif event_type == "lead":
             leads.append(event["lead"])
             emit.event({"kind": "lead", "lead": event["lead"]})
@@ -775,7 +786,7 @@ def _content_looks_like_tool_call(content: str) -> bool:
     lower = (content or "").lower()
     if any(marker in lower for marker in _TOOL_CONTENT_MARKERS):
         return True
-    return bool(re.search(r'^\s*[\[{]', content or ""))
+    return bool(re.search(r"^\s*[\[{]", content or ""))
 
 
 def _content_is_tool_json_fragment(content: str) -> bool:
@@ -841,7 +852,9 @@ def _assistant_promises_tool_use(content: str) -> bool:
     if len(text) <= 120 and any(
         verb in text for verb in ("搜索", "查找", "查询", "筛选", "挖掘", "扩展")
     ):
-        if any(prefix in text for prefix in ("好的", "行", "嗯", "OK", "ok", "继续", "马上", "正在")):
+        if any(
+            prefix in text for prefix in ("好的", "行", "嗯", "OK", "ok", "继续", "马上", "正在")
+        ):
             return True
     return False
 
@@ -1120,9 +1133,9 @@ def _fallback_prepared_calls(
         return _prepare_tool_calls(raw_calls)
 
     queries: list[str] = []
-    if any(token in text for token in ("运营商", "operator", " isp", "isp ", "电信", "联通", "移动")) or (
-        "还有" in text and "其他" in text
-    ):
+    if any(
+        token in text for token in ("运营商", "operator", " isp", "isp ", "电信", "联通", "移动")
+    ) or ("还有" in text and "其他" in text):
         queries = [
             "运营商",
             "ISP",
@@ -1540,7 +1553,11 @@ async def _run_tool(
     if name == "import_leads":
         rows = args.get("rows") or []
         source = str(args.get("source") or "pi-agent")
-        payload = [normalize_import_row({**row, "source": row.get("source") or source}) for row in rows if isinstance(row, dict)]
+        payload = [
+            normalize_import_row({**row, "source": row.get("source") or source})
+            for row in rows
+            if isinstance(row, dict)
+        ]
         result = import_contacts(user_id, payload)
         result["total_contacts"] = count_contacts(user_id)
         return result
@@ -1573,7 +1590,9 @@ async def _run_tool(
             return {"error": "联系人不存在"}
         status = args.get("follow_up_status")
         if status:
-            if not update_contact_follow_up_status(user_id, contact_id, str(status).strip().lower()):
+            if not update_contact_follow_up_status(
+                user_id, contact_id, str(status).strip().lower()
+            ):
                 return {"error": "跟进状态更新失败", "contact": contact}
             contact["follow_up_status"] = str(status).strip().lower()
         return {"ok": True, "contact": contact}
@@ -1757,7 +1776,9 @@ async def _run_tool(
     if name in SOCIAL_PROFILE_TOOLS:
         spec = SOCIAL_PROFILE_TOOLS[name]
         urls = [str(item).strip() for item in (args.get("urls") or []) if str(item).strip()]
-        max_urls = max(1, min(int(args.get("max_urls") or bs.DEFAULT_MAX_URLS), bs.DEFAULT_MAX_URLS))
+        max_urls = max(
+            1, min(int(args.get("max_urls") or bs.DEFAULT_MAX_URLS), bs.DEFAULT_MAX_URLS)
+        )
         if not urls:
             return {"error": f"请提供 urls（{spec.label} profile URL 列表）"}
         if not bs.is_channel_configured(spec):
@@ -1858,7 +1879,9 @@ async def _run_tool(
             truncated = len(queries) - MAX_WEB_SEARCH_QUERIES
             queries = queries[:MAX_WEB_SEARCH_QUERIES]
         max_results = max(1, min(int(args.get("max_results") or 8), 20))
-        progress = f"联网搜索 {len(queries)} 条：{', '.join(queries[:2])}{'…' if len(queries) > 2 else ''}"
+        progress = (
+            f"联网搜索 {len(queries)} 条：{', '.join(queries[:2])}{'…' if len(queries) > 2 else ''}"
+        )
         if truncated:
             progress += f"（已截断 {truncated} 条，请分批搜索）"
         emit.progress(progress)
@@ -1870,7 +1893,11 @@ async def _run_tool(
             )
         except Exception as exc:  # noqa: BLE001 — return tool error to LLM
             return {"error": str(exc), "query_count": len(queries)}
-        backend = results[0].get("backend") if results else web_search.get_search_config()["active_web_backend"]
+        backend = (
+            results[0].get("backend")
+            if results
+            else web_search.get_search_config()["active_web_backend"]
+        )
         signals = web_search.extract_signals_from_results(results)
         preview = [
             {
@@ -2075,7 +2102,11 @@ async def agent_chat_stream(
                 if inline_calls:
                     tool_calls = inline_calls
                     content = _meaningful_assistant_content(intro)
-                    assistant = {**(assistant or {}), "tool_calls": tool_calls, "content": intro or None}
+                    assistant = {
+                        **(assistant or {}),
+                        "tool_calls": tool_calls,
+                        "content": intro or None,
+                    }
 
             if content and not tool_calls:
                 continue_request = _user_requests_continuation(message)
@@ -2091,7 +2122,11 @@ async def agent_chat_stream(
                 fallback_calls = _fallback_prepared_calls(message, history or [])
                 if fallback_calls and should_act:
                     prepared_calls = fallback_calls
-                    assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
+                    assistant = {
+                        **(assistant or {}),
+                        "role": "assistant",
+                        "content": content or None,
+                    }
                     status_msg = (
                         "正在直接继续上一任务…"
                         if continue_request
@@ -2161,7 +2196,9 @@ async def agent_chat_stream(
                     messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
                     yield {
                         "type": "status",
-                        "message": "工具调用无效，正在重试…" if attempted_tools else "模型未调用工具，正在重试…",
+                        "message": "工具调用无效，正在重试…"
+                        if attempted_tools
+                        else "模型未调用工具，正在重试…",
                     }
                     continue
                 fallback_calls = _fallback_prepared_calls(message, history or [])
@@ -2171,7 +2208,11 @@ async def agent_chat_stream(
                     or _user_requests_continuation(message)
                 ):
                     prepared_calls = fallback_calls
-                    assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
+                    assistant = {
+                        **(assistant or {}),
+                        "role": "assistant",
+                        "content": content or None,
+                    }
                     yield {"type": "status", "message": "工具调用无效，正在直接搜索 CRM…"}
                     break
                 yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
@@ -2184,7 +2225,9 @@ async def agent_chat_stream(
             yield {"type": "done"}
             return
 
-        intro = _meaningful_assistant_content(content or _assistant_intro_before_tools(content_buffer))
+        intro = _meaningful_assistant_content(
+            content or _assistant_intro_before_tools(content_buffer)
+        )
         if intro:
             if not streamed_reply:
                 yield {"type": "assistant_start"}
@@ -2222,7 +2265,7 @@ async def agent_chat_stream(
             while True:
                 try:
                     item = await asyncio.wait_for(event_queue.get(), timeout=TOOL_HEARTBEAT_SECONDS)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield {"type": "status", "message": f"仍在执行 {name}…"}
                     continue
                 if item is None:

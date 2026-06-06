@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.sources import forum_registry
-from app.sources import peeringdb, shodan, web_search, web_unlocker
-from app.sources.social_registry import SOCIAL_CHANNELS, configured_channels, get_all_configs
 from app.sources import brightdata_social as bs
+from app.sources import forum_registry, shodan, web_search, web_unlocker
+from app.sources.social_registry import SOCIAL_CHANNELS, configured_channels, get_all_configs
 
 
 def list_channels() -> dict[str, Any]:

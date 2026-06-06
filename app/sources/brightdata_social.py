@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from app.settings_store import get_setting
 from app.sources.brightdata_scraper import scrape_dataset
@@ -89,7 +90,9 @@ def extract_urls(spec: SocialChannelSpec, *blobs: str) -> list[str]:
     return ordered
 
 
-def extract_urls_from_web_results(spec: SocialChannelSpec, results: list[dict[str, Any]]) -> list[str]:
+def extract_urls_from_web_results(
+    spec: SocialChannelSpec, results: list[dict[str, Any]]
+) -> list[str]:
     blobs: list[str] = []
     for item in results:
         blobs.append(str(item.get("title") or ""))
@@ -127,9 +130,13 @@ def collect_profiles_by_url(
     return [spec.normalize(row) for row in rows if isinstance(row, dict)]
 
 
-def profiles_to_web_results(spec: SocialChannelSpec, profiles: list[dict[str, Any]]) -> list[dict[str, str]]:
+def profiles_to_web_results(
+    spec: SocialChannelSpec, profiles: list[dict[str, Any]]
+) -> list[dict[str, str]]:
     return [spec.to_web_result(profile) for profile in profiles]
 
 
-def profiles_to_lead_previews(spec: SocialChannelSpec, profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def profiles_to_lead_previews(
+    spec: SocialChannelSpec, profiles: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     return [spec.to_lead_preview(profile) for profile in profiles]

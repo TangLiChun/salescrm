@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
-import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -28,7 +28,18 @@ from app.auth import (
     authenticate_user,
     session_secret,
 )
+from app.background_jobs import (
+    PiAgentThreadBusyError,
+    get_job_for_user,
+    iter_job_events,
+    list_jobs_for_user,
+    recover_background_jobs_on_startup,
+    request_cancel_background_job,
+    spawn_background_job,
+)
 from app.database import (
+    FOLLOW_UP_STATUSES,
+    LEAD_REVIEW_STATUSES,
     bulk_delete_contacts,
     bulk_update_contacts,
     check_db,
@@ -36,23 +47,21 @@ from app.database import (
     contacts_to_csv,
     count_contacts,
     create_contact_note,
-    create_scheduled_job,
     create_email_template,
+    create_scheduled_job,
     dedupe_contacts,
     delete_contact,
     delete_contact_note,
     delete_email_template,
     delete_scheduled_job,
-    FOLLOW_UP_STATUSES,
-    LEAD_REVIEW_STATUSES,
     get_contact,
     get_contact_stats,
     get_scheduled_job,
     get_user_auth_by_id,
     get_workbench_summary,
+    has_active_pi_agent_job,
     import_contacts,
     import_lead_reviews,
-    has_active_pi_agent_job,
     init_db,
     list_contact_notes,
     list_contact_organizations,
@@ -69,19 +78,8 @@ from app.database import (
     update_scheduled_job,
     update_user_password,
 )
-from app.background_jobs import (
-    PiAgentThreadBusyError,
-    get_job_for_user,
-    iter_job_events,
-    list_jobs_for_user,
-    recover_background_jobs_on_startup,
-    request_cancel_background_job,
-    spawn_background_job,
-)
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
-from app.scheduler import get_scheduler_status, restart_scheduler, run_scheduled_job, start_scheduler, stop_scheduler
-from app.security import verify_password
 from app.pi_chat_store import (
     append_pi_thread_history_entries,
     compress_thread_context_until_current,
@@ -92,10 +90,18 @@ from app.pi_chat_store import (
     sync_pi_threads_from_client,
     upsert_pi_thread,
 )
+from app.scheduler import (
+    get_scheduler_status,
+    restart_scheduler,
+    run_scheduled_job,
+    start_scheduler,
+    stop_scheduler,
+)
+from app.security import verify_password
 from app.settings_store import (
     get_public_settings,
-    get_settings_for_edit,
     get_setting,
+    get_settings_for_edit,
     regenerate_agent_api_token,
     update_settings,
 )
@@ -509,7 +515,9 @@ def change_password(body: ChangePasswordRequest, user: CurrentUser) -> dict:
     if not auth or not verify_password(body.current_password, auth["password_hash"]):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确")
     if body.current_password == body.new_password:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同"
+        )
     if not update_user_password(user["id"], body.new_password):
         raise HTTPException(status_code=404, detail="用户不存在")
     return {"ok": True}
@@ -614,9 +622,7 @@ def remove_contact(contact_id: int, user: CurrentUser) -> dict:
 
 
 @app.patch("/api/contacts/{contact_id}")
-def patch_contact(
-    contact_id: int, body: ContactUpdateRequest, user: CurrentUser
-) -> dict:
+def patch_contact(contact_id: int, body: ContactUpdateRequest, user: CurrentUser) -> dict:
     contact = update_contact(
         user["id"],
         contact_id,
@@ -639,9 +645,7 @@ def bulk_contacts(body: ContactBulkRequest, user: CurrentUser) -> dict:
     if action == "status":
         if not body.follow_up_status or body.follow_up_status not in FOLLOW_UP_STATUSES:
             raise HTTPException(status_code=400, detail="无效的 follow_up_status")
-        return bulk_update_contacts(
-            user["id"], body.ids, follow_up_status=body.follow_up_status
-        )
+        return bulk_update_contacts(user["id"], body.ids, follow_up_status=body.follow_up_status)
     if action == "mark_sent":
         return bulk_update_contacts(user["id"], body.ids, email_sent=True)
     if action == "unmark_sent":
@@ -667,9 +671,7 @@ def get_contact_notes(contact_id: int, user: CurrentUser) -> dict:
 
 
 @app.post("/api/contacts/{contact_id}/notes")
-def add_contact_note(
-    contact_id: int, body: ContactNoteRequest, user: CurrentUser
-) -> dict:
+def add_contact_note(contact_id: int, body: ContactNoteRequest, user: CurrentUser) -> dict:
     note = create_contact_note(user["id"], contact_id, body.body)
     if note is None:
         raise HTTPException(status_code=404, detail="联系人不存在或备注为空")
@@ -713,9 +715,7 @@ def get_email_templates(user: CurrentUser) -> dict:
 
 @app.post("/api/email-templates")
 def add_email_template(body: EmailTemplateRequest, user: CurrentUser) -> dict:
-    return create_email_template(
-        user["id"], name=body.name, subject=body.subject, body=body.body
-    )
+    return create_email_template(user["id"], name=body.name, subject=body.subject, body=body.body)
 
 
 @app.put("/api/email-templates/{template_id}")
@@ -936,9 +936,7 @@ def create_pi_thread_route(body: PiThreadCreateRequest, user: CurrentUser) -> di
 
 
 @app.put("/api/pi/threads/{thread_id}")
-def update_pi_thread_route(
-    thread_id: str, body: PiThreadUpdateRequest, user: CurrentUser
-) -> dict:
+def update_pi_thread_route(thread_id: str, body: PiThreadUpdateRequest, user: CurrentUser) -> dict:
     thread = upsert_pi_thread(
         user["id"],
         thread_id,

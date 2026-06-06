@@ -4,7 +4,14 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent_auth import AgentUser
-from app.database import check_db, check_schema, count_contacts, import_contacts, list_contacts, normalize_import_row
+from app.database import (
+    check_db,
+    check_schema,
+    count_contacts,
+    import_contacts,
+    list_contacts,
+    normalize_import_row,
+)
 from app.lead_discovery import run_lead_discovery_batch
 from app.llm import llm_configured
 

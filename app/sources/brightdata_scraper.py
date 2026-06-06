@@ -76,9 +76,7 @@ def parse_scrape_response(body: str) -> list[dict[str, Any]]:
         data = json.loads(text)
         if isinstance(data, dict):
             if data.get("snapshot_id"):
-                raise RuntimeError(
-                    "Bright Data 返回异步 snapshot，请减少批量 URL 或稍后重试"
-                )
+                raise RuntimeError("Bright Data 返回异步 snapshot，请减少批量 URL 或稍后重试")
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
             return [data]
