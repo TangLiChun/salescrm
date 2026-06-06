@@ -120,8 +120,10 @@ def test_empty_response_with_reasoning_is_not_empty():
         nudge_count=0,
         max_nudges=2,
     )
-    # Should not be Retry for empty response; falls through to no-tool-calls path
-    assert not isinstance(d, Fail)
+    # Not treated as an empty response (reasoning present); falls through to the
+    # no-visible-content path, which Retries (not Fail) while nudges remain.
+    assert isinstance(d, Retry)
+    assert d.reason == "no_visible_content"
 
 
 def test_invalid_tool_calls_retries_then_falls_back():

@@ -139,3 +139,75 @@ async def test_stream_chat_retries_on_503_then_succeeds(monkeypatch):
     events = [e async for e in stream_chat([{"role": "user", "content": "hi"}], None)]
     assert attempts["n"] == 2  # retried once
     assert any(e["type"] == "content_delta" and e["text"] == "ok" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_is_capped(monkeypatch):
+    """A hostile Retry-After must never make the client sleep past the backoff cap."""
+    from app import pi_llm_client as mod
+
+    monkeypatch.setattr(
+        mod, "_settings", lambda: ("key", "https://api.deepseek.com", "deepseek-chat")
+    )
+    monkeypatch.setattr(mod, "resolve_deepseek_thinking", lambda **_kw: None)
+
+    slept: list[float] = []
+
+    async def _record_sleep(delay, *_a, **_k):
+        slept.append(delay)
+
+    monkeypatch.setattr(mod.asyncio, "sleep", _record_sleep)
+
+    attempts = {"n": 0}
+
+    class Resp503:
+        status_code = 503
+        headers = {"Retry-After": "3600"}
+
+        async def aiter_lines(self):
+            if False:
+                yield ""
+
+        async def aread(self):
+            return b"slow down"
+
+    class Resp200:
+        status_code = 200
+        headers: dict = {}
+
+        async def aiter_lines(self):
+            yield 'data: {"choices": [{"delta": {"content": "ok"}}]}'
+            yield "data: [DONE]"
+
+        async def aread(self):
+            return b""
+
+    class Ctx:
+        def __init__(self, resp):
+            self._resp = resp
+
+        async def __aenter__(self):
+            return self._resp
+
+        async def __aexit__(self, *a):
+            return False
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, *a, **k):
+            attempts["n"] += 1
+            return Ctx(Resp503() if attempts["n"] == 1 else Resp200())
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", FakeClient)
+
+    events = [e async for e in stream_chat([{"role": "user", "content": "hi"}], None)]
+    assert slept and all(d <= mod._BACKOFF_CAP for d in slept)  # 3600 capped to <= 20
+    assert any(e["type"] == "content_delta" and e["text"] == "ok" for e in events)

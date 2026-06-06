@@ -106,7 +106,10 @@ async def stream_chat(
                         body = (await resp.aread()).decode("utf-8", "replace")
                         last_error = f"LLM 请求失败 ({resp.status_code}): {body[:200]}"
                         if attempt < MAX_RETRIES:
-                            await asyncio.sleep(_retry_after(resp) or _next_backoff(attempt))
+                            # Cap Retry-After so a hostile/misconfigured header
+                            # (e.g. "Retry-After: 3600") cannot hang the turn.
+                            delay = _retry_after(resp) or _next_backoff(attempt)
+                            await asyncio.sleep(min(delay, _BACKOFF_CAP))
                             continue
                         yield {"type": "error", "message": last_error}
                         return
