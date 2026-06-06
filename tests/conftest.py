@@ -5,6 +5,24 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def stub_agent_settings(monkeypatch):
+    """Stop agent_chat_stream from reading settings out of Postgres in tests.
+
+    agent_chat_stream calls get_setting("llm_model", "") for its context-usage
+    meter even when thread_id is None, which would hit the DB. Integration tests
+    inject FakeLLM/fake tool_runner and must stay DB-free, so we return defaults.
+    Harmless for unit tests that never call it.
+    """
+    try:
+        import app.agent_chat  # noqa: F401
+    except Exception:
+        return
+    monkeypatch.setattr("app.agent_chat.get_setting", lambda key, default="": default)
+
 
 async def collect_events(stream: AsyncIterator[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drain an agent event stream into a list for assertions."""
