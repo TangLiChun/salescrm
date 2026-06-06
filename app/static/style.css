@@ -2603,6 +2603,11 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
+.pi-thread-btn.running .pi-thread-meta {
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
 .pi-thread-title {
   display: block;
   overflow: hidden;

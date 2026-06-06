@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.agent_chat import agent_chat_stream
+from app.agent_chat import (
+    agent_chat_stream,
+    history_entry_from_agent_event,
+    release_pi_thread,
+    try_acquire_pi_thread,
+)
 from app.agent_routes import router as agent_router
 from app.auth import (
     SESSION_USER_KEY,
@@ -46,6 +52,7 @@ from app.database import (
     get_workbench_summary,
     import_contacts,
     import_lead_reviews,
+    has_active_pi_agent_job,
     init_db,
     list_contact_notes,
     list_contact_organizations,
@@ -76,6 +83,8 @@ from app.llm import llm_configured
 from app.scheduler import get_scheduler_status, restart_scheduler, run_scheduled_job, start_scheduler, stop_scheduler
 from app.security import verify_password
 from app.pi_chat_store import (
+    append_pi_thread_history_entries,
+    compress_thread_context_until_current,
     create_pi_thread,
     delete_pi_thread,
     get_pi_thread,
@@ -808,21 +817,98 @@ async def run_schedule_now(job_id: int, user: CurrentUser) -> dict:
 
 
 @app.post("/api/agent/chat/stream")
-async def agent_chat_stream_route(body: AgentChatRequest, user: CurrentUser) -> StreamingResponse:
+async def agent_chat_stream_route(
+    body: AgentChatRequest,
+    user: CurrentUser,
+    request: Request,
+) -> StreamingResponse:
     if not llm_configured():
         raise HTTPException(
             status_code=503,
             detail="未配置 LLM API Key，请在系统设置中填写",
         )
 
+    user_id = user["id"]
+    thread_id = body.thread_id
+    if thread_id:
+        if has_active_pi_agent_job(user_id, thread_id):
+            raise HTTPException(
+                status_code=409,
+                detail="该对话已有后台 Pi 任务运行中，请等待完成后再发送",
+            )
+        if not try_acquire_pi_thread(user_id, thread_id):
+            raise HTTPException(
+                status_code=409,
+                detail="该对话已有 Pi 任务运行中，请等待完成后再发送",
+            )
+
+    async def persist_stream_entries(
+        entries: list[dict[str, Any]],
+        *,
+        compress: bool,
+    ) -> None:
+        if not thread_id or not entries:
+            return
+        await asyncio.to_thread(
+            append_pi_thread_history_entries,
+            user_id,
+            thread_id,
+            entries,
+        )
+        if compress:
+            await asyncio.to_thread(
+                compress_thread_context_until_current,
+                user_id,
+                thread_id,
+            )
+
     async def event_generator():
-        async for event in agent_chat_stream(
-            user["id"],
-            body.message,
-            _sanitize_agent_history(body.history),
-            thread_id=body.thread_id,
-        ):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        disconnected = {"value": False}
+
+        async def watch_disconnect() -> None:
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        disconnected["value"] = True
+                        return
+                    await asyncio.sleep(0.3)
+            except asyncio.CancelledError:
+                return
+
+        watch_task = asyncio.create_task(watch_disconnect())
+        new_entries: list[dict[str, Any]] = []
+        cancelled = False
+        errored = False
+
+        try:
+            async for event in agent_chat_stream(
+                user_id,
+                body.message,
+                _sanitize_agent_history(body.history),
+                thread_id=thread_id,
+                cancel_check=lambda: disconnected["value"],
+            ):
+                entry = history_entry_from_agent_event(event)
+                if entry:
+                    new_entries.append(entry)
+                event_type = event.get("type")
+                if event_type == "error":
+                    if event.get("message") == "任务已停止":
+                        cancelled = True
+                    else:
+                        errored = True
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event_type in ("done", "error"):
+                    break
+        finally:
+            watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch_task
+            await persist_stream_entries(
+                new_entries,
+                compress=bool(new_entries) and not cancelled and not errored,
+            )
+            release_pi_thread(user_id, thread_id)
 
     return StreamingResponse(
         event_generator(),
@@ -1023,7 +1109,7 @@ async def create_pi_agent_job(body: PiAgentJobRequest, user: CurrentUser) -> dic
             },
         )
     except PiAgentThreadBusyError:
-        raise HTTPException(status_code=409, detail="该对话已有后台 Pi 任务运行中，请等待完成后再发送")
+        raise HTTPException(status_code=409, detail="该对话已有 Pi 任务运行中，请等待完成后再发送")
     return {"job": job}
 
 

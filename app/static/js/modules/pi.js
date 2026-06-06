@@ -239,9 +239,9 @@ export function renderPiThreadList() {
     li.className = "pi-thread-item";
     const count = Array.isArray(thread.history) ? thread.history.length : 0;
     li.innerHTML = `
-      <button type="button" class="pi-thread-btn ${thread.id === state.activePiThreadId ? "active" : ""}" data-thread-id="${thread.id}">
+      <button type="button" class="pi-thread-btn ${thread.id === state.activePiThreadId ? "active" : ""} ${state.piChatBusy && thread.id === state.activePiThreadId ? "running" : ""}" data-thread-id="${thread.id}">
         <span class="pi-thread-title">${escapeHtml(thread.title || defaultPiThreadTitle())}</span>
-        <span class="pi-thread-meta">${t("pi.threadMeta", { count })}</span>
+        <span class="pi-thread-meta">${state.piChatBusy && thread.id === state.activePiThreadId ? escapeHtml(t("pi.threadRunning")) : t("pi.threadMeta", { count })}</span>
       </button>
       <button type="button" class="pi-thread-delete" data-delete-thread="${thread.id}" aria-label="${t("pi.deleteThread")}">×</button>
     `;
@@ -1573,6 +1573,7 @@ export function startPiBackgroundWatch(job) {
   setPiChatBusy(true);
   piChatProgressText.textContent = job.message || t("jobs.piStarting");
   setProgressFill(piChatProgressFill, 12);
+  renderPiThreadList();
 }
 
 export function stopPiBackgroundWatch() {
@@ -1733,6 +1734,7 @@ export async function sendPiChatMessage(message) {
   setPiChatBusy(true);
   setProgressFill(piChatProgressFill, 12);
   piChatProgressText.textContent = t("pi.processingShort");
+  renderPiThreadList();
   state.piChatController = new AbortController();
 
   let activeToolEl = null;
@@ -1764,6 +1766,7 @@ export async function sendPiChatMessage(message) {
   };
 
   try {
+    await persistActivePiThread();
     const response = await fetch("/api/agent/chat/stream", {
       method: "POST",
       credentials: "same-origin",
@@ -1779,6 +1782,10 @@ export async function sendPiChatMessage(message) {
     if (response.status === 401) {
       window.location.href = "/login";
       return;
+    }
+    if (response.status === 409) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(formatApiDetail(error.detail) || t("pi.threadBusy"));
     }
     if (!response.ok) {
       const error = await response.json();
@@ -2010,9 +2017,18 @@ export async function sendPiChatMessage(message) {
     }
   } finally {
     state.piChatController = null;
+    if (state.activePiThreadId) {
+      try {
+        await fetchActivePiThreadHistory();
+        restorePiChatUi();
+        await refreshActivePiThreadMeta();
+      } catch {
+        // keep local UI if refresh fails
+      }
+    }
     setPiChatBusy(false);
+    renderPiThreadList();
     savePiThreadsStore();
-    refreshActivePiThreadMeta().catch(() => {});
   }
 }
 

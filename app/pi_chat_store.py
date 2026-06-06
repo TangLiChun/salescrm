@@ -167,6 +167,18 @@ def update_thread_context(
         )
 
 
+def append_pi_thread_history_entries(
+    user_id: int,
+    thread_id: str,
+    entries: list[dict[str, Any]],
+) -> None:
+    if not thread_id or not entries:
+        return
+    thread = get_pi_thread(user_id, thread_id)
+    base_history = list((thread or {}).get("history") or [])
+    upsert_pi_thread(user_id, thread_id, history=base_history + entries)
+
+
 def maybe_compress_thread_context(user_id: int, thread_id: str) -> dict[str, Any] | None:
     thread = get_pi_thread(user_id, thread_id)
     if not thread:

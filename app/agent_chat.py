@@ -43,7 +43,7 @@ from app.pi_chat_store import (
     get_pi_thread,
     history_for_llm,
 )
-from app.pi_context import compress_tool_result_for_llm, context_stats
+from app.pi_context import compress_tool_result_for_llm, context_stats, needs_summary_update
 from app.settings_store import get_setting, update_settings
 from app.sources import brightdata_social as bs
 from app.sources import forums as forums_source
@@ -912,6 +912,73 @@ def tool_result_summary(name: str, result: Any) -> str:
         return json.dumps(result, ensure_ascii=False)[:8000]
     except (TypeError, ValueError):
         return str(result)[:8000]
+
+
+_active_pi_streams: set[tuple[int, str]] = set()
+
+
+def try_acquire_pi_thread(user_id: int, thread_id: str | None) -> bool:
+    if not thread_id:
+        return True
+    key = (user_id, thread_id)
+    if key in _active_pi_streams:
+        return False
+    _active_pi_streams.add(key)
+    return True
+
+
+def release_pi_thread(user_id: int, thread_id: str | None) -> None:
+    if thread_id:
+        _active_pi_streams.discard((user_id, thread_id))
+
+
+def is_pi_thread_streaming(user_id: int, thread_id: str) -> bool:
+    return (user_id, thread_id) in _active_pi_streams
+
+
+def history_entry_from_agent_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    event_type = event.get("type")
+    if event_type == "tool_result":
+        name = str(event.get("name") or "tool")
+        result = event.get("result") or {}
+        summary = tool_result_summary(name, result)
+        entry: dict[str, Any] = {
+            "role": "tool",
+            "name": name,
+            "summary": summary[:8000],
+        }
+        if name == "lookup_asns":
+            rows = result.get("rows") or result.get("preview") or []
+            if isinstance(rows, list):
+                entry["preview"] = rows[:25]
+        if not entry["summary"] and isinstance(result, dict):
+            try:
+                entry["summary"] = json.dumps(result, ensure_ascii=False)[:8000]
+            except (TypeError, ValueError):
+                entry["summary"] = summary
+        return entry
+    if event_type == "assistant_done":
+        text = str(event.get("text") or "").strip()
+        if text:
+            return {"role": "assistant", "content": text}
+    return None
+
+
+def append_user_turn_to_messages(
+    messages: list[dict[str, Any]],
+    history: list[dict[str, Any]],
+    message: str,
+) -> None:
+    user_text = message.strip()
+    if not user_text:
+        return
+    if (
+        history
+        and history[-1].get("role") == "user"
+        and str(history[-1].get("content") or "").strip() == user_text
+    ):
+        return
+    messages.append({"role": "user", "content": user_text})
 
 
 _TOOL_NAME_ALIASES = {
@@ -1791,7 +1858,8 @@ async def agent_chat_stream(
         if loaded:
             history = loaded.get("history") or []
             had_summary = bool((loaded.get("context_summary") or "").strip())
-            if len(history) > 24:
+            summary_through = int(loaded.get("context_summary_through") or 0)
+            if needs_summary_update(len(history), summary_through):
                 yield {"type": "status", "message": "整理对话上下文…"}
             thread = await asyncio.to_thread(
                 compress_thread_context_until_current,
@@ -1822,7 +1890,7 @@ async def agent_chat_stream(
     }
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
-    messages.append({"role": "user", "content": message.strip()})
+    append_user_turn_to_messages(messages, history or [], message)
 
     for round_index in range(MAX_TOOL_ROUNDS):
         if cancel_check and cancel_check():

@@ -6,7 +6,12 @@ import logging
 from collections import defaultdict
 from typing import Any
 
-from app.agent_chat import agent_chat_stream, tool_result_summary
+from app.agent_chat import (
+    agent_chat_stream,
+    history_entry_from_agent_event,
+    is_pi_thread_streaming,
+    tool_result_summary,
+)
 from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     create_background_job,
@@ -20,6 +25,7 @@ from app.database import (
 from app.lead_checkpoint import parse_checkpoint, checkpoint_resume_message, progress_from_checkpoint
 from app.lead_discovery import discover_leads_stream
 from app.pi_chat_store import (
+    append_pi_thread_history_entries,
     compress_thread_context_until_current,
     get_pi_thread,
     upsert_pi_thread,
@@ -518,35 +524,22 @@ async def _run_pi_agent_job(job_id: int) -> None:
                     job_id,
                     {**event, "summary": summary},
                 )
-                entry: dict[str, Any] = {
-                    "role": "tool",
-                    "name": name,
-                    "summary": summary[:8000],
-                }
-                if name == "lookup_asns":
-                    rows = result.get("rows") or result.get("preview") or []
-                    if isinstance(rows, list):
-                        entry["preview"] = rows[:25]
-                if not entry["summary"] and isinstance(result, dict):
-                    try:
-                        entry["summary"] = json.dumps(result, ensure_ascii=False)[:8000]
-                    except (TypeError, ValueError):
-                        entry["summary"] = summary
-                new_entries.append(entry)
+                entry = history_entry_from_agent_event(event)
+                if entry:
+                    new_entries.append(entry)
             elif event_type == "assistant_done":
                 text = str(event.get("text") or "").strip()
                 _update_job_progress(job_id, event)
-                if text:
-                    new_entries.append({"role": "assistant", "content": text})
+                entry = history_entry_from_agent_event(event)
+                if entry:
+                    new_entries.append(entry)
                     last_assistant = text
             elif event_type == "done":
                 break
 
         if _is_cancelled(job_id):
             if thread_id and new_entries:
-                thread = get_pi_thread(user_id, thread_id)
-                base_history = list((thread or {}).get("history") or [])
-                upsert_pi_thread(user_id, thread_id, history=base_history + new_entries)
+                append_pi_thread_history_entries(user_id, thread_id, new_entries)
             _update_job(
                 job_id,
                 status="cancelled",
@@ -563,6 +556,8 @@ async def _run_pi_agent_job(job_id: int) -> None:
             return
 
         if error_msg:
+            if thread_id and new_entries:
+                append_pi_thread_history_entries(user_id, thread_id, new_entries)
             _update_job(
                 job_id,
                 status="error",
@@ -573,9 +568,7 @@ async def _run_pi_agent_job(job_id: int) -> None:
             return
 
         if thread_id and new_entries:
-            thread = get_pi_thread(user_id, thread_id)
-            base_history = list((thread or {}).get("history") or [])
-            upsert_pi_thread(user_id, thread_id, history=base_history + new_entries)
+            append_pi_thread_history_entries(user_id, thread_id, new_entries)
             await asyncio.to_thread(compress_thread_context_until_current, user_id, thread_id)
 
         _update_job(
@@ -638,8 +631,11 @@ async def _execute_job(job_id: int) -> None:
 def spawn_background_job(user_id: int, job_type: str, params: dict[str, Any]) -> dict:
     if job_type == "pi_agent":
         thread_id = str(params.get("thread_id") or "").strip()
-        if thread_id and has_active_pi_agent_job(user_id, thread_id):
-            raise PiAgentThreadBusyError(thread_id)
+        if thread_id:
+            if has_active_pi_agent_job(user_id, thread_id):
+                raise PiAgentThreadBusyError(thread_id)
+            if is_pi_thread_streaming(user_id, thread_id):
+                raise PiAgentThreadBusyError(thread_id)
     job = create_background_job(user_id, job_type, params)
     job_id = int(job["id"])
     task = asyncio.create_task(_execute_job(job_id))
