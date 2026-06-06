@@ -4,7 +4,6 @@ import { state } from "../core/state.js";
 import { deps } from "../core/deps.js";
 import { api, escapeHtml, errorMessage } from "../core/utils.js";
 import { replayAnimation, staggerChildren } from "../core/motion.js";
-import { deps } from "../core/deps.js";
 import {
   notifySuccess,
   notifyError,
