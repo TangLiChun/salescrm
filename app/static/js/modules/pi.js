@@ -22,7 +22,8 @@ import { resetProgressFill, setProgressFill } from "../core/progress.js";
 
 const {
   piChatMessagesEl, piChatForm, piChatInput, piChatSendBtn, piChatStopBtn, piChatClearBtn,
-  piChatHistoryHintEl, piChatBackgroundInput, piThreadListEl, piChatProgressEl, piChatProgressFill,
+  piChatHistoryHintEl, piChatContextMeterEl, piChatContextMeterFillEl, piChatContextMeterLabelEl,
+  piChatBackgroundInput, piThreadListEl, piChatProgressEl, piChatProgressFill,
   piChatProgressText, leadQueryInput, minScoreInput, autoImportInput,
   piChatShellEl, piLlmSetupEl, piGotoLlmSettingsBtn, piInputHintEl,
   piMobileTabChatBtn, piMobileTabThreadsBtn,
@@ -348,7 +349,7 @@ export async function refreshActivePiThreadMeta() {
     if (index >= 0) {
       state.piThreads[index].has_context_summary = Boolean((thread.context_summary || "").trim());
     }
-    updatePiChatHistoryHint();
+    applyPiContextStats(thread.context_stats);
   } catch {
     // ignore metadata refresh failures
   }
@@ -366,9 +367,12 @@ export async function fetchActivePiThreadHistory() {
       state.piThreads[index] = { ...state.piThreads[index], ...mapped };
     }
     state.piChatHistory = mapped.history;
+    applyPiContextStats(thread.context_stats);
   } catch {
     const active = getActivePiThread();
     state.piChatHistory = normalizeHistoryItems(active?.history);
+    state.piContextStats = null;
+    updatePiContextMeter();
   }
 }
 
@@ -634,7 +638,7 @@ export function restorePiChatUi() {
   if (!state.piChatHistory.length) {
     mountPiEmptyState();
     renderPiThreadList();
-    updatePiChatHistoryHint();
+    applyPiContextStats(null);
     settlePiChatAtBottom();
     return;
   }
@@ -650,18 +654,47 @@ export function restorePiChatUi() {
   settlePiChatAtBottom();
 }
 
+export function applyPiContextStats(stats) {
+  state.piContextStats = stats && typeof stats === "object" ? stats : null;
+  updatePiContextMeter();
+  updatePiChatHistoryHint();
+}
+
+export function updatePiContextMeter() {
+  if (!piChatContextMeterEl || !piChatContextMeterFillEl || !piChatContextMeterLabelEl) return;
+  const stats = state.piContextStats;
+  if (!stats || !state.piChatHistory.length) {
+    piChatContextMeterEl.classList.add("hidden");
+    return;
+  }
+  piChatContextMeterEl.classList.remove("hidden");
+  const pct = Math.max(0, Math.min(100, Number(stats.usage_percent) || 0));
+  piChatContextMeterFillEl.style.transform = `scaleX(${pct / 100})`;
+  piChatContextMeterFillEl.classList.toggle("warn", pct >= 75);
+  piChatContextMeterFillEl.classList.toggle("danger", pct >= 90);
+  const tokensK = Math.round((Number(stats.token_estimate) || 0) / 1000);
+  const limitK = Math.round((Number(stats.context_limit) || 0) / 1000);
+  const parts = [t("msg.piContextUsage", { pct, tokens: tokensK, limit: limitK })];
+  if (stats.compressed) parts.push(t("msg.piContextCompressed"));
+  else if (stats.needs_compression) parts.push(t("msg.piContextNeedsCompress"));
+  if (pct >= 75) parts.push(t("msg.piContextHigh"));
+  piChatContextMeterLabelEl.textContent = parts.join(" · ");
+}
+
 export function updatePiChatHistoryHint() {
   if (!piChatHistoryHintEl) return;
   const count = state.piChatHistory.length;
   const threadCount = state.piThreads.length;
   if (!count) {
     piChatHistoryHintEl.textContent = t("msg.piHistoryLocal");
+    piChatHistoryHintEl.classList.add("hidden");
     return;
   }
+  piChatHistoryHintEl.classList.remove("hidden");
   piChatHistoryHintEl.textContent = t("msg.piHistorySavedThreads", { count, threads: threadCount });
-  const active = state.piThreads.find((item) => item.id === state.activePiThreadId);
-  if (active?.has_context_summary) {
-    piChatHistoryHintEl.textContent += ` · ${t("msg.piContextCompressed")}`;
+  const stats = state.piContextStats;
+  if (stats?.llm_message_count) {
+    piChatHistoryHintEl.textContent += ` · LLM ${stats.llm_message_count} 条`;
   }
 }
 
@@ -1404,10 +1437,15 @@ export function sanitizePiAssistantDisplay(text) {
     const idx = lower.indexOf(marker.toLowerCase());
     if (idx >= 0) cutAt = Math.min(cutAt, idx);
   }
+  for (const pattern of ["\n[", "\r[", "\n[{", "\r[{"]) {
+    const idx = raw.indexOf(pattern);
+    if (idx >= 0) cutAt = Math.min(cutAt, idx);
+  }
   if (cutAt === raw.length && raw.trim().startsWith("[")) {
     cutAt = 0;
   }
-  const trimmed = raw.slice(0, cutAt).trim();
+  let trimmed = raw.slice(0, cutAt).trim();
+  if (trimmed.endsWith("[")) trimmed = trimmed.slice(0, -1).trim();
   if (!trimmed || /^[\[{(,]+$/.test(trimmed)) return "";
   if (/^[\[{]/.test(trimmed) && trimmed.length < 24) return "";
   return trimmed;
@@ -1621,7 +1659,9 @@ export async function sendPiChatMessage(message) {
           continue;
         }
 
-        if (payload.type === "status") {
+        if (payload.type === "context") {
+          applyPiContextStats(payload.stats);
+        } else if (payload.type === "status") {
           piChatProgressText.textContent = payload.message || t("msg.piProcessingShort");
           if (payload.message?.includes("正在重试")) {
             if (activeAssistantEl) {

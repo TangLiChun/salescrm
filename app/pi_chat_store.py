@@ -12,9 +12,11 @@ from app.pi_context import (
     MAX_STORED_TOOL_SUMMARY_CHARS,
     SUMMARIZE_BATCH_SIZE,
     build_llm_messages,
+    context_stats,
     needs_summary_update,
     summarize_history_batch,
 )
+from app.settings_store import get_setting
 
 MAX_THREADS_PER_USER = 50
 MAX_LLM_HISTORY_MESSAGES = 160
@@ -74,7 +76,7 @@ def _thread_row_to_dict(row: dict) -> dict[str, Any]:
     through = int(row.get("context_summary_through") or 0)
     if through > len(history):
         through = len(history)
-    return {
+    thread = {
         "id": row["id"],
         "title": row["title"] or "",
         "history": history,
@@ -83,6 +85,13 @@ def _thread_row_to_dict(row: dict) -> dict[str, Any]:
         "created_at": _iso(row["created_at"]),
         "updated_at": _iso(row["updated_at"]),
     }
+    thread["context_stats"] = context_stats(
+        history,
+        context_summary=thread["context_summary"],
+        summary_through=through,
+        model=get_setting("llm_model", ""),
+    )
+    return thread
 
 
 def list_pi_threads(user_id: int) -> list[dict[str, Any]]:

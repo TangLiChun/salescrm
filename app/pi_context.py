@@ -340,22 +340,51 @@ def summarize_history_batch(existing_summary: str, batch: list[dict[str, Any]]) 
     return updated[:SUMMARY_MAX_CHARS]
 
 
+def model_context_limit(model: str) -> int:
+    name = (model or "").strip().lower()
+    if any(token in name for token in ("deepseek", "gpt-4", "gpt-4o", "claude", "glm-4", "qwen", "moonshot")):
+        return 128_000
+    return 64_000
+
+
 def context_stats(
     history: list[dict[str, Any]],
     *,
     context_summary: str = "",
     summary_through: int = 0,
-) -> dict[str, int]:
+    system_chars: int = 0,
+    tools_chars: int = 0,
+    model: str = "",
+) -> dict[str, int | bool]:
     llm_messages = build_llm_messages(
         history,
         context_summary=context_summary,
         summary_through=summary_through,
     )
-    char_estimate = sum(len(m.get("content") or "") for m in llm_messages)
+    message_chars = sum(len(str(m.get("content") or "")) for m in llm_messages)
+    summary = (context_summary or "").strip()
+    compressed = bool(summary) or int(summary_through or 0) > 0
+    middle_count = max(0, len(history) - max(int(summary_through or 0), 0) - MAX_RECENT_FULL_MESSAGES)
+    overhead = max(0, int(system_chars)) + max(0, int(tools_chars))
+    if compressed and not overhead:
+        overhead = 15_000
+    char_estimate = message_chars + overhead
+    token_estimate = max(1, char_estimate // 3)
+    context_limit = model_context_limit(model)
+    usage_percent = min(100, round(token_estimate * 100 / context_limit)) if context_limit else 0
+    compress_threshold = MAX_RECENT_FULL_MESSAGES + SUMMARIZE_TRIGGER_GAP
     return {
         "stored_messages": len(history),
         "llm_message_count": len(llm_messages),
         "char_estimate": char_estimate,
+        "token_estimate": token_estimate,
+        "context_limit": context_limit,
+        "usage_percent": usage_percent,
         "summary_through": max(0, int(summary_through or 0)),
         "recent_full_window": MAX_RECENT_FULL_MESSAGES,
+        "compressed": compressed,
+        "summary_chars": len(summary),
+        "middle_tier_messages": middle_count,
+        "compress_threshold": compress_threshold,
+        "needs_compression": len(history) > compress_threshold,
     }

@@ -39,7 +39,7 @@ from app.pi_chat_store import (
     get_pi_thread,
     history_for_llm,
 )
-from app.pi_context import compress_tool_result_for_llm
+from app.pi_context import compress_tool_result_for_llm, context_stats
 from app.settings_store import get_setting, update_settings
 from app.sources import brightdata_social as bs
 from app.sources import forums as forums_source
@@ -755,9 +755,16 @@ def _assistant_intro_before_tools(content: str) -> str:
         idx = lower.find(marker.lower())
         if idx >= 0:
             cut_at = min(cut_at, idx)
+    for pattern in ("\n[", "\r[", "\n[{", "\r[{"):
+        idx = text.find(pattern)
+        if idx >= 0:
+            cut_at = min(cut_at, idx)
     if cut_at == len(text) and text.startswith("["):
         cut_at = 0
-    return text[:cut_at].strip()
+    result = text[:cut_at].strip()
+    if result.endswith("["):
+        result = result[:-1].rstrip()
+    return result
 
 
 def _content_looks_like_tool_call(content: str) -> bool:
@@ -1786,6 +1793,18 @@ async def agent_chat_stream(
         context_summary=context_summary,
         summary_through=summary_through,
     )
+    stats_history = (thread or {}).get("history") if thread else (history or [])
+    yield {
+        "type": "context",
+        "stats": context_stats(
+            stats_history,
+            context_summary=context_summary,
+            summary_through=summary_through,
+            system_chars=len(SYSTEM_PROMPT),
+            tools_chars=len(json.dumps(AGENT_TOOLS, ensure_ascii=False)),
+            model=get_setting("llm_model", ""),
+        ),
+    }
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": message.strip()})

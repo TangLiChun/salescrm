@@ -27,6 +27,7 @@ export const state = {
   piThreads: [],
   activePiThreadId: null,
   piChatHistory: [],
+  piContextStats: null,
   piChatController: null,
   piChatBusy: false,
   emailTemplates: [],

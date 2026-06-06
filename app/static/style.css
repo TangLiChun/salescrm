@@ -956,6 +956,40 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   transition: transform 0.35s var(--ease);
 }
 
+.pi-chat-context-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 220px;
+  flex: 1;
+}
+
+.pi-chat-context-meter-bar {
+  height: 6px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+
+#pi-chat-context-meter-fill {
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--accent), oklch(0.52 0.09 200));
+  border-radius: var(--r-pill);
+  transition: transform 0.35s var(--ease);
+}
+
+#pi-chat-context-meter-fill.warn {
+  background: linear-gradient(90deg, oklch(0.72 0.14 85), oklch(0.68 0.16 55));
+}
+
+#pi-chat-context-meter-fill.danger {
+  background: linear-gradient(90deg, oklch(0.62 0.18 25), oklch(0.55 0.2 15));
+}
+
 #progress-text,
 #ai-progress-text {
   margin: var(--space-2) 0 0;
