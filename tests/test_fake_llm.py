@@ -16,7 +16,9 @@ async def test_fake_llm_yields_scripted_text():
 
 @pytest.mark.asyncio
 async def test_fake_llm_yields_tool_calls():
-    fake = FakeLLM([content_message("查一下", tool_calls=[tool_call("list_contacts", {"q": "isp"})])])
+    fake = FakeLLM(
+        [content_message("查一下", tool_calls=[tool_call("list_contacts", {"q": "isp"})])]
+    )
     events = await collect_events(fake(messages=[], tools=None))
     msg = [e for e in events if e["type"] == "message"][0]["message"]
     assert msg["tool_calls"][0]["function"]["name"] == "list_contacts"

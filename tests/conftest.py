@@ -1,4 +1,5 @@
 """Shared test fixtures and async helpers."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -19,6 +20,4 @@ def event_types(events: list[dict[str, Any]]) -> list[str]:
 
 def assistant_text(events: list[dict[str, Any]]) -> str:
     """Concatenate all assistant_done texts (final visible reply)."""
-    return "".join(
-        str(e.get("text") or "") for e in events if e.get("type") == "assistant_done"
-    )
+    return "".join(str(e.get("text") or "") for e in events if e.get("type") == "assistant_done")

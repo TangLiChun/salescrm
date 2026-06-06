@@ -4,6 +4,7 @@ Each element passed to FakeLLM is one *response* (a list of event dicts) returne
 on successive calls, mirroring app.agent_chat._iter_llm_stream's event contract:
 content_delta / status / message / error.
 """
+
 from __future__ import annotations
 
 import json
