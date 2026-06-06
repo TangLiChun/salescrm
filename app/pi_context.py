@@ -342,7 +342,10 @@ def summarize_history_batch(existing_summary: str, batch: list[dict[str, Any]]) 
 
 def model_context_limit(model: str) -> int:
     name = (model or "").strip().lower()
-    if any(token in name for token in ("deepseek", "gpt-4", "gpt-4o", "claude", "glm-4", "qwen", "moonshot")):
+    # DeepSeek V4: 1M context — https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+    if "deepseek" in name:
+        return 1_000_000
+    if any(token in name for token in ("gpt-4", "gpt-4o", "claude", "glm-4", "qwen", "moonshot")):
         return 128_000
     return 64_000
 

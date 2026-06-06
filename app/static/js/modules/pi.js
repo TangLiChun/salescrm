@@ -660,6 +660,16 @@ export function applyPiContextStats(stats) {
   updatePiChatHistoryHint();
 }
 
+export function formatPiContextTokens(value) {
+  const n = Math.max(0, Number(value) || 0);
+  if (n >= 1_000_000) {
+    const millions = n / 1_000_000;
+    return Number.isInteger(millions) ? `${millions}M` : `${millions.toFixed(1)}M`;
+  }
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
 export function updatePiContextMeter() {
   if (!piChatContextMeterEl || !piChatContextMeterFillEl || !piChatContextMeterLabelEl) return;
   const stats = state.piContextStats;
@@ -672,9 +682,13 @@ export function updatePiContextMeter() {
   piChatContextMeterFillEl.style.transform = `scaleX(${pct / 100})`;
   piChatContextMeterFillEl.classList.toggle("warn", pct >= 75);
   piChatContextMeterFillEl.classList.toggle("danger", pct >= 90);
-  const tokensK = Math.round((Number(stats.token_estimate) || 0) / 1000);
-  const limitK = Math.round((Number(stats.context_limit) || 0) / 1000);
-  const parts = [t("msg.piContextUsage", { pct, tokens: tokensK, limit: limitK })];
+  const parts = [
+    t("msg.piContextUsage", {
+      pct,
+      tokens: formatPiContextTokens(stats.token_estimate),
+      limit: formatPiContextTokens(stats.context_limit),
+    }),
+  ];
   if (stats.compressed) parts.push(t("msg.piContextCompressed"));
   else if (stats.needs_compression) parts.push(t("msg.piContextNeedsCompress"));
   if (pct >= 75) parts.push(t("msg.piContextHigh"));
