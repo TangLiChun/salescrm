@@ -68,6 +68,7 @@ from app.background_jobs import (
     iter_job_events,
     list_jobs_for_user,
     recover_background_jobs_on_startup,
+    request_cancel_background_job,
     spawn_background_job,
 )
 from app.lead_discovery import discover_leads_stream
@@ -1071,6 +1072,14 @@ def get_background_job_route(job_id: int, user: CurrentUser) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return {"job": job}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_background_job_route(job_id: int, user: CurrentUser) -> dict:
+    job = request_cancel_background_job(user["id"], job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或无法停止")
+    return {"ok": True, "job": job}
 
 
 @app.post("/api/leads/discover/stream")

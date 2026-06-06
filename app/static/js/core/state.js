@@ -30,6 +30,8 @@ export const state = {
   piContextStats: null,
   piChatController: null,
   piChatBusy: false,
+  piBackgroundJobId: null,
+  piBackgroundRenderedEvents: 0,
   emailTemplates: [],
   editingTemplateId: null,
   contactSearchTimer: null,

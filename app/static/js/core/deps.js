@@ -6,6 +6,7 @@ export const deps = {
   fetchActivePiThreadHistory: null,
   restorePiChatUi: null,
   appendPiChatStatus: null,
+  syncPiBackgroundJob: null,
   renderRows: null,
   renderAiLeads: null,
   hideLeadsState: null,

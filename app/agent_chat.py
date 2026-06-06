@@ -5,7 +5,7 @@ import json
 import re
 import threading
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from arin_lookup import lookup_asn, parse_asns_from_text
@@ -1777,7 +1777,12 @@ async def agent_chat_stream(
     history: list[dict[str, str]] | None = None,
     *,
     thread_id: str | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    if cancel_check and cancel_check():
+        yield {"type": "error", "message": "任务已停止"}
+        yield {"type": "done"}
+        return
     yield {"type": "status", "message": "Pi 助手思考中…"}
 
     thread: dict[str, Any] | None = None
@@ -1820,6 +1825,10 @@ async def agent_chat_stream(
     messages.append({"role": "user", "content": message.strip()})
 
     for round_index in range(MAX_TOOL_ROUNDS):
+        if cancel_check and cancel_check():
+            yield {"type": "error", "message": "任务已停止"}
+            yield {"type": "done"}
+            return
         if round_index > 0:
             yield {"type": "status", "message": "正在整理工具结果…"}
 
@@ -1833,6 +1842,10 @@ async def agent_chat_stream(
         prepared_calls: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
 
         while True:
+            if cancel_check and cancel_check():
+                yield {"type": "error", "message": "任务已停止"}
+                yield {"type": "done"}
+                return
             assistant = None
             content_buffer = ""
             streamed_reply = False

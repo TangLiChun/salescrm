@@ -15,7 +15,7 @@ import { api, escapeHtml, errorMessage, formatApiDetail, formatImportResult, nor
 import { notifyError, notifyInfo } from "../core/toast.js";
 import { showApiError, showApiSuccess } from "../core/api-feedback.js";
 import { deps } from "../core/deps.js";
-import { trackBackgroundJob } from "../jobs/index.js";
+import { trackBackgroundJob, cancelBackgroundJob } from "../jobs/index.js";
 import { scoreBadgeClass, formatSource } from "./leads.js";
 import { switchSettingsCat } from "./settings.js";
 import { resetProgressFill, setProgressFill } from "../core/progress.js";
@@ -1553,13 +1553,145 @@ export function markPiChatToolFailed(toolEl, message) {
 
 export function setPiChatBusy(busy) {
   state.piChatBusy = busy;
-  piChatStopBtn.classList.toggle("hidden", !busy);
+  const showStop = busy || Boolean(state.piBackgroundJobId);
+  piChatStopBtn.classList.toggle("hidden", !showStop);
   updatePiAgentStatus();
   piChatProgressEl.classList.toggle("hidden", !busy);
   if (!busy) {
     resetProgressFill(piChatProgressFill);
     piChatProgressText.textContent = "";
   }
+}
+
+let piBackgroundActiveToolEl = null;
+
+export function startPiBackgroundWatch(job) {
+  if (!job?.id) return;
+  state.piBackgroundJobId = job.id;
+  state.piBackgroundRenderedEvents = 0;
+  piBackgroundActiveToolEl = null;
+  setPiChatBusy(true);
+  piChatProgressText.textContent = job.message || t("jobs.piStarting");
+  setProgressFill(piChatProgressFill, 12);
+}
+
+export function stopPiBackgroundWatch() {
+  state.piBackgroundJobId = null;
+  state.piBackgroundRenderedEvents = 0;
+  piBackgroundActiveToolEl = null;
+  setPiChatBusy(false);
+}
+
+function piBackgroundThreadMatches(job) {
+  const threadId = job.params?.thread_id || job.result?.thread_id;
+  if (!threadId) return true;
+  return state.activePiThreadId === threadId;
+}
+
+function applyPiBackgroundEvent(event) {
+  const type = event.type || "status";
+  const message = event.message || "";
+  if (type === "tool_start") {
+    const name = event.name || "tool";
+    if (PI_LEAD_STREAM_TOOLS.has(name)) {
+      piBackgroundActiveToolEl = appendPiChatDiscoverTool(name);
+    } else if (name === "lookup_asns") {
+      piBackgroundActiveToolEl = appendPiChatLookupTool(name);
+    } else {
+      piBackgroundActiveToolEl = appendPiChatTool(name);
+    }
+    if (message) piChatProgressText.textContent = message;
+    setProgressFill(piChatProgressFill, 40);
+    scrollPiChatToBottom();
+    return;
+  }
+  if (type === "tool_progress") {
+    if (piBackgroundActiveToolEl) {
+      const progressEl = piBackgroundActiveToolEl.querySelector(".pi-chat-tool-progress");
+      if (progressEl) progressEl.textContent = message;
+    }
+    if (message) piChatProgressText.textContent = message;
+    setProgressFill(piChatProgressFill, 65);
+    return;
+  }
+  if (type === "tool_result") {
+    if (!piBackgroundActiveToolEl && event.name) {
+      piBackgroundActiveToolEl = appendPiChatTool(event.name);
+    }
+    if (piBackgroundActiveToolEl) {
+      markPiChatToolDone(piBackgroundActiveToolEl);
+      const progressEl = piBackgroundActiveToolEl.querySelector(".pi-chat-tool-progress");
+      if (progressEl && message) progressEl.textContent = message;
+      piBackgroundActiveToolEl = null;
+    }
+    setProgressFill(piChatProgressFill, 85);
+    return;
+  }
+  if (type === "assistant_done") {
+    piBackgroundActiveToolEl = null;
+    if (message) {
+      appendPiChatBubble("assistant", message);
+      appendPiHistoryEntry({ role: "assistant", content: message });
+    }
+    setProgressFill(piChatProgressFill, 100);
+    return;
+  }
+  if (message) {
+    piChatProgressText.textContent = message;
+  }
+}
+
+async function finalizePiBackgroundJob(job) {
+  if (state.piBackgroundJobId !== job.id) return;
+  piBackgroundActiveToolEl = null;
+  stopPiBackgroundWatch();
+  if (!piBackgroundThreadMatches(job)) return;
+  if (job.status === "cancelled") {
+    appendPiChatStatus(t("jobs.cancelledInline"));
+  }
+  try {
+    await fetchActivePiThreadHistory();
+    restorePiChatUi();
+  } catch {
+    // keep partial UI if refresh fails
+  }
+  savePiThreadsStore();
+  refreshActivePiThreadMeta().catch(() => {});
+}
+
+export async function syncPiBackgroundJob(job) {
+  if (!job || job.job_type !== "pi_agent") return;
+  if (!piBackgroundThreadMatches(job)) return;
+
+  if (state.piBackgroundJobId !== job.id) {
+    if (isPiBackgroundActive(job)) {
+      startPiBackgroundWatch(job);
+    } else if (job.status === "cancelled" || job.status === "done" || job.status === "error") {
+      return;
+    }
+  }
+
+  const events = job.progress?.events || [];
+  const from = state.piBackgroundRenderedEvents || 0;
+  for (let i = from; i < events.length; i += 1) {
+    applyPiBackgroundEvent(events[i]);
+  }
+  state.piBackgroundRenderedEvents = events.length;
+
+  if (job.message && (job.status === "pending" || job.status === "running")) {
+    piChatProgressText.textContent = job.message;
+  }
+
+  if (job.status === "cancelled" || job.status === "done" || job.status === "error") {
+    await finalizePiBackgroundJob(job);
+    if (job.status === "error" && job.message) {
+      appendPiChatStatus(job.message);
+    }
+  }
+}
+
+function isPiBackgroundActive(job) {
+  return job.status === "pending" || job.status === "running";
 }
 
 export async function sendPiChatMessage(message) {
@@ -1588,6 +1720,7 @@ export async function sendPiChatMessage(message) {
         }),
       });
       trackBackgroundJob(data.job);
+      startPiBackgroundWatch(data.job);
       notifyInfo(t("msg.jobStartedBackground"));
       savePiThreadsStore();
       refreshActivePiThreadMeta().catch(() => {});
@@ -1892,6 +2025,10 @@ export async function sendPiChat(event) {
 export function stopPiChat() {
   if (state.piChatController) {
     state.piChatController.abort();
+    return;
+  }
+  if (state.piBackgroundJobId) {
+    cancelBackgroundJob(state.piBackgroundJobId).catch(() => {});
   }
 }
 

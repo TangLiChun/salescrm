@@ -10,6 +10,7 @@ import {
   resumeBackgroundJobs,
   openJobsPanel,
   closeJobsPanel,
+  initJobsPanelHandlers,
 } from "./jobs/index.js";
 import {
   runLookup,
@@ -75,6 +76,7 @@ import {
   restorePiChatUi,
   initPiAgentUi,
   handlePiChatInputKeydown,
+  syncPiBackgroundJob,
 } from "./modules/pi.js";
 import {
   createSchedule,
@@ -171,6 +173,7 @@ registerDeps({
   fetchActivePiThreadHistory,
   restorePiChatUi,
   appendPiChatStatus,
+  syncPiBackgroundJob,
   renderRows,
   renderAiLeads,
   hideLeadsState,
@@ -517,6 +520,7 @@ window.addEventListener("languagechange", refreshUiOnLanguageChange);
 async function bootstrap() {
   initI18n();
   initPiAgentUi();
+  initJobsPanelHandlers();
 
   let user;
   try {

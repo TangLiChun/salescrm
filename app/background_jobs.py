@@ -15,6 +15,7 @@ from app.database import (
     list_background_jobs,
     list_resumable_background_jobs,
     update_background_job,
+    utc_now,
 )
 from app.lead_checkpoint import parse_checkpoint, checkpoint_resume_message, progress_from_checkpoint
 from app.lead_discovery import discover_leads_stream
@@ -28,8 +29,27 @@ from arin_lookup import RoleContact, lookup_asns_batch, parse_asns_from_text, ro
 logger = logging.getLogger(__name__)
 
 _running: set[int] = set()
+_cancel_requested: set[int] = set()
+_job_tasks: dict[int, asyncio.Task] = {}
 MAX_ASNS = 200
+MAX_PROGRESS_EVENTS = 40
 _job_event_subscribers: dict[int, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
+
+
+def _is_cancelled(job_id: int) -> bool:
+    return job_id in _cancel_requested
+
+
+def request_cancel_background_job(user_id: int, job_id: int) -> dict | None:
+    job = get_background_job(job_id, user_id=user_id)
+    if not job or job.get("status") not in ("pending", "running"):
+        return None
+    _cancel_requested.add(job_id)
+    _update_job(job_id, message="正在停止…")
+    task = _job_tasks.get(job_id)
+    if task and not task.done():
+        task.cancel()
+    return get_job_for_user(user_id, job_id)
 
 
 def _update_job(job_id: int, **kwargs: Any) -> None:
@@ -92,6 +112,56 @@ def _public_job(job: dict | None) -> dict | None:
     return out
 
 
+def _progress_event_label(event: dict[str, Any]) -> str:
+    event_type = event.get("type") or "status"
+    if event_type == "tool_start":
+        name = str(event.get("name") or "tool")
+        return f"调用 {name}"
+    if event_type == "tool_progress":
+        name = str(event.get("name") or "tool")
+        message = str(event.get("message") or "").strip()
+        return f"{name} · {message}" if message else name
+    if event_type == "tool_result":
+        name = str(event.get("name") or "tool")
+        summary = str(event.get("summary") or event.get("message") or "").strip()
+        return f"{name} 完成 · {summary[:120]}" if summary else f"{name} 完成"
+    if event_type == "assistant_done":
+        text = str(event.get("text") or "").strip()
+        return text[:160] if text else "助手回复"
+    message = str(event.get("message") or "").strip()
+    if message:
+        return message
+    if event_type == "progress" and event.get("asn"):
+        return f"AS{event.get('asn')}"
+    return event_type
+
+
+def _merge_progress_events(job_id: int, slim: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+    job = get_background_job(job_id)
+    current: dict[str, Any] = {}
+    if job and job.get("progress_json"):
+        try:
+            current = json.loads(job["progress_json"])
+        except json.JSONDecodeError:
+            current = {}
+    events = list(current.get("events") or [])
+    events.append(
+        {
+            "type": slim.get("type") or event.get("type") or "status",
+            "message": _progress_event_label(event),
+            "name": slim.get("name") or event.get("name"),
+            "at": utc_now().isoformat(),
+        }
+    )
+    slim["events"] = events[-MAX_PROGRESS_EVENTS:]
+    return slim
+
+
+def _update_job_progress(job_id: int, event: dict[str, Any], **kwargs: Any) -> None:
+    slim = _merge_progress_events(job_id, _slim_progress(event), event)
+    _update_job(job_id, progress=slim, **kwargs)
+
+
 def _slim_progress(event: dict[str, Any]) -> dict[str, Any]:
     """Store lightweight progress snapshots; full payloads belong in result_json."""
     event_type = event.get("type") or "status"
@@ -114,7 +184,7 @@ def _slim_progress(event: dict[str, Any]) -> dict[str, Any]:
         slim["count"] = event.get("count")
     if event.get("phase"):
         slim["phase"] = event.get("phase")
-    if event_type in ("tool_progress", "tool_result"):
+    if event_type in ("tool_start", "tool_progress", "tool_result"):
         slim["name"] = event.get("name")
     if event_type == "parsed":
         slim["total"] = event.get("total")
@@ -122,6 +192,9 @@ def _slim_progress(event: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _run_lookup_job(job_id: int) -> None:
+    if _is_cancelled(job_id):
+        _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
+        return
     job = get_background_job(job_id)
     if not job:
         return
@@ -152,23 +225,23 @@ async def _run_lookup_job(job_id: int) -> None:
     total = len(asns)
 
     try:
-        _update_job(
+        _update_job_progress(
             job_id,
-            progress={"type": "parsed", "total": total, "message": f"parsed {total} ASNs"},
+            {"type": "parsed", "total": total, "message": f"parsed {total} ASNs"},
         )
 
         async def on_progress(index: int, total: int, asn: int, rows) -> None:
-            _update_job(
+            if _is_cancelled(job_id):
+                raise asyncio.CancelledError("job cancelled")
+            _update_job_progress(
                 job_id,
-                progress=_slim_progress(
-                    {
-                        "type": "progress",
-                        "index": index,
-                        "total": total,
-                        "asn": asn,
-                        "message": f"AS{asn}",
-                    }
-                ),
+                {
+                    "type": "progress",
+                    "index": index,
+                    "total": total,
+                    "asn": asn,
+                    "message": f"AS{asn}",
+                },
             )
 
         batch_rows = await lookup_asns_batch(
@@ -177,6 +250,9 @@ async def _run_lookup_job(job_id: int) -> None:
             delay=delay,
             on_progress=on_progress,
         )
+        if _is_cancelled(job_id):
+            _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
+            return
         all_rows = [row.to_dict() for row in batch_rows]
 
         emails = sum(1 for row in all_rows if row.get("email"))
@@ -195,6 +271,8 @@ async def _run_lookup_job(job_id: int) -> None:
             },
             finished_at=True,
         )
+    except asyncio.CancelledError:
+        _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
     except Exception as exc:  # noqa: BLE001 — persist job failure for UI polling
         logger.exception("lookup job %s failed", job_id)
         _update_job(
@@ -259,6 +337,9 @@ async def _run_lead_discover_job(job_id: int) -> None:
             checkpoint=checkpoint,
             on_checkpoint=save_checkpoint,
         ):
+            if _is_cancelled(job_id):
+                _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
+                return
             event_type = event.get("type")
             if event_type == "error":
                 _update_job(
@@ -277,7 +358,7 @@ async def _run_lead_discover_job(job_id: int) -> None:
                 last_import = event.get("import")
                 if event.get("leads"):
                     leads = list(event.get("leads") or [])
-            _update_job(job_id, progress=_slim_progress(event))
+            _update_job_progress(job_id, event)
 
         _update_job(
             job_id,
@@ -329,6 +410,9 @@ async def _run_enrich_contact_job(job_id: int) -> None:
             min_score=min_score,
             auto_import=auto_import,
         ):
+            if _is_cancelled(job_id):
+                _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
+                return
             event_type = event.get("type")
             if event_type == "error":
                 _update_job(
@@ -348,7 +432,7 @@ async def _run_enrich_contact_job(job_id: int) -> None:
                 done_message = str(event.get("message") or "")
                 if event.get("leads"):
                     leads = list(event.get("leads") or [])
-            _update_job(job_id, progress=_slim_progress(event))
+            _update_job_progress(job_id, event)
 
         _update_job(
             job_id,
@@ -414,17 +498,26 @@ async def _run_pi_agent_job(job_id: int) -> None:
             message,
             None,
             thread_id=thread_id,
+            cancel_check=lambda: _is_cancelled(job_id),
         ):
             event_type = event.get("type")
             if event_type == "error":
                 error_msg = str(event.get("message") or "Pi 任务失败")
+                if error_msg == "任务已停止":
+                    error_msg = None
                 break
-            if event_type in ("status", "tool_progress", "tool_result"):
-                _update_job(job_id, progress=_slim_progress(event))
-            if event_type == "tool_result":
+            if event_type == "tool_start":
+                _update_job_progress(job_id, event)
+            elif event_type in ("status", "tool_progress"):
+                _update_job_progress(job_id, event)
+            elif event_type == "tool_result":
                 name = str(event.get("name") or "tool")
                 result = event.get("result") or {}
                 summary = tool_result_summary(name, result)
+                _update_job_progress(
+                    job_id,
+                    {**event, "summary": summary},
+                )
                 entry: dict[str, Any] = {
                     "role": "tool",
                     "name": name,
@@ -440,13 +533,34 @@ async def _run_pi_agent_job(job_id: int) -> None:
                     except (TypeError, ValueError):
                         entry["summary"] = summary
                 new_entries.append(entry)
-            if event_type == "assistant_done":
+            elif event_type == "assistant_done":
                 text = str(event.get("text") or "").strip()
+                _update_job_progress(job_id, event)
                 if text:
                     new_entries.append({"role": "assistant", "content": text})
                     last_assistant = text
-            if event_type == "done":
+            elif event_type == "done":
                 break
+
+        if _is_cancelled(job_id):
+            if thread_id and new_entries:
+                thread = get_pi_thread(user_id, thread_id)
+                base_history = list((thread or {}).get("history") or [])
+                upsert_pi_thread(user_id, thread_id, history=base_history + new_entries)
+            _update_job(
+                job_id,
+                status="cancelled",
+                message="已停止",
+                progress={"type": "cancelled", "message": "已停止"},
+                result={
+                    "thread_id": thread_id,
+                    "assistant": last_assistant,
+                    "entries": len(new_entries),
+                    "partial": True,
+                },
+                finished_at=True,
+            )
+            return
 
         if error_msg:
             _update_job(
@@ -491,6 +605,9 @@ async def _execute_job(job_id: int) -> None:
         return
     _running.add(job_id)
     try:
+        if _is_cancelled(job_id):
+            _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
+            return
         job = get_background_job(job_id)
         if not job or job.get("status") not in ("pending", "running"):
             return
@@ -510,8 +627,12 @@ async def _execute_job(job_id: int) -> None:
                 message=f"unknown job type: {job_type}",
                 finished_at=True,
             )
+    except asyncio.CancelledError:
+        _update_job(job_id, status="cancelled", message="已停止", finished_at=True)
     finally:
         _running.discard(job_id)
+        _cancel_requested.discard(job_id)
+        _job_tasks.pop(job_id, None)
 
 
 def spawn_background_job(user_id: int, job_type: str, params: dict[str, Any]) -> dict:
@@ -520,8 +641,10 @@ def spawn_background_job(user_id: int, job_type: str, params: dict[str, Any]) ->
         if thread_id and has_active_pi_agent_job(user_id, thread_id):
             raise PiAgentThreadBusyError(thread_id)
     job = create_background_job(user_id, job_type, params)
-    asyncio.create_task(_execute_job(job["id"]))
-    _publish_job_event(int(job["id"]))
+    job_id = int(job["id"])
+    task = asyncio.create_task(_execute_job(job_id))
+    _job_tasks[job_id] = task
+    _publish_job_event(job_id)
     return _public_job(job) or {}
 
 

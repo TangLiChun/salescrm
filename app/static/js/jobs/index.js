@@ -1,6 +1,7 @@
 import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state } from "../core/state.js";
+import { deps } from "../core/deps.js";
 import { api, escapeHtml, errorMessage } from "../core/utils.js";
 import { replayAnimation, staggerChildren } from "../core/motion.js";
 import { deps } from "../core/deps.js";
@@ -29,6 +30,71 @@ export const backgroundJobTrackers = new Map();
 
 let jobsEventSource = null;
 let jobsSseConnected = false;
+const expandedJobIds = new Set();
+const cancellingJobIds = new Set();
+
+function isActiveJobStatus(status) {
+  return status === "pending" || status === "running";
+}
+
+function isTerminalJobStatus(status) {
+  return status === "done" || status === "error" || status === "cancelled";
+}
+
+function renderJobEvents(events) {
+  const items = (events || []).slice(-MAX_PROGRESS_EVENTS_DISPLAY);
+  if (!items.length) {
+    return `<p class="jobs-panel-events-empty">${escapeHtml(t("jobs.eventsTitle"))}: —</p>`;
+  }
+  return `
+    <div class="jobs-panel-events">
+      <p class="jobs-panel-events-title">${escapeHtml(t("jobs.eventsTitle"))}</p>
+      <ul class="jobs-panel-events-list">
+        ${items
+          .map(
+            (event) => `
+          <li class="jobs-panel-event">
+            <span class="jobs-panel-event-type">${escapeHtml(event.type || "status")}</span>
+            ${escapeHtml(event.message || "")}
+          </li>`,
+          )
+          .join("")}
+      </ul>
+    </div>`;
+}
+
+const MAX_PROGRESS_EVENTS_DISPLAY = 40;
+
+function renderJobPanelItem(job) {
+  const status = job.status || "pending";
+  const msg = job.message || backgroundJobLabel(job) || "";
+  const time = formatJobTime(job.updated_at || job.created_at);
+  const expanded = expandedJobIds.has(job.id);
+  const active = isActiveJobStatus(status);
+  const stopping = cancellingJobIds.has(job.id);
+  return `
+    <li class="jobs-panel-item" data-job-id="${job.id}">
+      <div class="jobs-panel-item-head">
+        <span class="jobs-panel-item-type">${escapeHtml(jobTypeLabel(job.job_type))}</span>
+        <span class="jobs-panel-item-status ${escapeHtml(status)}">${escapeHtml(jobStatusLabel(status))}</span>
+      </div>
+      <div class="jobs-panel-item-msg">${escapeHtml(msg)}</div>
+      <div class="jobs-panel-item-actions">
+        ${
+          active
+            ? `<button type="button" class="danger-btn jobs-panel-stop" data-stop-job="${job.id}" ${
+                stopping ? "disabled" : ""
+              }>${escapeHtml(stopping ? t("jobs.status.cancelled") : t("jobs.stop"))}</button>`
+            : ""
+        }
+        <button type="button" class="secondary-btn jobs-panel-toggle" data-toggle-job="${job.id}">
+          ${escapeHtml(expanded ? t("jobs.hideDetail") : t("jobs.showDetail"))}
+        </button>
+      </div>
+      ${expanded ? renderJobEvents(job.progress?.events) : ""}
+      <div class="jobs-panel-item-time">${escapeHtml(time)}</div>
+    </li>`;
+}
 
 export function openJobsPanel() {
   if (!jobsPanelEl) return;
@@ -50,23 +116,44 @@ export async function loadJobsPanelList() {
     jobsPanelListEl.innerHTML = `<li class="jobs-panel-empty">${escapeHtml(t("jobs.emptyList"))}</li>`;
     return;
   }
-  jobsPanelListEl.innerHTML = jobs
-    .map((job) => {
-      const status = job.status || "pending";
-      const msg = job.message || backgroundJobLabel(job) || "";
-      const time = formatJobTime(job.updated_at || job.created_at);
-      return `
-        <li class="jobs-panel-item">
-          <div class="jobs-panel-item-head">
-            <span class="jobs-panel-item-type">${escapeHtml(jobTypeLabel(job.job_type))}</span>
-            <span class="jobs-panel-item-status ${escapeHtml(status)}">${escapeHtml(jobStatusLabel(status))}</span>
-          </div>
-          <div class="jobs-panel-item-msg">${escapeHtml(msg)}</div>
-          <div class="jobs-panel-item-time">${escapeHtml(time)}</div>
-        </li>`;
-    })
-    .join("");
+  jobsPanelListEl.innerHTML = jobs.map((job) => renderJobPanelItem(job)).join("");
   staggerChildren(jobsPanelListEl, ".jobs-panel-item");
+}
+
+export function initJobsPanelHandlers() {
+  jobsPanelListEl?.addEventListener("click", (event) => {
+    const stopBtn = event.target.closest("[data-stop-job]");
+    if (stopBtn) {
+      const jobId = Number(stopBtn.dataset.stopJob);
+      if (jobId) cancelBackgroundJob(jobId).catch(() => {});
+      return;
+    }
+    const toggleBtn = event.target.closest("[data-toggle-job]");
+    if (toggleBtn) {
+      const jobId = Number(toggleBtn.dataset.toggleJob);
+      if (!jobId) return;
+      if (expandedJobIds.has(jobId)) expandedJobIds.delete(jobId);
+      else expandedJobIds.add(jobId);
+      loadJobsPanelList().catch(() => {});
+    }
+  });
+}
+
+export async function cancelBackgroundJob(jobId) {
+  cancellingJobIds.add(jobId);
+  if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+    loadJobsPanelList().catch(() => {});
+  }
+  try {
+    const data = await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+    if (data.job) handleJobEvent(data.job);
+    return data;
+  } catch (error) {
+    notifyError(errorMessage(error, t("jobs.failed")));
+    throw error;
+  } finally {
+    cancellingJobIds.delete(jobId);
+  }
 }
 
 export async function navigateForCompletedJob(job) {
@@ -113,6 +200,11 @@ export function backgroundJobLabel(job) {
     if (progress.name && progress.message) {
       return t("jobs.piProgress", { name: progress.name, message: progress.message });
     }
+    const events = progress.events;
+    if (Array.isArray(events) && events.length) {
+      const last = events[events.length - 1];
+      if (last?.message) return last.message;
+    }
     if (progress.message) {
       return t("jobs.piRunning", { message: progress.message });
     }
@@ -142,7 +234,7 @@ export function renderBackgroundJobsBar() {
   const wasHidden = backgroundJobsBar.classList.contains("hidden");
   const active = [...backgroundJobTrackers.values()]
     .map((entry) => entry.job)
-    .filter((job) => job && (job.status === "pending" || job.status === "running"));
+    .filter((job) => job && isActiveJobStatus(job.status));
   if (!active.length) {
     backgroundJobsBar.classList.add("hidden");
     backgroundJobsBar.innerHTML = "";
@@ -231,7 +323,7 @@ function applyEnrichContactJobResult(job) {
   );
 }
 
-async function applyPiAgentJobResult(job) {
+async function applyPiAgentJobResult(job, options = {}) {
   const result = job.result || {};
   const threadId = result.thread_id;
   if (threadId && state.piThreads.some((thread) => thread.id === threadId)) {
@@ -242,6 +334,7 @@ async function applyPiAgentJobResult(job) {
   }
   deps.loadContacts?.().catch(() => {});
   deps.loadWorkbench?.().catch(() => {});
+  if (options.partial) return;
   const snippet = String(result.assistant || job.message || "").trim().slice(0, 120);
   const activeView = document.querySelector(".tab.active")?.dataset.view;
   if (activeView !== "pi-agent") {
@@ -257,6 +350,9 @@ async function applyPiAgentJobResult(job) {
 }
 
 export function finishBackgroundJob(job) {
+  if (job.job_type === "pi_agent") {
+    deps.syncPiBackgroundJob?.(job);
+  }
   if (job.status === "done") {
     if (job.job_type === "lookup") applyLookupJobResult(job);
     else if (job.job_type === "lead_discover") applyLeadDiscoverJobResult(job);
@@ -271,6 +367,11 @@ export function finishBackgroundJob(job) {
         });
       });
     }
+  } else if (job.status === "cancelled") {
+    if (job.job_type === "pi_agent") {
+      applyPiAgentJobResult(job, { partial: true }).catch(() => {});
+    }
+    notifyInfo(t("jobs.cancelledNotice"));
   } else if (job.status === "error") {
     notifyError(`${t("jobs.failed")}: ${job.message || ""}`, {
       actionLabel: t("jobs.viewAll"),
@@ -295,7 +396,7 @@ export async function pollBackgroundJob(jobId) {
     if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
       loadJobsPanelList().catch(() => {});
     }
-    if (job.status === "done" || job.status === "error") {
+    if (isTerminalJobStatus(job.status)) {
       if (entry?.timer) clearInterval(entry.timer);
       finishBackgroundJob(job);
     }
@@ -317,7 +418,7 @@ export function trackBackgroundJob(job, options = {}) {
   const entry = { job, timer: null };
   backgroundJobTrackers.set(job.id, entry);
   renderBackgroundJobsBar();
-  if (job.status === "done" || job.status === "error") {
+  if (isTerminalJobStatus(job.status)) {
     finishBackgroundJob(job);
     return;
   }
@@ -332,7 +433,12 @@ export function trackBackgroundJob(job, options = {}) {
 export async function resumeBackgroundJobs() {
   try {
     const data = await api("/api/jobs?active=true");
-    for (const job of data.jobs || []) trackBackgroundJob(job);
+    for (const job of data.jobs || []) {
+      trackBackgroundJob(job);
+      if (job.job_type === "pi_agent") {
+        deps.syncPiBackgroundJob?.(job);
+      }
+    }
   } catch {
     // ignore
   }
@@ -368,9 +474,12 @@ export function startJobEventStream() {
 
 function handleJobEvent(job) {
   let entry = backgroundJobTrackers.get(job.id);
-  if (!entry && (job.status === "pending" || job.status === "running")) {
+  if (!entry && isActiveJobStatus(job.status)) {
     trackBackgroundJob(job, { fromSse: true });
-    return;
+    entry = backgroundJobTrackers.get(job.id);
+  }
+  if (job.job_type === "pi_agent") {
+    deps.syncPiBackgroundJob?.(job);
   }
   if (!entry) return;
   entry.job = job;
@@ -378,7 +487,7 @@ function handleJobEvent(job) {
   if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
     loadJobsPanelList().catch(() => {});
   }
-  if (job.status === "done" || job.status === "error") {
+  if (isTerminalJobStatus(job.status)) {
     if (entry.timer) {
       clearInterval(entry.timer);
       entry.timer = null;
