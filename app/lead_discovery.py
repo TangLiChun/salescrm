@@ -414,7 +414,7 @@ async def discover_leads_stream(
     total = len(asn_targets)
     processed = len(rdap_done_asns)
 
-    for index, network in enumerate(asn_targets):
+    for _index, network in enumerate(asn_targets):
         asn = int(network["asn"])
         if asn in rdap_done_asns:
             continue

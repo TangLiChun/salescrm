@@ -1107,7 +1107,9 @@ async def create_pi_agent_job(body: PiAgentJobRequest, user: CurrentUser) -> dic
             },
         )
     except PiAgentThreadBusyError:
-        raise HTTPException(status_code=409, detail="该对话已有 Pi 任务运行中，请等待完成后再发送")
+        raise HTTPException(
+            status_code=409, detail="该对话已有 Pi 任务运行中，请等待完成后再发送"
+        ) from None
     return {"job": job}
 
 

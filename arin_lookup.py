@@ -341,7 +341,7 @@ async def lookup_asns_batch(
         results = await asyncio.gather(
             *(asyncio.to_thread(lookup_asn_cached, asn, timeout) for asn in batch)
         )
-        for offset, (asn, rows) in enumerate(zip(batch, results)):
+        for offset, (asn, rows) in enumerate(zip(batch, results, strict=False)):
             index = batch_start + offset + 1
             all_rows.extend(rows)
             if on_progress is not None:

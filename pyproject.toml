@@ -13,3 +13,9 @@ ignore = ["E501", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B"]
+# Grandfathered pre-existing violations in legacy code. New pi_*.py modules and
+# tests are held to the full ruleset; clean these up as the files are refactored.
+"app/agent_chat.py" = ["B023"]          # tool-worker closure; task awaited immediately (safe). Fixed when the loop is refactored.
+"app/llm.py" = ["UP028"]                # streaming generator superseded by pi_llm_client.
+"app/sources/web_search.py" = ["E402"]  # intentional late import.
+"scripts/smoke_check.py" = ["E402"]     # sys.path bootstrap before app imports.
