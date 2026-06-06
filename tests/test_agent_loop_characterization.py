@@ -83,3 +83,47 @@ async def test_tool_json_not_leaked_into_assistant_bubble():
         agent_chat_stream(1, "找联系人", [], llm_client=fake, tool_runner=_noop_tools)
     )
     assert '"arguments"' not in assistant_text(events)
+
+
+@pytest.mark.asyncio
+async def test_empty_then_retry_then_fail_is_graceful():
+    # Three consecutive empty responses exhaust the unified nudge counter (max=2)
+    # and produce an error event followed by done.
+    # Call sequence: empty(nudge_count=0)->Retry, empty(nudge_count=1)->Retry,
+    #                empty(nudge_count=2, ==max_nudges)->Fail
+    fake = FakeLLM([content_message(""), content_message(""), content_message("")])
+    events = await collect_events(
+        agent_chat_stream(1, "x", [], llm_client=fake, tool_runner=_noop_tools)
+    )
+    assert any(e["type"] == "error" for e in events)
+    assert event_types(events)[-1] == "done"
+
+
+@pytest.mark.asyncio
+async def test_intro_only_exhausts_nudges_then_fallback_runs_tool():
+    # Call sequence (unified nudge counter, max_nudges=2):
+    #   call1: intro "让我查一下" -> Retry(nudge_count 0->1)
+    #   call2: intro "让我查一下" -> Retry(nudge_count 1->2)
+    #   call3: intro "让我查一下" -> nudge_count==max_nudges -> FallbackToolCalls (list_contacts)
+    #          -> tool runs -> break -> post-break code appends assistant+tool messages
+    #   call4: "已完成。" -> FinalReply -> done
+    # Total: 4 LLM calls, matching 4 scripted responses below.
+    fake = FakeLLM(
+        [
+            content_message("让我查一下"),
+            content_message("让我查一下"),
+            content_message("让我查一下"),
+            content_message("已完成。"),
+        ]
+    )
+    seen = []
+
+    async def tools(user_id, name, args, emit):
+        seen.append(name)
+        return {"contacts": [], "total": 0}
+
+    events = await collect_events(
+        agent_chat_stream(1, "列出运营商联系人", [], llm_client=fake, tool_runner=tools)
+    )
+    assert seen  # fallback forced a CRM search
+    assert event_types(events)[-1] == "done"

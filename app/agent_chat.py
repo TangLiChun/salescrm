@@ -41,21 +41,17 @@ from app.pi_chat_store import (
     history_for_llm,
 )
 from app.pi_context import compress_tool_result_for_llm, context_stats, needs_summary_update
+from app.pi_decisions import (
+    Fail,
+    FallbackToolCalls,
+    FinalReply,
+    Retry,
+    decide_turn,
+)
 from app.pi_reply_heuristics import (
-    _CONTINUE_NUDGE,
-    _EMPTY_RESPONSE_NUDGE,
-    _INTRO_ONLY_NUDGE,
     _MAX_LLM_NUDGES,
     _assistant_intro_before_tools,
-    _assistant_promises_tool_use,
-    _fallback_prepared_calls,
     _meaningful_assistant_content,
-    _parse_inline_tool_calls,
-    _user_requests_continuation,
-)
-from app.pi_tool_calls import (
-    _extract_tool_calls_from_content,
-    _prepare_tool_calls,
 )
 from app.settings_store import get_setting, update_settings
 from app.sources import brightdata_social as bs
@@ -860,17 +856,6 @@ def append_user_turn_to_messages(
     messages.append({"role": "user", "content": user_text})
 
 
-def _assistant_response_empty(assistant: dict[str, Any] | None, content_buffer: str) -> bool:
-    if not assistant:
-        return True
-    content = (assistant.get("content") or content_buffer or "").strip()
-    tool_calls = assistant.get("tool_calls") or []
-    if content or tool_calls:
-        return False
-    reasoning = str(assistant.get("reasoning_content") or "").strip()
-    return not reasoning
-
-
 async def _discover_leads_tool(
     user_id: int,
     args: dict[str, Any],
@@ -1492,9 +1477,7 @@ async def agent_chat_stream(
         assistant: dict[str, Any] | None = None
         content_buffer = ""
         streamed_reply = False
-        nudged_empty_response = False
         llm_nudge_count = 0
-        tool_calls: list[Any] = []
         content = ""
         prepared_calls: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
 
@@ -1536,141 +1519,52 @@ async def agent_chat_stream(
                 elif event_type == "message":
                     assistant = event.get("message")
 
-            if _assistant_response_empty(assistant, content_buffer):
-                if not nudged_empty_response:
-                    nudged_empty_response = True
-                    messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
-                    yield {"type": "status", "message": "模型未响应，正在重试…"}
-                    continue
-                yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
+            decision = decide_turn(
+                assistant,
+                content_buffer,
+                user_message=message,
+                history=history or [],
+                nudge_count=llm_nudge_count,
+                max_nudges=_MAX_LLM_NUDGES,
+            )
+
+            if isinstance(decision, Retry):
+                llm_nudge_count += 1
+                messages.append({"role": "user", "content": decision.nudge})
+                yield {"type": "status", "message": "模型未调用工具，正在重试…"}
+                continue
+
+            if isinstance(decision, Fail):
+                yield {"type": "error", "message": decision.error}
                 yield {"type": "done"}
                 return
 
-            tool_calls = (assistant or {}).get("tool_calls") or []
-            raw_content = ((assistant or {}).get("content") or content_buffer or "").strip()
-            content = _meaningful_assistant_content(raw_content)
-
-            if not tool_calls and raw_content:
-                intro, inline_calls = _parse_inline_tool_calls(raw_content)
-                if inline_calls:
-                    tool_calls = inline_calls
-                    content = _meaningful_assistant_content(intro)
-                    assistant = {
-                        **(assistant or {}),
-                        "tool_calls": tool_calls,
-                        "content": intro or None,
-                    }
-
-            if content and not tool_calls:
-                continue_request = _user_requests_continuation(message)
-                promises = _assistant_promises_tool_use(content)
-                should_act = promises or continue_request
-
-                if should_act and llm_nudge_count < _MAX_LLM_NUDGES:
-                    llm_nudge_count += 1
-                    nudge = _CONTINUE_NUDGE if continue_request else _INTRO_ONLY_NUDGE
-                    messages.append({"role": "user", "content": nudge})
-                    yield {"type": "status", "message": "模型未调用工具，正在重试…"}
-                    continue
-                fallback_calls = _fallback_prepared_calls(message, history or [])
-                if fallback_calls and should_act:
-                    prepared_calls = fallback_calls
-                    assistant = {
-                        **(assistant or {}),
-                        "role": "assistant",
-                        "content": content or None,
-                    }
-                    status_msg = (
-                        "正在直接继续上一任务…"
-                        if continue_request
-                        else "模型未调用工具，正在直接搜索 CRM…"
-                    )
-                    yield {"type": "status", "message": status_msg}
-                    break
-                if continue_request:
-                    yield {"type": "error", "message": "无法继续上一任务，请补充更具体的搜索描述"}
-                    yield {"type": "done"}
-                    return
+            if isinstance(decision, FinalReply):
                 if not streamed_reply:
                     yield {"type": "assistant_start"}
-                    yield {"type": "assistant_delta", "text": content}
-                yield {"type": "assistant_done", "text": content}
+                    yield {"type": "assistant_delta", "text": decision.text}
+                yield {"type": "assistant_done", "text": decision.text}
                 yield {"type": "done"}
                 return
 
-            if not tool_calls:
-                if llm_nudge_count < _MAX_LLM_NUDGES:
-                    llm_nudge_count += 1
-                    messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
-                    yield {"type": "status", "message": "模型未调用工具，正在重试…"}
-                    continue
-                yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
-                yield {"type": "done"}
-                return
+            if isinstance(decision, FallbackToolCalls):
+                prepared_calls = decision.prepared_calls
+                content = _meaningful_assistant_content(
+                    (assistant or {}).get("content") or content_buffer or ""
+                )
+                assistant = {**(assistant or {}), "role": "assistant", "content": content or None}
+                yield {"type": "status", "message": decision.status_message}
+                break
 
-            prepared_calls = _prepare_tool_calls(tool_calls)
-            if not prepared_calls and raw_content:
-                extracted = _extract_tool_calls_from_content(raw_content)
-                if extracted:
-                    prepared_calls = _prepare_tool_calls(extracted)
-                if not prepared_calls:
-                    intro, inline_calls = _parse_inline_tool_calls(raw_content)
-                    if inline_calls:
-                        prepared_calls = _prepare_tool_calls(inline_calls)
-                        content = _meaningful_assistant_content(intro)
-            if not prepared_calls:
-                attempted_tools = bool(tool_calls)
-                if content and not attempted_tools:
-                    continue_request = _user_requests_continuation(message)
-                    if continue_request or _assistant_promises_tool_use(content):
-                        fallback_calls = _fallback_prepared_calls(message, history or [])
-                        if fallback_calls:
-                            prepared_calls = fallback_calls
-                            assistant = {
-                                **(assistant or {}),
-                                "role": "assistant",
-                                "content": content or None,
-                            }
-                            status_msg = (
-                                "正在直接继续上一任务…"
-                                if continue_request
-                                else "模型未调用工具，正在直接搜索 CRM…"
-                            )
-                            yield {"type": "status", "message": status_msg}
-                            break
-                    if not streamed_reply:
-                        yield {"type": "assistant_start"}
-                        yield {"type": "assistant_delta", "text": content}
-                    yield {"type": "assistant_done", "text": content}
-                    yield {"type": "done"}
-                    return
-                if llm_nudge_count < _MAX_LLM_NUDGES:
-                    llm_nudge_count += 1
-                    messages.append({"role": "user", "content": _EMPTY_RESPONSE_NUDGE})
-                    yield {
-                        "type": "status",
-                        "message": "工具调用无效，正在重试…"
-                        if attempted_tools
-                        else "模型未调用工具，正在重试…",
-                    }
-                    continue
-                fallback_calls = _fallback_prepared_calls(message, history or [])
-                if fallback_calls and (
-                    attempted_tools
-                    or _assistant_promises_tool_use(content)
-                    or _user_requests_continuation(message)
-                ):
-                    prepared_calls = fallback_calls
-                    assistant = {
-                        **(assistant or {}),
-                        "role": "assistant",
-                        "content": content or None,
-                    }
-                    yield {"type": "status", "message": "工具调用无效，正在直接搜索 CRM…"}
-                    break
-                yield {"type": "error", "message": "模型未返回有效回复，请换种说法或检查 LLM 配置"}
-                yield {"type": "done"}
-                return
+            # EmitToolCalls
+            prepared_calls = decision.prepared_calls
+            content = decision.intro_text
+            assistant = {
+                **(assistant or {}),
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": [tc for tc, _, _ in prepared_calls],
+            }
             break
 
         if not assistant:
