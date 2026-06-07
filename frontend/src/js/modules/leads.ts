@@ -80,7 +80,7 @@ export function renderAiLeads() {
   if (state.aiLeads.length === 0) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = `<td colspan="8">用自然语言描述目标客户，AI 会从多个渠道自动搜索并评分</td>`;
+    tr.innerHTML = `<td colspan="8" class="empty-state">${escapeHtml(t("aiLeads.emptyHint"))}</td>`;
     aiLeadsBody.appendChild(tr);
     updateAiLeadsStats();
     return;

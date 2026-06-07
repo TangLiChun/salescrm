@@ -25,15 +25,38 @@ const VIEW_ELEMENTS = {
     contacts: contactsView,
     stats: statsView,
 };
+const MOBILE_OVERFLOW_VIEWS = new Set(["ai-leads", "schedules", "stats", "settings"]);
 function animatePageTitle() {
     if (!pageTitle)
         return;
     replayAnimation(pageTitle, "title-enter");
 }
+export function closeMobileNavMore() {
+    const panel = document.getElementById("mobile-nav-more-panel");
+    const btn = document.getElementById("mobile-nav-more-btn");
+    panel?.classList.add("hidden");
+    btn?.setAttribute("aria-expanded", "false");
+}
+export function openMobileNavMore() {
+    const panel = document.getElementById("mobile-nav-more-panel");
+    const btn = document.getElementById("mobile-nav-more-btn");
+    panel?.classList.remove("hidden");
+    btn?.setAttribute("aria-expanded", "true");
+    panel?.querySelector(".mobile-nav-overflow-item")?.focus();
+}
+function syncMobileNavMore(view) {
+    const moreBtn = document.getElementById("mobile-nav-more-btn");
+    moreBtn?.classList.toggle("active", MOBILE_OVERFLOW_VIEWS.has(view));
+    document.querySelectorAll(".mobile-nav-overflow-item").forEach((item) => {
+        item.classList.toggle("active", item.dataset.view === view);
+    });
+    closeMobileNavMore();
+}
 export function switchView(view) {
     tabs.forEach((tab) => {
         tab.classList.toggle("active", tab.dataset.view === view);
     });
+    syncMobileNavMore(view);
     workbenchView.classList.toggle("hidden", view !== "workbench");
     lookupView.classList.toggle("hidden", view !== "lookup");
     aiLeadsView.classList.toggle("hidden", view !== "ai-leads");

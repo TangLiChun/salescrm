@@ -12,4 +12,6 @@ artifacts/pi-harness-replay-*
 
 # Local AI / design tooling (not part of the CRM app)
 .claude/
+.agents/
+skills-lock.json
 .impeccable/critique/

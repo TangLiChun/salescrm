@@ -101,7 +101,7 @@ import {
   handleLeadReviewSelection,
   handleLeadReviewAction,
 } from "./modules/workbench.js";
-import { switchView, refreshUiOnLanguageChange } from "./modules/views.js";
+import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore } from "./modules/views.js";
 
 const {
   asnInput,
@@ -201,6 +201,9 @@ jobsPanelEl?.addEventListener("modal:escape", () => closeJobsPanel());
 
 document.addEventListener("keydown", (event) => {
   handleModalKeydown(event);
+  if (event.key === "Escape" && !document.getElementById("mobile-nav-more-panel")?.classList.contains("hidden")) {
+    closeMobileNavMore();
+  }
 });
 
 lookupBtn.addEventListener("click", runLookup);
@@ -371,7 +374,25 @@ logoutBtn.addEventListener("click", async () => {
 });
 
 tabs.forEach((tab) => {
-  tab.addEventListener("click", () => switchView(tab.dataset.view));
+  tab.addEventListener("click", () => {
+    if (tab.dataset.view) switchView(tab.dataset.view);
+  });
+});
+
+document.getElementById("mobile-nav-more-btn")?.addEventListener("click", () => {
+  const panel = document.getElementById("mobile-nav-more-panel");
+  if (panel?.classList.contains("hidden")) openMobileNavMore();
+  else closeMobileNavMore();
+});
+
+document.getElementById("mobile-nav-more-panel")?.addEventListener("click", (event) => {
+  const target = event.target as HTMLElement;
+  if (target.closest("[data-close-mobile-nav-more]")) {
+    closeMobileNavMore();
+    return;
+  }
+  const item = target.closest<HTMLElement>(".mobile-nav-overflow-item[data-view]");
+  if (item?.dataset.view) switchView(item.dataset.view);
 });
 
 document.querySelectorAll(".settings-rail-item").forEach((btn) => {

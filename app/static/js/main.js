@@ -14,7 +14,7 @@ import { createSchedule, loadSchedules, toggleSchedule, deleteSchedule, runSched
 import { saveSettings, regenerateAgentToken, copyAgentToken, changePassword, switchSettingsCat, resetLeadPreferences, } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
 import { loadWorkbench, importSelectedLeadReviews, handleLeadReviewSelection, handleLeadReviewAction, } from "./modules/workbench.js";
-import { switchView, refreshUiOnLanguageChange } from "./modules/views.js";
+import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore } from "./modules/views.js";
 const { asnInput, lookupBtn, exportBtn, importBtn, roleFilter, resultsBody, currentUserEl, logoutBtn, refreshWorkbenchBtn, leadReviewBody, importReviewedLeadsBtn, piChatForm, piChatInput, piChatStopBtn, piChatClearBtn, piThreadNewBtn, piThreadListEl, discoverBtn, discoverViaPiBtn, retryDiscoverBtn, importLeadsBtn, contactStatusFilter, contactFollowUpFilter, contactSearchInput, contactsPageSizeSelect, contactsPrevBtn, contactsNextBtn, contactsListViewBtn, contactsOrgViewBtn, contactsSelectAll, contactsBody, bulkApplyStatusBtn, bulkStatusSelect, bulkMarkSentBtn, bulkDeleteBtn, contactEditForm, contactEditModal, downloadBackupBtn, exportContactsBtn, dedupeContactsBtn, refreshContactsBtn, refreshSchedulesBtn, refreshStatsBtn, scheduleForm, scheduleRunModeInput, scheduleIntervalPreset, settingsForm, saveTemplateBtn, emailTemplatesListEl, contactNoteForm, contactNotesModal, tabs, aiLeadsBody, leadDetailModal, leadDetailImport, backgroundJobsBar, jobsPanelEl, leadQueryInput, scheduleQueryInput, } = dom;
 registerDeps({
     switchView,
@@ -48,6 +48,9 @@ leadDetailModal?.addEventListener("modal:escape", () => closeLeadDetail());
 jobsPanelEl?.addEventListener("modal:escape", () => closeJobsPanel());
 document.addEventListener("keydown", (event) => {
     handleModalKeydown(event);
+    if (event.key === "Escape" && !document.getElementById("mobile-nav-more-panel")?.classList.contains("hidden")) {
+        closeMobileNavMore();
+    }
 });
 lookupBtn.addEventListener("click", runLookup);
 piChatForm?.addEventListener("submit", (event) => {
@@ -220,7 +223,27 @@ logoutBtn.addEventListener("click", async () => {
     window.location.href = "/login";
 });
 tabs.forEach((tab) => {
-    tab.addEventListener("click", () => switchView(tab.dataset.view));
+    tab.addEventListener("click", () => {
+        if (tab.dataset.view)
+            switchView(tab.dataset.view);
+    });
+});
+document.getElementById("mobile-nav-more-btn")?.addEventListener("click", () => {
+    const panel = document.getElementById("mobile-nav-more-panel");
+    if (panel?.classList.contains("hidden"))
+        openMobileNavMore();
+    else
+        closeMobileNavMore();
+});
+document.getElementById("mobile-nav-more-panel")?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target.closest("[data-close-mobile-nav-more]")) {
+        closeMobileNavMore();
+        return;
+    }
+    const item = target.closest(".mobile-nav-overflow-item[data-view]");
+    if (item?.dataset.view)
+        switchView(item.dataset.view);
 });
 document.querySelectorAll(".settings-rail-item").forEach((btn) => {
     btn.addEventListener("click", () => switchSettingsCat(btn.dataset.settingsCat));

@@ -10,8 +10,9 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <a class="skip-link" href="#app-content" data-i18n="common.skipToContent">跳到主内容</a>
   <div class="app-shell">
-    <aside class="app-sidebar" aria-label="Main navigation">
+    <aside class="app-sidebar" data-i18n-aria-label="nav.ariaMain" aria-label="主导航">
       <div class="app-brand">
         <div class="app-brand-mark" aria-hidden="true"></div>
         <div class="app-brand-text">
@@ -21,44 +22,53 @@
       </div>
 
       <nav class="tabs app-nav">
-        <button type="button" class="tab nav-item active" data-view="workbench">
-          <span class="nav-icon" aria-hidden="true">WB</span>
-          <span class="nav-label" data-i18n="nav.workbench">工作台</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="lookup">
-          <span class="nav-icon" aria-hidden="true">RD</span>
-          <span class="nav-label" data-i18n="nav.lookup">ASN 查询</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="ai-leads">
-          <span class="nav-icon" aria-hidden="true">AI</span>
-          <span class="nav-label" data-i18n="nav.aiLeads">AI 线索发现</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="pi-agent">
-          <span class="nav-icon" aria-hidden="true">π</span>
-          <span class="nav-label" data-i18n="nav.piAgent">Pi 助手</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="schedules">
-          <span class="nav-icon" aria-hidden="true">CR</span>
-          <span class="nav-label" data-i18n="nav.schedules">定时任务</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="contacts">
-          <span class="nav-icon" aria-hidden="true">@</span>
-          <span class="nav-label" data-i18n="nav.contacts">联系人列表</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="stats">
-          <span class="nav-icon" aria-hidden="true">#</span>
-          <span class="nav-label" data-i18n="nav.stats">统计概览</span>
-        </button>
-        <button type="button" class="tab nav-item" data-view="settings">
-          <span class="nav-icon" aria-hidden="true">ST</span>
-          <span class="nav-label" data-i18n="nav.settings">系统设置</span>
-        </button>
+        <div class="nav-group">
+          <span class="nav-group-label" data-i18n="nav.group.daily">日常</span>
+          <button type="button" class="tab nav-item active" data-view="workbench">
+            <span class="nav-icon" aria-hidden="true">WB</span>
+            <span class="nav-label" data-i18n="nav.workbench">工作台</span>
+          </button>
+          <button type="button" class="tab nav-item" data-view="contacts">
+            <span class="nav-icon" aria-hidden="true">@</span>
+            <span class="nav-label" data-i18n="nav.contacts">联系人</span>
+          </button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-group-label" data-i18n="nav.group.acquisition">获客</span>
+          <button type="button" class="tab nav-item" data-view="lookup">
+            <span class="nav-icon" aria-hidden="true">RD</span>
+            <span class="nav-label" data-i18n="nav.lookup">ASN 查询</span>
+          </button>
+          <button type="button" class="tab nav-item" data-view="ai-leads">
+            <span class="nav-icon" aria-hidden="true">AI</span>
+            <span class="nav-label" data-i18n="nav.aiLeads">AI 线索</span>
+          </button>
+          <button type="button" class="tab nav-item" data-view="pi-agent">
+            <span class="nav-icon" aria-hidden="true">π</span>
+            <span class="nav-label" data-i18n="nav.piAgent">Pi 助手</span>
+          </button>
+        </div>
+        <div class="nav-group">
+          <span class="nav-group-label" data-i18n="nav.group.system">系统</span>
+          <button type="button" class="tab nav-item" data-view="schedules">
+            <span class="nav-icon" aria-hidden="true">CR</span>
+            <span class="nav-label" data-i18n="nav.schedules">定时任务</span>
+          </button>
+          <button type="button" class="tab nav-item" data-view="stats">
+            <span class="nav-icon" aria-hidden="true">#</span>
+            <span class="nav-label" data-i18n="nav.stats">统计</span>
+          </button>
+          <button type="button" class="tab nav-item" data-view="settings">
+            <span class="nav-icon" aria-hidden="true">ST</span>
+            <span class="nav-label" data-i18n="nav.settings">设置</span>
+          </button>
+        </div>
       </nav>
 
       <div class="app-sidebar-foot">
         <span id="current-user" class="user-badge user-badge-sidebar"></span>
         <div class="app-sidebar-actions">
-          <div id="lang-switch" class="lang-switch" role="group" aria-label="Language">
+          <div id="lang-switch" class="lang-switch" role="group" data-i18n-aria-label="common.langSwitch" aria-label="语言">
             <button type="button" class="lang-switch-btn active" data-lang="zh">中文</button>
             <button type="button" class="lang-switch-btn" data-lang="en">EN</button>
           </div>
@@ -89,7 +99,7 @@
 
       <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
-      <div class="app-content">
+      <div id="app-content" class="app-content" tabindex="-1">
     <section id="workbench-view" class="workbench-view">
       <section class="panel workbench-panel">
         <div class="results-header">
@@ -123,8 +133,8 @@
                   <th scope="col" data-i18n="aiLeads.colScore">分数</th>
                   <th scope="col" data-i18n="lookup.colOrg">组织</th>
                   <th scope="col" data-i18n="lookup.colEmail">邮箱</th>
-                  <th scope="col">Role</th>
-                  <th scope="col">ASN</th>
+                  <th scope="col" data-i18n="lookup.colRole">Role</th>
+                  <th scope="col" data-i18n="lookup.colAsn">ASN</th>
                   <th scope="col" data-i18n="aiLeads.colSource">来源</th>
                   <th scope="col" data-i18n="contacts.colActions">操作</th>
                 </tr>
@@ -208,19 +218,19 @@
             <thead>
               <tr>
                 <th scope="col" class="col-select" data-i18n="lookup.colSelect">选</th>
-                <th scope="col">ASN</th>
+                <th scope="col" data-i18n="lookup.colAsn">ASN</th>
                 <th scope="col" data-i18n="lookup.colOrg">组织</th>
-                <th scope="col">Role</th>
+                <th scope="col" data-i18n="lookup.colRole">Role</th>
                 <th scope="col" data-i18n="lookup.colName">名称</th>
                 <th scope="col" class="col-email" data-i18n="lookup.colEmail">邮箱</th>
-                <th scope="col">Handle</th>
-                <th scope="col">RIR</th>
+                <th scope="col" data-i18n="lookup.colHandle">Handle</th>
+                <th scope="col" data-i18n="lookup.colRir">RIR</th>
                 <th scope="col" data-i18n="lookup.colStatus">状态</th>
               </tr>
             </thead>
             <tbody id="results-body">
               <tr class="empty-row">
-                <td colspan="9" data-i18n="lookup.emptyHint">—</td>
+                <td colspan="9" class="empty-state" data-i18n="lookup.emptyHint">在左侧输入 ASN 列表，点击「开始查询」</td>
               </tr>
             </tbody>
           </table>
@@ -285,14 +295,14 @@
                 <th scope="col" data-i18n="aiLeads.colSource">来源</th>
                 <th scope="col" data-i18n="lookup.colOrg">组织</th>
                 <th scope="col" data-i18n="lookup.colEmail">邮箱</th>
-                <th scope="col">Role</th>
-                <th scope="col">ASN</th>
+                <th scope="col" data-i18n="lookup.colRole">Role</th>
+                <th scope="col" data-i18n="lookup.colAsn">ASN</th>
                 <th scope="col" data-i18n="aiLeads.colReason">AI 理由</th>
               </tr>
             </thead>
             <tbody id="ai-leads-body">
               <tr class="empty-row">
-                <td colspan="8" data-i18n="aiLeads.emptyHint">—</td>
+                <td colspan="8" class="empty-state" data-i18n="aiLeads.emptyHint">描述目标线索，点击「在 Pi 助手中找线索」或「直接运行」</td>
               </tr>
             </tbody>
           </table>
@@ -449,7 +459,7 @@
 
     <section id="settings-view" class="settings-page hidden">
       <div class="settings-shell">
-        <nav class="settings-rail" id="settings-rail" aria-label="Settings">
+        <nav class="settings-rail" id="settings-rail" data-i18n-aria-label="settings.railLabel" aria-label="设置分类">
           <button type="button" class="settings-rail-item active" data-settings-cat="account">
             <span data-i18n="settings.cat.account">账号安全</span>
           </button>
@@ -498,6 +508,10 @@
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="ai">
+              <header class="settings-pane-head">
+                <h2 class="settings-pane-title" data-i18n="settings.cat.ai">AI 与搜索</h2>
+                <p class="settings-desc" data-i18n="settings.aiDesc">LLM 为必填；搜索渠道按需展开配置，未启用的渠道不会参与线索发现。</p>
+              </header>
               <fieldset>
                 <legend data-i18n="settings.llmRequired">LLM（AI 线索发现必填）</legend>
                 <label class="field"><span>API Key</span>
@@ -514,8 +528,11 @@
                   </select></label>
                 <p class="hint" data-i18n="settings.llmDeepseekHint">DeepSeek V4：Base URL 填 https://api.deepseek.com，Model 填 deepseek-v4-pro 或 deepseek-v4-flash。Pi 默认关闭思考模式以提高 Tool Calls 稳定性。</p>
               </fieldset>
+              <p class="settings-section-label" data-i18n="settings.channelsOptional">搜索渠道（可选）</p>
+              <details class="settings-channel-group" open>
+                <summary data-i18n="settings.zhipuWebSearch">智谱联网搜索（推荐）</summary>
               <fieldset>
-                <legend data-i18n="settings.zhipuWebSearch">智谱联网搜索（推荐）</legend>
+                <legend class="visually-hidden" data-i18n="settings.zhipuWebSearch">智谱联网搜索（推荐）</legend>
                 <label class="field"><span data-i18n="settings.zhipuApiKey">智谱 API Key</span>
                   <input id="setting-zhipu-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span data-i18n="settings.zhipuSearchEngine">搜索引擎</span>
@@ -526,8 +543,11 @@
                     <option value="search_pro_quark">search_pro_quark（夸克）</option>
                   </select></label>
               </fieldset>
+              </details>
+              <details class="settings-channel-group">
+                <summary data-i18n="settings.brightdataSerp">Bright Data Google SERP</summary>
               <fieldset>
-                <legend data-i18n="settings.brightdataSerp">Bright Data Google SERP</legend>
+                <legend class="visually-hidden" data-i18n="settings.brightdataSerp">Bright Data Google SERP</legend>
                 <label class="field"><span data-i18n="settings.brightdataApiKey">Bright Data API Key</span>
                   <input id="setting-brightdata-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span data-i18n="settings.brightdataSerpZone">SERP Zone 名称</span>
@@ -542,8 +562,11 @@
                     <option value="raw">raw（HTML）</option>
                   </select></label>
               </fieldset>
+              </details>
+              <details class="settings-channel-group">
+                <summary data-i18n="settings.brightdataWebUnlocker">Bright Data Web Unlocker</summary>
               <fieldset>
-                <legend data-i18n="settings.brightdataWebUnlocker">Bright Data Web Unlocker</legend>
+                <legend class="visually-hidden" data-i18n="settings.brightdataWebUnlocker">Bright Data Web Unlocker</legend>
                 <p class="hint" data-i18n="settings.brightdataWebUnlockerHint">抓取 peering/contact 等页面正文（Markdown），补充 SERP snippet 为空的结果。与 SERP 共用 API Key，需单独创建 Web Unlocker Zone。</p>
                 <label class="field checkbox-field">
                   <input id="setting-brightdata-web-unlocker-enabled" type="checkbox">
@@ -554,8 +577,11 @@
                 <label class="field"><span data-i18n="settings.brightdataWebUnlockerMaxUrls">每轮最多抓取 URL 数</span>
                   <input id="setting-brightdata-web-unlocker-max-urls" type="number" min="1" max="12" step="1" value="6"></label>
               </fieldset>
+              </details>
+              <details class="settings-channel-group">
+                <summary data-i18n="settings.brightdataSocial">Bright Data 社交媒体 Profiles</summary>
               <fieldset>
-                <legend data-i18n="settings.brightdataSocial">Bright Data 社交媒体 Profiles</legend>
+                <legend class="visually-hidden" data-i18n="settings.brightdataSocial">Bright Data 社交媒体 Profiles</legend>
                 <label class="field checkbox-field">
                   <input id="setting-brightdata-linkedin-enabled" type="checkbox">
                   <span data-i18n="settings.brightdataLinkedinEnabled">启用 LinkedIn 渠道</span>
@@ -575,8 +601,11 @@
                 <label class="field"><span data-i18n="settings.brightdataFacebookDataset">Facebook Dataset ID</span>
                   <input id="setting-brightdata-facebook-dataset" type="text" data-i18n-placeholder="settings.datasetIdPlaceholder" placeholder=""></label>
               </fieldset>
+              </details>
+              <details class="settings-channel-group">
+                <summary data-i18n="settings.hostingForums">主机论坛渠道</summary>
               <fieldset>
-                <legend data-i18n="settings.hostingForums">主机论坛渠道</legend>
+                <legend class="visually-hidden" data-i18n="settings.hostingForums">主机论坛渠道</legend>
                 <p class="hint" data-i18n="settings.hostingForumsHint">LowEndTalk 可直连站内搜索；WebHostingTalk 受 Cloudflare 保护，站内搜索需 Web Unlocker，两者都会额外做 site: 搜索引擎查询。</p>
                 <label class="field checkbox-field">
                   <input id="setting-lowendtalk-enabled" type="checkbox">
@@ -587,8 +616,11 @@
                   <span data-i18n="settings.webhostingtalkEnabled">启用 WebHostingTalk</span>
                 </label>
               </fieldset>
+              </details>
+              <details class="settings-channel-group">
+                <summary data-i18n="settings.shodan">Shodan</summary>
               <fieldset>
-                <legend data-i18n="settings.shodan">Shodan</legend>
+                <legend class="visually-hidden" data-i18n="settings.shodan">Shodan</legend>
                 <label class="field checkbox-field">
                   <input id="setting-shodan-enabled" type="checkbox">
                   <span data-i18n="settings.shodanEnabled">启用 Shodan 渠道</span>
@@ -596,8 +628,11 @@
                 <label class="field"><span data-i18n="settings.shodanApiKey">Shodan API Key</span>
                   <input id="setting-shodan-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
               </fieldset>
+              </details>
+              <details class="settings-channel-group">
+                <summary data-i18n="settings.searchApiOptional">其他搜索引擎 API（可选）</summary>
               <fieldset>
-                <legend data-i18n="settings.searchApiOptional">其他搜索引擎 API（可选）</legend>
+                <legend class="visually-hidden" data-i18n="settings.searchApiOptional">其他搜索引擎 API（可选）</legend>
                 <label class="field"><span>Tavily API Key</span>
                   <input id="setting-tavily-api-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
                 <label class="field"><span>SerpAPI Key</span>
@@ -605,6 +640,7 @@
                 <label class="field"><span>Brave Search API Key</span>
                   <input id="setting-brave-search-key" type="password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
               </fieldset>
+              </details>
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="import">
@@ -702,19 +738,19 @@
       <div class="stats-charts">
         <div class="stats-chart-panel">
           <h3 data-i18n="stats.followUp">跟进状态</h3>
-          <div id="chart-follow-up" class="bar-chart"></div>
+          <div id="chart-follow-up" class="bar-chart" role="img" data-i18n-aria-label="stats.chartFollowUp" aria-label="跟进状态分布图"></div>
         </div>
         <div class="stats-chart-panel">
           <h3 data-i18n="stats.sentStatus">发信状态</h3>
-          <div id="chart-sent" class="bar-chart"></div>
+          <div id="chart-sent" class="bar-chart" role="img" data-i18n-aria-label="stats.chartSent" aria-label="发信状态分布图"></div>
         </div>
         <div class="stats-chart-panel">
           <h3 data-i18n="stats.sourceDist">来源分布</h3>
-          <div id="chart-source" class="bar-chart"></div>
+          <div id="chart-source" class="bar-chart" role="img" data-i18n-aria-label="stats.chartSource" aria-label="来源分布图"></div>
         </div>
         <div class="stats-chart-panel">
           <h3 data-i18n="stats.recentImports">近期导入（按日）</h3>
-          <div id="chart-recent" class="bar-chart"></div>
+          <div id="chart-recent" class="bar-chart" role="img" data-i18n-aria-label="stats.chartRecent" aria-label="近期导入趋势图"></div>
         </div>
       </div>
     </section>
@@ -803,7 +839,7 @@
       </div>
 
       <div class="contacts-table-shell">
-      <div class="table-wrap contacts-table-wrap" tabindex="0" aria-label="Contacts table">
+      <div class="table-wrap contacts-table-wrap" tabindex="0" data-i18n-aria-label="page.contacts.title" aria-label="联系人列表">
         <table class="contacts-table">
           <thead>
             <tr>
@@ -812,8 +848,8 @@
               <th scope="col" class="col-org" data-i18n="lookup.colOrg">组织</th>
               <th scope="col" class="col-name" data-i18n="lookup.colName">名称</th>
               <th scope="col" class="col-email" data-i18n="lookup.colEmail">邮箱</th>
-              <th scope="col" class="col-role">Role</th>
-              <th scope="col" class="col-asn">ASN</th>
+              <th scope="col" class="col-role" data-i18n="lookup.colRole">Role</th>
+              <th scope="col" class="col-asn" data-i18n="lookup.colAsn">ASN</th>
               <th scope="col" class="col-source" data-i18n="aiLeads.colSource">来源</th>
               <th scope="col" class="col-notes" data-i18n="contacts.colNotes">备注</th>
               <th scope="col" class="col-imported" data-i18n="contacts.colImportedAt">导入时间</th>
@@ -904,6 +940,53 @@
         </div>
       </div>
     </section>
+      </div>
+    </div>
+
+    <nav class="app-mobile-nav" data-i18n-aria-label="nav.ariaMobile" aria-label="底部导航">
+      <button type="button" class="tab mobile-nav-item active" data-view="workbench">
+        <span class="mobile-nav-icon" aria-hidden="true">WB</span>
+        <span class="mobile-nav-label" data-i18n="nav.workbench">工作台</span>
+      </button>
+      <button type="button" class="tab mobile-nav-item" data-view="contacts">
+        <span class="mobile-nav-icon" aria-hidden="true">@</span>
+        <span class="mobile-nav-label" data-i18n="nav.contacts">联系人</span>
+      </button>
+      <button type="button" class="tab mobile-nav-item" data-view="lookup">
+        <span class="mobile-nav-icon" aria-hidden="true">RD</span>
+        <span class="mobile-nav-label" data-i18n="nav.lookup">ASN</span>
+      </button>
+      <button type="button" class="tab mobile-nav-item" data-view="pi-agent">
+        <span class="mobile-nav-icon" aria-hidden="true">π</span>
+        <span class="mobile-nav-label" data-i18n="nav.piAgent">Pi</span>
+      </button>
+      <button type="button" class="mobile-nav-more" id="mobile-nav-more-btn" aria-expanded="false" aria-controls="mobile-nav-more-panel">
+        <span class="mobile-nav-icon" aria-hidden="true">···</span>
+        <span class="mobile-nav-label" data-i18n="nav.more">更多</span>
+      </button>
+    </nav>
+
+    <div id="mobile-nav-more-panel" class="mobile-nav-more-panel hidden" role="dialog" aria-modal="true" data-i18n-aria-label="nav.more" aria-label="更多">
+      <div class="mobile-nav-more-backdrop" data-close-mobile-nav-more></div>
+      <div class="mobile-nav-more-sheet">
+        <header class="mobile-nav-more-header">
+          <h2 data-i18n="nav.more">更多</h2>
+          <button type="button" class="secondary-btn" data-close-mobile-nav-more data-i18n="common.close">关闭</button>
+        </header>
+        <div class="mobile-nav-more-list">
+          <button type="button" class="tab mobile-nav-overflow-item" data-view="ai-leads">
+            <span data-i18n="nav.aiLeads">AI 线索</span>
+          </button>
+          <button type="button" class="tab mobile-nav-overflow-item" data-view="schedules">
+            <span data-i18n="nav.schedules">定时任务</span>
+          </button>
+          <button type="button" class="tab mobile-nav-overflow-item" data-view="stats">
+            <span data-i18n="nav.stats">统计</span>
+          </button>
+          <button type="button" class="tab mobile-nav-overflow-item" data-view="settings">
+            <span data-i18n="nav.settings">设置</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>

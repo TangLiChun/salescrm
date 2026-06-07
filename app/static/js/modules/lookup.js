@@ -46,7 +46,7 @@ export function renderRows() {
     if (rows.length === 0) {
         const tr = document.createElement("tr");
         tr.className = "empty-row";
-        tr.innerHTML = `<td colspan="9">${state.allRows.length ? t("msg.filterNoResults") : t("lookup.emptyHint")}</td>`;
+        tr.innerHTML = `<td colspan="9" class="empty-state">${state.allRows.length ? t("msg.filterNoResults") : t("lookup.emptyHint")}</td>`;
         resultsBody.appendChild(tr);
         updateStats();
         importBtn.disabled = getSelectedImportableRows().length === 0;
