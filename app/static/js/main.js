@@ -45,11 +45,9 @@ jobsPanelEl?.addEventListener("click", (event) => {
 contactEditModal?.addEventListener("modal:escape", () => closeContactEdit());
 contactNotesModal?.addEventListener("modal:escape", () => closeContactNotes());
 leadDetailModal?.addEventListener("modal:escape", () => closeLeadDetail());
+jobsPanelEl?.addEventListener("modal:escape", () => closeJobsPanel());
 document.addEventListener("keydown", (event) => {
     handleModalKeydown(event);
-    if (event.key === "Escape" && jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
-        closeJobsPanel();
-    }
 });
 lookupBtn.addEventListener("click", runLookup);
 piChatForm?.addEventListener("submit", (event) => {

@@ -6,6 +6,7 @@ import { api, escapeHtml, errorMessage } from "../core/utils.js";
 import { replayAnimation, staggerChildren } from "../core/motion.js";
 import { notifySuccess, notifyError, notifyInfo, jobTypeLabel, jobStatusLabel, formatJobTime, } from "../core/toast.js";
 import { setProgressFill } from "../core/progress.js";
+import { closeModal, isModalOpen, openModal } from "../core/modal.js";
 const { backgroundJobsBar, jobsPanelEl, jobsPanelListEl, progressEl, progressFill, progressText, exportBtn, importBtn, aiProgressEl, } = dom;
 export const backgroundJobTrackers = new Map();
 let jobsEventSource = null;
@@ -67,13 +68,13 @@ function renderJobPanelItem(job) {
 export function openJobsPanel() {
     if (!jobsPanelEl)
         return;
-    jobsPanelEl.classList.remove("hidden");
+    openModal(jobsPanelEl, { initialFocus: "[data-close-jobs-panel]" });
     replayAnimation(jobsPanelEl.querySelector(".jobs-panel-backdrop"), "motion-fade-in");
     replayAnimation(jobsPanelEl.querySelector(".jobs-panel-sheet"), "motion-sheet-enter");
     loadJobsPanelList().catch(() => { });
 }
 export function closeJobsPanel() {
-    jobsPanelEl?.classList.add("hidden");
+    closeModal(jobsPanelEl);
 }
 export async function loadJobsPanelList() {
     if (!jobsPanelListEl)
@@ -111,7 +112,7 @@ export function initJobsPanelHandlers() {
 }
 export async function cancelBackgroundJob(jobId) {
     cancellingJobIds.add(jobId);
-    if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+    if (isModalOpen(jobsPanelEl)) {
         loadJobsPanelList().catch(() => { });
     }
     try {
@@ -350,7 +351,7 @@ export function finishBackgroundJob(job) {
     }
     backgroundJobTrackers.delete(job.id);
     renderBackgroundJobsBar();
-    if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+    if (isModalOpen(jobsPanelEl)) {
         loadJobsPanelList().catch(() => { });
     }
 }
@@ -364,7 +365,7 @@ export async function pollBackgroundJob(jobId) {
         if (entry)
             entry.job = job;
         renderBackgroundJobsBar();
-        if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+        if (isModalOpen(jobsPanelEl)) {
             loadJobsPanelList().catch(() => { });
         }
         if (isTerminalJobStatus(job.status)) {
@@ -460,7 +461,7 @@ function handleJobEvent(job) {
         return;
     entry.job = job;
     renderBackgroundJobsBar();
-    if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+    if (isModalOpen(jobsPanelEl)) {
         loadJobsPanelList().catch(() => { });
     }
     if (isTerminalJobStatus(job.status)) {

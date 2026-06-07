@@ -8,7 +8,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -23,6 +23,7 @@ from app.agent_chat import (
     try_acquire_pi_thread,
 )
 from app.agent_routes import router as agent_router
+from app.pi_internal_routes import router as pi_internal_router
 from app.auth import (
     SESSION_USER_KEY,
     CurrentUser,
@@ -156,6 +157,7 @@ app.add_middleware(
 )
 app.mount("/static", VersionedStaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(agent_router)
+app.include_router(pi_internal_router)
 
 
 class LookupRequest(BaseModel):
@@ -327,6 +329,70 @@ def _sanitize_agent_history(history: list[dict[str, Any]]) -> list[dict[str, Any
             if name:
                 cleaned.append({"role": "tool", "name": name, "summary": summary})
     return cleaned
+
+
+def _pi_agent_service_url() -> str:
+    return os.environ.get("PI_AGENT_SERVICE_URL", "").strip().rstrip("/")
+
+
+def _pi_internal_secret() -> str:
+    return os.environ.get("PI_INTERNAL_SECRET", "").strip()
+
+
+async def _proxy_pi_agent_stream_events(
+    user_id: int,
+    body: "AgentChatRequest",
+    *,
+    cancel_check,
+) -> AsyncIterator[dict[str, Any]]:
+    import httpx
+
+    url = f"{_pi_agent_service_url()}/stream"
+    secret = _pi_internal_secret()
+    if not secret:
+        yield {"type": "error", "message": "Pi agent 服务未配置 PI_INTERNAL_SECRET"}
+        yield {"type": "done"}
+        return
+
+    payload = {
+        "user_id": user_id,
+        "message": body.message,
+        "thread_id": body.thread_id,
+        "history": _sanitize_agent_history(body.history),
+    }
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream(
+            "POST",
+            url,
+            json=payload,
+            headers={"X-Internal-Secret": secret},
+        ) as resp:
+            if resp.status_code >= 400:
+                detail = (await resp.aread()).decode("utf-8", "replace")[:300]
+                yield {
+                    "type": "error",
+                    "message": f"Pi agent 服务错误 ({resp.status_code}): {detail}",
+                }
+                yield {"type": "done"}
+                return
+            async for line in resp.aiter_lines():
+                if cancel_check():
+                    yield {"type": "error", "message": "任务已停止"}
+                    yield {"type": "done"}
+                    return
+                stripped = line.strip()
+                if not stripped.startswith("data:"):
+                    continue
+                payload_line = stripped[5:].strip()
+                if not payload_line:
+                    continue
+                try:
+                    event = json.loads(payload_line)
+                except json.JSONDecodeError:
+                    continue
+                yield event
+                if event.get("type") == "done":
+                    return
 
 
 class PiThreadCreateRequest(BaseModel):
@@ -883,13 +949,22 @@ async def agent_chat_stream_route(
         errored = False
 
         try:
-            async for event in agent_chat_stream(
-                user_id,
-                body.message,
-                _sanitize_agent_history(body.history),
-                thread_id=thread_id,
-                cancel_check=lambda: disconnected["value"],
-            ):
+            stream_source = (
+                _proxy_pi_agent_stream_events(
+                    user_id,
+                    body,
+                    cancel_check=lambda: disconnected["value"],
+                )
+                if _pi_agent_service_url()
+                else agent_chat_stream(
+                    user_id,
+                    body.message,
+                    _sanitize_agent_history(body.history),
+                    thread_id=thread_id,
+                    cancel_check=lambda: disconnected["value"],
+                )
+            )
+            async for event in stream_source:
                 entry = history_entry_from_agent_event(event)
                 if entry:
                     new_entries.append(entry)

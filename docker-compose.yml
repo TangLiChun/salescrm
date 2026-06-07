@@ -33,6 +33,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salescrm}
       POSTGRES_DB: ${POSTGRES_DB:-salescrm}
       DATABASE_URL: postgresql://${POSTGRES_USER:-salescrm}:${POSTGRES_PASSWORD:-salescrm}@postgres:5432/${POSTGRES_DB:-salescrm}
+      PI_AGENT_SERVICE_URL: ${PI_AGENT_SERVICE_URL:-http://pi-agent:8001}
+      PI_INTERNAL_SECRET: ${PI_INTERNAL_SECRET:-change-me-in-production}
     volumes:
       # git pull 后重启容器即可生效，日常更新无需重建镜像
       - ./app:/app/app:ro
@@ -52,6 +54,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  pi-agent:
+    build: ./services/pi-agent
+    container_name: salescrm-pi-agent
+    restart: unless-stopped
+    depends_on:
+      salescrm:
+        condition: service_healthy
+    environment:
+      PORT: "8001"
+      CRM_INTERNAL_URL: http://salescrm:8000
+      PI_INTERNAL_SECRET: ${PI_INTERNAL_SECRET:-change-me-in-production}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8001/health').then(r=>r.json()).then(d=>process.exit(d.ok?0:1)).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   salescrm_pgdata:

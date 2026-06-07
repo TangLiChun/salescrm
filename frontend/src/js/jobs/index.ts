@@ -13,6 +13,7 @@ import {
   formatJobTime,
 } from "../core/toast.js";
 import { setProgressFill } from "../core/progress.js";
+import { closeModal, isModalOpen, openModal } from "../core/modal.js";
 
 const {
   backgroundJobsBar,
@@ -98,14 +99,14 @@ function renderJobPanelItem(job) {
 
 export function openJobsPanel() {
   if (!jobsPanelEl) return;
-  jobsPanelEl.classList.remove("hidden");
+  openModal(jobsPanelEl, { initialFocus: "[data-close-jobs-panel]" });
   replayAnimation(jobsPanelEl.querySelector(".jobs-panel-backdrop"), "motion-fade-in");
   replayAnimation(jobsPanelEl.querySelector(".jobs-panel-sheet"), "motion-sheet-enter");
   loadJobsPanelList().catch(() => {});
 }
 
 export function closeJobsPanel() {
-  jobsPanelEl?.classList.add("hidden");
+  closeModal(jobsPanelEl);
 }
 
 export async function loadJobsPanelList() {
@@ -141,7 +142,7 @@ export function initJobsPanelHandlers() {
 
 export async function cancelBackgroundJob(jobId) {
   cancellingJobIds.add(jobId);
-  if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+  if (isModalOpen(jobsPanelEl)) {
     loadJobsPanelList().catch(() => {});
   }
   try {
@@ -380,7 +381,7 @@ export function finishBackgroundJob(job) {
   }
   backgroundJobTrackers.delete(job.id);
   renderBackgroundJobsBar();
-  if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+  if (isModalOpen(jobsPanelEl)) {
     loadJobsPanelList().catch(() => {});
   }
 }
@@ -393,7 +394,7 @@ export async function pollBackgroundJob(jobId) {
     const entry = backgroundJobTrackers.get(jobId);
     if (entry) entry.job = job;
     renderBackgroundJobsBar();
-    if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+    if (isModalOpen(jobsPanelEl)) {
       loadJobsPanelList().catch(() => {});
     }
     if (isTerminalJobStatus(job.status)) {
@@ -484,7 +485,7 @@ function handleJobEvent(job) {
   if (!entry) return;
   entry.job = job;
   renderBackgroundJobsBar();
-  if (jobsPanelEl && !jobsPanelEl.classList.contains("hidden")) {
+  if (isModalOpen(jobsPanelEl)) {
     loadJobsPanelList().catch(() => {});
   }
   if (isTerminalJobStatus(job.status)) {
