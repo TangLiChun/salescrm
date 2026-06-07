@@ -25,7 +25,7 @@ from app.agent_chat import (
     _tool_block_reason,
     append_user_turn_to_messages,
 )
-from app.llm import llm_configured, get_setting
+from app.llm import get_setting, llm_configured
 from app.pi_chat_store import (
     append_pi_thread_history_entries,
     compress_thread_context_until_current,
@@ -43,7 +43,9 @@ def _internal_secret() -> str:
 def _verify_internal(request: Request) -> None:
     secret = _internal_secret()
     if not secret:
-        raise HTTPException(status_code=503, detail="PI internal API disabled (no PI_INTERNAL_SECRET)")
+        raise HTTPException(
+            status_code=503, detail="PI internal API disabled (no PI_INTERNAL_SECRET)"
+        )
     if request.headers.get("X-Internal-Secret") != secret:
         raise HTTPException(status_code=403, detail="Forbidden")
 

@@ -36,7 +36,9 @@ def test_meaningful_content_keeps_markdown_link():
 
 def test_meaningful_content_keeps_leading_bracket_prose():
     # Short reply that starts with a bracketed label is prose, not a JSON fragment.
-    assert _meaningful_assistant_content("[已完成] 已导入 3 条线索。") == "[已完成] 已导入 3 条线索。"
+    assert (
+        _meaningful_assistant_content("[已完成] 已导入 3 条线索。") == "[已完成] 已导入 3 条线索。"
+    )
 
 
 def test_meaningful_content_keeps_reply_quoting_field_names():

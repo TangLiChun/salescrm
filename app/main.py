@@ -6,9 +6,10 @@ import json
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -23,7 +24,6 @@ from app.agent_chat import (
     try_acquire_pi_thread,
 )
 from app.agent_routes import router as agent_router
-from app.pi_internal_routes import router as pi_internal_router
 from app.auth import (
     SESSION_USER_KEY,
     CurrentUser,
@@ -92,6 +92,7 @@ from app.pi_chat_store import (
     sync_pi_threads_from_client,
     upsert_pi_thread,
 )
+from app.pi_internal_routes import router as pi_internal_router
 from app.scheduler import (
     get_scheduler_status,
     restart_scheduler,
@@ -341,7 +342,7 @@ def _pi_internal_secret() -> str:
 
 async def _proxy_pi_agent_stream_events(
     user_id: int,
-    body: "AgentChatRequest",
+    body: AgentChatRequest,
     *,
     cancel_check,
 ) -> AsyncIterator[dict[str, Any]]:
