@@ -9,6 +9,13 @@ from typing import Any
 
 from app.pi_tool_calls import _extract_json_args, _infer_tool_name, _prepare_tool_calls
 
+# Markers that unambiguously begin a machine tool-call payload leaking into the
+# assistant's text content. Kept deliberately narrow: only patterns that start a
+# JSON tool-call object/array or a known special-token block. Bare keys like
+# '"name":' or '"arguments"' and the old '\n['/startswith('[') heuristics were
+# removed because they silently truncate ordinary prose (markdown links, "[1]"
+# references, bracketed labels, JSON examples), which made the agent appear to
+# "reply a few words then stop".
 _TOOL_CONTENT_MARKERS = (
     "[{",
     "[工具",
@@ -17,16 +24,12 @@ _TOOL_CONTENT_MARKERS = (
     "tool_call",
     "dsml",
     "<|",
+    "<｜",
     "```json",
     '{"query',
     '{"queries',
-    '"queries"',
     '{"name"',
     '{"function"',
-    '"name":',
-    '"arguments"',
-    '"function":',
-    '"type": "function"',
 )
 
 
@@ -40,12 +43,6 @@ def _assistant_intro_before_tools(content: str) -> str:
         idx = lower.find(marker.lower())
         if idx >= 0:
             cut_at = min(cut_at, idx)
-    for pattern in ("\n[", "\r[", "\n[{", "\r[{"):
-        idx = text.find(pattern)
-        if idx >= 0:
-            cut_at = min(cut_at, idx)
-    if cut_at == len(text) and text.startswith("["):
-        cut_at = 0
     result = text[:cut_at].strip()
     if result.endswith("["):
         result = result[:-1].rstrip()
@@ -67,7 +64,10 @@ def _content_is_tool_json_fragment(content: str) -> bool:
         return True
     if re.fullmatch(r"[\[\{\(,]+", text):
         return True
-    if re.match(r"^[\[\{]", text) and len(text) < 24:
+    # Short JSON-looking fragment, e.g. '[{' or '{"q' — but NOT bracketed prose
+    # like "[已完成] 已导入 3 条线索。". Require a JSON opener right after the
+    # leading bracket/brace.
+    if re.match(r'^[\[\{]\s*["\[\{]', text) and len(text) < 24:
         return True
     return False
 

@@ -5,6 +5,12 @@ import {
   prepareToolCalls,
 } from "./toolCalls.js";
 
+// Markers that unambiguously begin a machine tool-call payload leaking into the
+// assistant's text content. Kept deliberately narrow: only patterns that start a
+// JSON tool-call object/array or a known special-token block. Bare keys like
+// '"name":' and the old '\n[' / startsWith('[') heuristics were removed because
+// they silently truncate ordinary prose (markdown links, "[1]" references,
+// bracketed labels, JSON examples) — the "reply a few words then stop" bug.
 const TOOL_CONTENT_MARKERS = [
   "[{",
   "[工具",
@@ -13,16 +19,12 @@ const TOOL_CONTENT_MARKERS = [
   "tool_call",
   "dsml",
   "<|",
+  "<｜",
   "```json",
   '{"query',
   '{"queries',
-  '"queries"',
   '{"name"',
   '{"function"',
-  '"name":',
-  '"arguments"',
-  '"function":',
-  '"type": "function"',
 ];
 
 export const EMPTY_RESPONSE_NUDGE =
@@ -46,11 +48,6 @@ export function assistantIntroBeforeTools(content: string): string {
     const idx = lower.indexOf(marker.toLowerCase());
     if (idx >= 0) cutAt = Math.min(cutAt, idx);
   }
-  for (const pattern of ["\n[", "\r[", "\n[{", "\r[{"]) {
-    const idx = text.indexOf(pattern);
-    if (idx >= 0) cutAt = Math.min(cutAt, idx);
-  }
-  if (cutAt === text.length && text.startsWith("[")) cutAt = 0;
   let result = text.slice(0, cutAt).trim();
   if (result.endsWith("[")) result = result.slice(0, -1).trimEnd();
   return result;
@@ -67,7 +64,9 @@ function contentIsToolJsonFragment(content: string): boolean {
   if (!text) return false;
   if (["[", "{", "(", "[{", "({"].includes(text)) return true;
   if (/^[\[\{\(,]+$/.test(text)) return true;
-  if (/^[\[\{]/.test(text) && text.length < 24) return true;
+  // Short JSON-looking fragment (e.g. '[{' or '{"q') — but NOT bracketed prose
+  // like "[已完成] 已导入 3 条线索。". Require a JSON opener after the bracket.
+  if (/^[\[\{]\s*["\[\{]/.test(text) && text.length < 24) return true;
   return false;
 }
 

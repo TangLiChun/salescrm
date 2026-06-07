@@ -11,7 +11,10 @@ import {
 } from "./replyHeuristics.js";
 import { extractToolCallsFromContent, prepareToolCalls } from "./toolCalls.js";
 
-const INTERRUPTED_RESPONSE_REASONS = new Set(["length", "insufficient_system_resource"]);
+// "length" is intentionally excluded: a length-capped reply usually carries
+// useful (if partial) content or valid tool_calls, so we surface it instead of
+// discarding the streamed text and retrying (which truncates again then fails).
+const INTERRUPTED_RESPONSE_REASONS = new Set(["insufficient_system_resource"]);
 const INTERRUPTED_RESPONSE_NUDGE =
   "（系统）上一轮模型输出被截断或上游推理资源中断。" +
   "请重新完成用户请求；需要工具时立即调用工具，不要只回复开场白。";

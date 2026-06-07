@@ -1374,6 +1374,10 @@ export function sanitizePiAssistantDisplay(text) {
     if (!raw)
         return "";
     const lower = raw.toLowerCase();
+    // Narrow markers that begin a leaked machine tool-call payload. Bare keys
+    // ('"name":' etc.) and the old "\n[" / startsWith("[") rules were removed:
+    // they truncated ordinary prose (markdown links, "[1]" lists, bracketed
+    // labels), which made replies appear cut off mid-stream.
     const markers = [
         "[{",
         "[工具",
@@ -1382,16 +1386,12 @@ export function sanitizePiAssistantDisplay(text) {
         "tool_call",
         "dsml",
         "<|",
+        "<｜",
         "```json",
         '{"query',
         '{"queries',
-        '"queries"',
         '{"name"',
         '{"function"',
-        '"name":',
-        '"arguments"',
-        '"function":',
-        '"type": "function"',
     ];
     let cutAt = raw.length;
     for (const marker of markers) {
@@ -1399,20 +1399,12 @@ export function sanitizePiAssistantDisplay(text) {
         if (idx >= 0)
             cutAt = Math.min(cutAt, idx);
     }
-    for (const pattern of ["\n[", "\r[", "\n[{", "\r[{"]) {
-        const idx = raw.indexOf(pattern);
-        if (idx >= 0)
-            cutAt = Math.min(cutAt, idx);
-    }
-    if (cutAt === raw.length && raw.trim().startsWith("[")) {
-        cutAt = 0;
-    }
     let trimmed = raw.slice(0, cutAt).trim();
     if (trimmed.endsWith("["))
         trimmed = trimmed.slice(0, -1).trim();
     if (!trimmed || /^[\[{(,]+$/.test(trimmed))
         return "";
-    if (/^[\[{]/.test(trimmed) && trimmed.length < 24)
+    if (/^[\[{]\s*["[{]/.test(trimmed) && trimmed.length < 24)
         return "";
     return trimmed;
 }

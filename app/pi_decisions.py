@@ -54,7 +54,12 @@ class Fail:
 
 Decision = EmitToolCalls | FinalReply | Retry | FallbackToolCalls | Fail
 
-_INTERRUPTED_RESPONSE_REASONS = {"length", "insufficient_system_resource"}
+# Only treat genuinely transient upstream interruptions as retryable. "length"
+# is intentionally NOT here: a length-capped response usually carries useful
+# (if partial) content or valid tool_calls, so we fall through and surface it
+# instead of discarding the streamed text and retrying (which just truncates
+# again and then fails — the classic "replies a few words then stops" bug).
+_INTERRUPTED_RESPONSE_REASONS = {"insufficient_system_resource"}
 _INTERRUPTED_RESPONSE_NUDGE = (
     "（系统）上一轮模型输出被截断或上游推理资源中断。"
     "请重新完成用户请求；需要工具时立即调用工具，不要只回复开场白。"

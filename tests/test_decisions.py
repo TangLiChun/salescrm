@@ -133,6 +133,35 @@ def test_empty_response_with_reasoning_is_not_empty():
     assert d.reason == "no_visible_content"
 
 
+def test_length_truncated_content_is_shown_not_discarded():
+    # Regression: finish_reason="length" used to discard the streamed partial and
+    # retry (truncating again) then fail. A length-capped reply with useful text
+    # must now be surfaced as the final reply.
+    d = decide_turn(
+        _assistant_with_finish("已为你找到 3 个联系人，分别是 Cox、GTT 和", "length"),
+        "已为你找到 3 个联系人，分别是 Cox、GTT 和",
+        user_message="找联系人",
+        history=[],
+        nudge_count=0,
+        max_nudges=2,
+    )
+    assert isinstance(d, FinalReply)
+    assert "3 个联系人" in d.text
+
+
+def test_length_truncated_tool_calls_still_execute():
+    d = decide_turn(
+        _assistant_with_finish("我来查", "length", tool_calls=[_valid_call()]),
+        "我来查",
+        user_message="找联系人",
+        history=[],
+        nudge_count=0,
+        max_nudges=2,
+    )
+    assert isinstance(d, EmitToolCalls)
+    assert d.prepared_calls[0][1] == "list_contacts"
+
+
 def test_interrupted_finish_reason_retries_instead_of_final_reply():
     d = decide_turn(
         _assistant_with_finish("我来帮你查一下", "insufficient_system_resource"),
