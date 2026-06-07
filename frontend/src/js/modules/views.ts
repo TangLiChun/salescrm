@@ -30,6 +30,42 @@ const VIEW_ELEMENTS = {
 
 const MOBILE_OVERFLOW_VIEWS = new Set(["ai-leads", "schedules", "stats", "settings"]);
 
+export const VALID_VIEWS = new Set([
+  "workbench",
+  "lookup",
+  "ai-leads",
+  "pi-agent",
+  "schedules",
+  "settings",
+  "contacts",
+  "stats",
+]);
+
+let suppressHashSync = false;
+
+export function getViewFromHash() {
+  const view = window.location.hash.replace(/^#/, "");
+  return VALID_VIEWS.has(view) ? view : "workbench";
+}
+
+function syncViewHash(view: string) {
+  if (suppressHashSync) return;
+  const targetHash = view === "workbench" ? "" : `#${view}`;
+  const current = window.location.hash;
+  if (current === targetHash || (view === "workbench" && !current)) return;
+  const url = `${window.location.pathname}${window.location.search}${targetHash}`;
+  window.history.replaceState(null, "", url);
+}
+
+export function initViewRouting() {
+  window.addEventListener("hashchange", () => {
+    const view = getViewFromHash();
+    suppressHashSync = true;
+    switchView(view, { updateHash: false });
+    suppressHashSync = false;
+  });
+}
+
 function animatePageTitle() {
   if (!pageTitle) return;
   replayAnimation(pageTitle, "title-enter");
@@ -59,11 +95,13 @@ function syncMobileNavMore(view: string) {
   closeMobileNavMore();
 }
 
-export function switchView(view) {
+export function switchView(view, { updateHash = true } = {}) {
+  if (!VALID_VIEWS.has(view)) view = "workbench";
   tabs.forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.view === view);
   });
   syncMobileNavMore(view);
+  if (updateHash) syncViewHash(view);
 
   workbenchView.classList.toggle("hidden", view !== "workbench");
   lookupView.classList.toggle("hidden", view !== "lookup");

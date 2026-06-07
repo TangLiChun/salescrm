@@ -101,7 +101,14 @@ import {
   handleLeadReviewSelection,
   handleLeadReviewAction,
 } from "./modules/workbench.js";
-import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore } from "./modules/views.js";
+import {
+  switchView,
+  refreshUiOnLanguageChange,
+  closeMobileNavMore,
+  openMobileNavMore,
+  getViewFromHash,
+  initViewRouting,
+} from "./modules/views.js";
 
 const {
   asnInput,
@@ -414,7 +421,22 @@ contactNotesModal.addEventListener("click", (event) => {
   }
 });
 
+function handleGotoView(btn: HTMLElement) {
+  const view = btn.dataset.gotoView;
+  if (!view) return;
+  if (view === "contacts") {
+    if (btn.dataset.contactStatus) contactStatusFilter.value = btn.dataset.contactStatus;
+    if (btn.dataset.contactFollowUp) contactFollowUpFilter.value = btn.dataset.contactFollowUp;
+    switchView("contacts");
+    loadContacts(true).catch(showApiError);
+    return;
+  }
+  switchView(view);
+}
+
 document.addEventListener("click", (event) => {
+  const gotoBtn = (event.target as HTMLElement).closest<HTMLElement>("[data-goto-view]");
+  if (gotoBtn) handleGotoView(gotoBtn);
   if (!event.target.closest(".contact-action-menu")) {
     closeAllContactActionMenus();
   }
@@ -562,8 +584,9 @@ async function bootstrap() {
   await loadSchedules().catch((error) => console.warn("Schedules load failed:", error));
   startJobEventStream();
   await resumeBackgroundJobs().catch((error) => console.warn("Job resume failed:", error));
-  document.body.classList.add("app-ready");
-  switchView("workbench");
+    document.body.classList.add("app-ready");
+    initViewRouting();
+    switchView(getViewFromHash());
 }
 
 bootstrap().catch((error) => {

@@ -14,7 +14,7 @@ import { createSchedule, loadSchedules, toggleSchedule, deleteSchedule, runSched
 import { saveSettings, regenerateAgentToken, copyAgentToken, changePassword, switchSettingsCat, resetLeadPreferences, } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
 import { loadWorkbench, importSelectedLeadReviews, handleLeadReviewSelection, handleLeadReviewAction, } from "./modules/workbench.js";
-import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore } from "./modules/views.js";
+import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore, getViewFromHash, initViewRouting, } from "./modules/views.js";
 const { asnInput, lookupBtn, exportBtn, importBtn, roleFilter, resultsBody, currentUserEl, logoutBtn, refreshWorkbenchBtn, leadReviewBody, importReviewedLeadsBtn, piChatForm, piChatInput, piChatStopBtn, piChatClearBtn, piThreadNewBtn, piThreadListEl, discoverBtn, discoverViaPiBtn, retryDiscoverBtn, importLeadsBtn, contactStatusFilter, contactFollowUpFilter, contactSearchInput, contactsPageSizeSelect, contactsPrevBtn, contactsNextBtn, contactsListViewBtn, contactsOrgViewBtn, contactsSelectAll, contactsBody, bulkApplyStatusBtn, bulkStatusSelect, bulkMarkSentBtn, bulkDeleteBtn, contactEditForm, contactEditModal, downloadBackupBtn, exportContactsBtn, dedupeContactsBtn, refreshContactsBtn, refreshSchedulesBtn, refreshStatsBtn, scheduleForm, scheduleRunModeInput, scheduleIntervalPreset, settingsForm, saveTemplateBtn, emailTemplatesListEl, contactNoteForm, contactNotesModal, tabs, aiLeadsBody, leadDetailModal, leadDetailImport, backgroundJobsBar, jobsPanelEl, leadQueryInput, scheduleQueryInput, } = dom;
 registerDeps({
     switchView,
@@ -261,7 +261,25 @@ contactNotesModal.addEventListener("click", (event) => {
         deleteContactNote(deleteBtn.dataset.noteId).catch(showApiError);
     }
 });
+function handleGotoView(btn) {
+    const view = btn.dataset.gotoView;
+    if (!view)
+        return;
+    if (view === "contacts") {
+        if (btn.dataset.contactStatus)
+            contactStatusFilter.value = btn.dataset.contactStatus;
+        if (btn.dataset.contactFollowUp)
+            contactFollowUpFilter.value = btn.dataset.contactFollowUp;
+        switchView("contacts");
+        loadContacts(true).catch(showApiError);
+        return;
+    }
+    switchView(view);
+}
 document.addEventListener("click", (event) => {
+    const gotoBtn = event.target.closest("[data-goto-view]");
+    if (gotoBtn)
+        handleGotoView(gotoBtn);
     if (!event.target.closest(".contact-action-menu")) {
         closeAllContactActionMenus();
     }
@@ -405,7 +423,8 @@ async function bootstrap() {
     startJobEventStream();
     await resumeBackgroundJobs().catch((error) => console.warn("Job resume failed:", error));
     document.body.classList.add("app-ready");
-    switchView("workbench");
+    initViewRouting();
+    switchView(getViewFromHash());
 }
 bootstrap().catch((error) => {
     console.error("Bootstrap failed:", error);

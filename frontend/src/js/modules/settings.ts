@@ -39,6 +39,9 @@ export function switchSettingsCat(cat) {
   if (!settingsView.classList.contains("hidden")) {
     pageTitle.textContent = t(SETTINGS_CAT_TITLE_KEYS[cat] || "page.settings.title");
   }
+  if (cat === "ai") {
+    api("/api/settings").then(renderAiSetupChecklist).catch(() => {});
+  }
   const pane = document.querySelector(`.settings-pane[data-settings-pane="${cat}"]`);
   replayAnimation(pane, "motion-pane-enter");
   if (cat === "import") {
@@ -196,6 +199,30 @@ export async function copyAgentToken() {
   document.getElementById("agent-token-status").textContent = t("msg.tokenCopied");
 }
 
+function renderAiSetupChecklist(data: AnyRecord) {
+  const panel = document.getElementById("settings-ai-checklist");
+  if (!panel) return;
+  const llmDone = Boolean(data.llm_api_key_configured);
+  const searchDone = Boolean(
+    data.zhipu_api_key_configured ||
+      data.brightdata_api_key_configured ||
+      data.tavily_api_key_configured ||
+      data.serpapi_key_configured ||
+      data.brave_search_key_configured,
+  );
+  const item = (done: boolean, doneKey: string, pendingKey: string) => `
+    <li class="settings-checklist-item ${done ? "is-done" : "is-pending"}">
+      <span class="settings-checklist-mark" aria-hidden="true">${done ? "✓" : "○"}</span>
+      <span>${escapeHtml(t(done ? doneKey : pendingKey))}</span>
+    </li>`;
+  panel.innerHTML = `
+    <p class="settings-checklist-title">${escapeHtml(t("settings.checklistTitle"))}</p>
+    <ul class="settings-checklist-list">
+      ${item(llmDone, "settings.checklistLlmDone", "settings.checklistLlmPending")}
+      ${item(searchDone, "settings.checklistSearchDone", "settings.checklistSearchPending")}
+    </ul>`;
+}
+
 export async function loadSettingsForm() {
   const data = await api("/api/settings");
   setInputValue("setting-default-admin-user", data.default_admin_user);
@@ -254,6 +281,7 @@ export async function loadSettingsForm() {
     el.placeholder = configured ? t("msg.apiKeyConfigured", { masked }) : t("msg.apiKeyNotConfigured");
   }
   settingsStatusEl.textContent = "";
+  renderAiSetupChecklist(data);
   if (state.activeSettingsCat === "import") {
     await loadLeadPreferences();
   }

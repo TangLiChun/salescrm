@@ -11,6 +11,22 @@ const {
   chartRecentEl,
 } = dom;
 
+type StatCardAction = {
+  contactStatus?: string;
+  contactFollowUp?: string;
+};
+
+function statCard(value: number | string, label: string, action: StatCardAction = {}) {
+  const attrs = ['data-goto-view="contacts"'];
+  if (action.contactStatus) attrs.push(`data-contact-status="${escapeHtml(action.contactStatus)}"`);
+  if (action.contactFollowUp) attrs.push(`data-contact-follow-up="${escapeHtml(action.contactFollowUp)}"`);
+  return `
+    <button type="button" class="stat-card stat-card-action" ${attrs.join(" ")}>
+      <strong>${escapeHtml(String(value ?? 0))}</strong>
+      <span>${escapeHtml(label)}</span>
+    </button>`;
+}
+
 export function renderBarChart(container: HTMLElement, items: AnyRecord[], { getLabel = (k: any) => k, colors }: AnyRecord = {}) {
   container.innerHTML = "";
   if (!items.length) {
@@ -38,12 +54,12 @@ export function renderDashboard(data: AnyRecord) {
     sent: data.sent,
     unsent: data.unsent,
   });
-  statsSummaryEl.innerHTML = `
-    <div class="stat-card"><strong>${data.total}</strong><span>${t("stats.totalContacts")}</span></div>
-    <div class="stat-card"><strong>${data.sent}</strong><span>${t("stats.sentEmails")}</span></div>
-    <div class="stat-card"><strong>${data.unsent}</strong><span>${t("stats.unsentEmails")}</span></div>
-    <div class="stat-card"><strong>${data.by_follow_up_status.interested || 0}</strong><span>${t("followUp.interested")}</span></div>
-  `;
+  statsSummaryEl.innerHTML = [
+    statCard(data.total, t("stats.totalContacts")),
+    statCard(data.sent, t("stats.sentEmails"), { contactStatus: "sent" }),
+    statCard(data.unsent, t("stats.unsentEmails"), { contactStatus: "unsent" }),
+    statCard(data.by_follow_up_status?.interested || 0, t("followUp.interested"), { contactFollowUp: "interested" }),
+  ].join("");
   renderBarChart(
     chartFollowUpEl,
     Object.entries(data.by_follow_up_status || {}).map(([key, count]) => ({ key, count })),

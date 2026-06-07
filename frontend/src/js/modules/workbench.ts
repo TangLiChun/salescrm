@@ -16,12 +16,33 @@ const {
   workbenchNewContactsEl,
 } = dom;
 
+type EmptyAction = {
+  view: string;
+  labelKey: string;
+  contactStatus?: string;
+  contactFollowUp?: string;
+};
+
 function metricCard(value, label, tone = "") {
   return `
     <div class="stat-card ${tone ? `stat-card-${tone}` : ""}">
       <strong>${escapeHtml(String(value ?? 0))}</strong>
       <span>${escapeHtml(label)}</span>
     </div>`;
+}
+
+function emptyStateHtml(message: string, actions: EmptyAction[] = []) {
+  const ctas = actions.length
+    ? `<div class="empty-state-ctas">${actions
+        .map((action) => {
+          const attrs = [`data-goto-view="${escapeHtml(action.view)}"`];
+          if (action.contactStatus) attrs.push(`data-contact-status="${escapeHtml(action.contactStatus)}"`);
+          if (action.contactFollowUp) attrs.push(`data-contact-follow-up="${escapeHtml(action.contactFollowUp)}"`);
+          return `<button type="button" class="secondary-btn empty-state-cta" ${attrs.join(" ")}>${escapeHtml(t(action.labelKey))}</button>`;
+        })
+        .join("")}</div>`
+    : "";
+  return `<div class="empty-state-block"><p class="stats">${escapeHtml(message)}</p>${ctas}</div>`;
 }
 
 function contactActionItem(contact) {
@@ -42,10 +63,10 @@ function contactActionItem(contact) {
     </div>`;
 }
 
-function renderActionList(container, items, emptyText) {
+function renderActionList(container, items, emptyText, emptyActions: EmptyAction[] = []) {
   if (!container) return;
   if (!items?.length) {
-    container.innerHTML = `<p class="stats">${escapeHtml(emptyText)}</p>`;
+    container.innerHTML = emptyStateHtml(emptyText, emptyActions);
     return;
   }
   container.innerHTML = items.map(contactActionItem).join("");
@@ -77,6 +98,12 @@ function reviewRow(review) {
     </tr>`;
 }
 
+const REVIEW_EMPTY_ACTIONS: EmptyAction[] = [
+  { view: "pi-agent", labelKey: "workbench.ctaPiLeads" },
+  { view: "ai-leads", labelKey: "workbench.ctaAiLeads" },
+  { view: "lookup", labelKey: "workbench.ctaAsnLookup" },
+];
+
 export function updateLeadReviewSelection() {
   const currentIds = new Set(state.leadReviews.map((item) => item.id));
   for (const id of [...state.selectedLeadReviewIds]) {
@@ -96,7 +123,7 @@ export function updateLeadReviewSelection() {
 export function renderLeadReviews() {
   if (!leadReviewBody) return;
   if (!state.leadReviews.length) {
-    leadReviewBody.innerHTML = `<tr class="empty-row"><td colspan="8">${escapeHtml(t("workbench.noReviewLeads"))}</td></tr>`;
+    leadReviewBody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">${emptyStateHtml(t("workbench.noReviewLeads"), REVIEW_EMPTY_ACTIONS)}</td></tr>`;
     updateLeadReviewSelection();
     return;
   }
@@ -119,8 +146,12 @@ export function renderWorkbench(data) {
   }
   state.leadReviews = data.review_items || [];
   renderLeadReviews();
-  renderActionList(workbenchFollowupsEl, data.followup_items || [], t("workbench.noFollowups"));
-  renderActionList(workbenchNewContactsEl, data.new_items || [], t("workbench.noNewContacts"));
+  renderActionList(workbenchFollowupsEl, data.followup_items || [], t("workbench.noFollowups"), [
+    { view: "contacts", labelKey: "workbench.ctaContacts" },
+  ]);
+  renderActionList(workbenchNewContactsEl, data.new_items || [], t("workbench.noNewContacts"), [
+    { view: "contacts", labelKey: "workbench.ctaUnsentContacts", contactStatus: "unsent" },
+  ]);
 }
 
 export async function loadWorkbench() {

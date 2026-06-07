@@ -247,6 +247,7 @@
           data-i18n-placeholder="aiLeads.queryPlaceholder"
           placeholder="例如：&#10;找美国大型 ISP 和有线电视运营商，需要 networking / peering 联系人&#10;找北美 CDN 和 cloud 基础网络公司&#10;找数据中心互联 peering 负责人邮箱"
         ></textarea>
+        <p class="hint ai-leads-hint" data-i18n="aiLeads.hint">推荐用 Pi 助手：同一套 AI 引擎，可对话追问、查 ASN、导入联系人，并保留聊天历史。</p>
 
         <div class="controls ai-controls">
           <label class="field">
@@ -512,6 +513,7 @@
                 <h2 class="settings-pane-title" data-i18n="settings.cat.ai">AI 与搜索</h2>
                 <p class="settings-desc" data-i18n="settings.aiDesc">LLM 为必填；搜索渠道按需展开配置，未启用的渠道不会参与线索发现。</p>
               </header>
+              <div id="settings-ai-checklist" class="settings-checklist" aria-live="polite"></div>
               <fieldset>
                 <legend data-i18n="settings.llmRequired">LLM（AI 线索发现必填）</legend>
                 <label class="field"><span>API Key</span>
@@ -677,6 +679,9 @@
                   <span data-i18n="settings.enableScheduler">启用后台定时任务</span></label>
                 <label class="field"><span data-i18n="settings.pollInterval">检查间隔（秒）</span>
                   <input id="setting-scheduler-poll-seconds" type="number" min="30" max="3600"></label>
+                <p class="settings-field-hint">
+                  <button type="button" class="link-btn" data-goto-view="schedules" data-i18n="settings.gotoSchedules">管理定时任务列表</button>
+                </p>
               </fieldset>
               <fieldset>
                 <legend data-i18n="settings.piAgentApi">Pi Agent API</legend>
@@ -729,6 +734,7 @@
         <div>
           <h2 data-i18n="stats.contactsTitle">联系人统计</h2>
           <p id="dashboard-stats" class="stats" data-i18n="common.loading">加载中…</p>
+          <p class="hint stats-drilldown-hint" data-i18n="stats.drillDownHint">点击数字卡片可跳转联系人并筛选</p>
         </div>
         <div class="results-actions">
           <button id="refresh-stats-btn" type="button" class="secondary-btn" data-i18n="common.refresh">刷新</button>
@@ -763,13 +769,14 @@
         </div>
         <div class="contacts-metric">
           <strong id="contacts-metric-sent">0</strong>
-          <span data-i18n="contacts.metricSent">本页已发信</span>
+          <span data-i18n="contacts.metricSent">已发信（当前页）</span>
         </div>
         <div class="contacts-metric">
           <strong id="contacts-metric-unsent">0</strong>
-          <span data-i18n="contacts.metricUnsent">本页未发信</span>
+          <span data-i18n="contacts.metricUnsent">未发信（当前页）</span>
         </div>
         <p id="contacts-stats" class="contacts-stats-line stats" data-i18n="common.loading">加载中…</p>
+        <p class="contacts-metric-note stats hint" data-i18n="contacts.metricPageNote">全库总数见左侧；已发/未发仅统计当前页</p>
       </div>
 
       <div class="contacts-toolbar">
