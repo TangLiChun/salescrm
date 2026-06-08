@@ -80,6 +80,7 @@ from app.database import (
     update_scheduled_job,
     update_user_password,
 )
+from app.email_sender import build_message, send_smtp
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.pi_chat_store import (
@@ -480,6 +481,45 @@ def reset_lead_preferences(user: CurrentUser) -> dict:
     from app.lead_preferences import reset_prefs
 
     return {"preferences": reset_prefs(user["id"]), "ok": True}
+
+
+class EmailTestRequest(BaseModel):
+    to: str
+    host: str = ""
+    port: str = "587"
+    security: str = "starttls"
+    username: str = ""
+    password: str = ""
+    from_name: str = ""
+    from_email: str = ""
+
+
+@app.post("/api/email/test")
+async def send_test_email(body: EmailTestRequest, user: CurrentUser) -> dict:
+    password = body.password.strip() or get_setting("smtp_password", "")
+    settings = {
+        "smtp_host": body.host.strip(),
+        "smtp_port": body.port.strip() or "587",
+        "smtp_security": body.security.strip() or "starttls",
+        "smtp_username": body.username.strip(),
+        "smtp_password": password,
+        "from_name": body.from_name.strip(),
+        "from_email": body.from_email.strip() or body.username.strip(),
+    }
+    if not settings["smtp_host"] or not settings["from_email"]:
+        raise HTTPException(status_code=400, detail="请先填写 SMTP 服务器与发件邮箱")
+    row = {
+        "to_email": body.to.strip(),
+        "subject": "Sales CRM SMTP 测试邮件",
+        "body_text": "这是一封来自 Sales CRM 的 SMTP 测试邮件，收到说明配置可用。",
+        "body_html": "<p>这是一封来自 Sales CRM 的 SMTP 测试邮件，收到说明配置可用。</p>",
+    }
+    try:
+        msg = build_message(settings, row)
+        await asyncio.to_thread(send_smtp, settings, msg)
+    except Exception as exc:  # noqa: BLE001 - surface SMTP errors to the operator
+        return {"ok": False, "error": str(exc)[:300]}
+    return {"ok": True}
 
 
 class PiRestorePrefsRequest(BaseModel):
