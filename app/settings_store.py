@@ -16,6 +16,7 @@ SECRET_KEYS = {
     "default_admin_password",
     "agent_api_token",
     "shodan_api_key",
+    "smtp_password",
 }
 
 DEFAULTS: dict[str, str] = {
@@ -53,6 +54,18 @@ DEFAULTS: dict[str, str] = {
     "import_blocklist": "",
     "import_allowlist": "",
     "agent_api_token": "",
+    "smtp_host": "",
+    "smtp_port": "587",
+    "smtp_security": "starttls",
+    "smtp_username": "",
+    "smtp_password": "",
+    "smtp_from_name": "",
+    "smtp_from_email": "",
+    "email_sender_enabled": "0",
+    "email_send_interval_minutes": "5",
+    "email_daily_cap": "50",
+    "email_active_start_hour": "9",
+    "email_active_end_hour": "18",
 }
 
 
