@@ -56,8 +56,11 @@ from app.database import (
     delete_contact_note,
     delete_email_template,
     delete_scheduled_job,
+    email_queued_addresses,
+    enqueue_email,
     get_contact,
     get_contact_stats,
+    get_email_template,
     get_scheduled_job,
     get_user_auth_by_id,
     get_workbench_summary,
@@ -80,6 +83,7 @@ from app.database import (
     update_scheduled_job,
     update_user_password,
 )
+from app.email_render import render_email
 from app.email_sender import build_message, send_smtp
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
@@ -520,6 +524,40 @@ async def send_test_email(body: EmailTestRequest, user: CurrentUser) -> dict:
     except Exception as exc:  # noqa: BLE001 - surface SMTP errors to the operator
         return {"ok": False, "error": str(exc)[:300]}
     return {"ok": True}
+
+
+class EmailQueueRequest(BaseModel):
+    contact_ids: list[int]
+    template_id: int
+    skip_sent: bool = True
+
+
+@app.post("/api/email/queue")
+async def queue_emails(body: EmailQueueRequest, user: CurrentUser) -> dict:
+    uid = user["id"]
+    template = get_email_template(uid, body.template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    already = email_queued_addresses(uid)
+    queued = 0
+    skipped = {"no_email": 0, "duplicate": 0, "already_sent": 0}
+    for cid in body.contact_ids:
+        contact = get_contact(uid, cid)
+        if not contact or not (contact.get("email") or "").strip():
+            skipped["no_email"] += 1
+            continue
+        email = contact["email"].strip()
+        if email.lower() in already:
+            skipped["duplicate"] += 1
+            continue
+        if body.skip_sent and contact.get("email_sent"):
+            skipped["already_sent"] += 1
+            continue
+        subject, text, html = render_email(template, contact)
+        enqueue_email(uid, cid, body.template_id, email, subject, text, html)
+        already.add(email.lower())
+        queued += 1
+    return {"queued": queued, "skipped": skipped}
 
 
 class PiRestorePrefsRequest(BaseModel):

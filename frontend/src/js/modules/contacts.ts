@@ -344,6 +344,56 @@ export async function bulkContactsAction(action, extra = {}) {
   return result;
 }
 
+export function openEnqueueModal() {
+  const ids = getSelectedContactIds();
+  if (ids.length === 0) {
+    notifyInfo(t("msg.selectContacts"));
+    return;
+  }
+  if (!state.emailTemplates.length) {
+    notifyInfo(t("msg.noTemplates"));
+    return;
+  }
+  const select = document.getElementById("email-queue-template");
+  select.innerHTML = "";
+  for (const template of state.emailTemplates) {
+    const option = document.createElement("option");
+    option.value = String(template.id);
+    option.textContent = template.name;
+    select.appendChild(option);
+  }
+  document.getElementById("email-queue-subtitle").textContent = t("email.queueSelected", {
+    n: ids.length,
+  });
+  openModal(document.getElementById("email-queue-modal"), {
+    initialFocus: "#email-queue-template",
+  });
+}
+
+export async function enqueueSelectedForSend() {
+  const contactIds = getSelectedContactIds();
+  if (!contactIds.length) {
+    notifyInfo(t("msg.selectContacts"));
+    return;
+  }
+  const templateId = Number(document.getElementById("email-queue-template").value);
+  if (!templateId) {
+    notifyInfo(t("msg.noTemplates"));
+    return;
+  }
+  const skipSent = document.getElementById("email-queue-skip-sent").checked;
+  const data = await api("/api/email/queue", {
+    method: "POST",
+    body: JSON.stringify({
+      contact_ids: contactIds,
+      template_id: templateId,
+      skip_sent: skipSent,
+    }),
+  });
+  closeModal(document.getElementById("email-queue-modal"));
+  showApiSuccess(t("email.queued", { n: data.queued }));
+}
+
 export function openContactEdit(contactId) {
   const contact = state.contacts.find((item) => String(item.id) === String(contactId));
   if (!contact) return;

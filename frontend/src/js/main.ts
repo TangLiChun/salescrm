@@ -4,7 +4,7 @@ import { state } from "./core/state.js";
 import { api, errorMessage } from "./core/utils.js";
 import { showApiError, showApiSuccess } from "./core/api-feedback.js";
 import { registerDeps } from "./core/deps.js";
-import { handleModalKeydown } from "./core/modal.js";
+import { closeModal, handleModalKeydown } from "./core/modal.js";
 import {
   startJobEventStream,
   resumeBackgroundJobs,
@@ -25,6 +25,8 @@ import {
 import {
   loadContacts,
   bulkContactsAction,
+  openEnqueueModal,
+  enqueueSelectedForSend,
   openContactEdit,
   closeContactEdit,
   saveContactEdit,
@@ -330,6 +332,18 @@ bulkDeleteBtn.addEventListener("click", () => {
   bulkContactsAction("delete")
     .then((result) => showApiSuccess(t("msg.bulkDeleted", { count: result.deleted })))
     .catch(showApiError);
+});
+document.getElementById("bulk-queue-btn")?.addEventListener("click", () => {
+  openEnqueueModal();
+});
+document.getElementById("email-queue-form")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  enqueueSelectedForSend().catch(showApiError);
+});
+document.getElementById("email-queue-modal")?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-queue]")) {
+    closeModal(document.getElementById("email-queue-modal"));
+  }
 });
 contactEditForm.addEventListener("submit", (event) => {
   saveContactEdit(event).catch(showApiError);

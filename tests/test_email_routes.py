@@ -42,3 +42,25 @@ async def test_email_test_uses_form_values_and_saved_password_fallback(monkeypat
     assert result["ok"] is True
     assert sent["settings"]["smtp_password"] == "SAVEDPASS"  # blank => saved fallback
     assert sent["to"] == "x@y.com"
+
+
+async def test_queue_renders_and_skips(monkeypatch):
+    contacts = {
+        1: {"id": 1, "email": "a@x.com", "name": "A", "org": "X"},
+        2: {"id": 2, "email": "", "name": "B"},  # no email -> skipped
+    }
+    enq = []
+    monkeypatch.setattr(main, "get_contact", lambda uid, cid: contacts.get(cid))
+    monkeypatch.setattr(
+        main,
+        "get_email_template",
+        lambda uid, tid: {"subject": "Hi {name}", "body": "**Yo** {org}"},
+    )
+    monkeypatch.setattr(main, "email_queued_addresses", lambda uid: set())
+    monkeypatch.setattr(main, "enqueue_email", lambda *a, **k: enq.append(a) or len(enq))
+    body = main.EmailQueueRequest(contact_ids=[1, 2], template_id=10, skip_sent=True)
+    result = await main.queue_emails(body, {"id": 1})
+    assert result["queued"] == 1
+    assert result["skipped"]["no_email"] == 1
+    # rendered subject/body present in the enqueue call
+    assert any("Hi A" in str(a) for a in enq[0])

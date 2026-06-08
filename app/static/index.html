@@ -882,6 +882,7 @@
         </label>
         <button id="bulk-apply-status-btn" type="button" class="secondary-btn" data-i18n="contacts.applyStatus">应用状态</button>
         <button id="bulk-mark-sent-btn" type="button" class="secondary-btn" data-i18n="contacts.bulkMarkSent">标记已发</button>
+        <button id="bulk-queue-btn" type="button" class="secondary-btn" data-i18n="contacts.addToQueue">加入发送队列</button>
         <button id="bulk-delete-btn" type="button" class="secondary-btn" data-i18n="contacts.bulkDelete">删除选中</button>
       </div>
 
@@ -968,6 +969,28 @@
               <textarea id="contact-edit-notes" rows="3"></textarea>
             </label>
             <button type="submit" class="primary-btn" data-i18n="common.save">保存</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="email-queue-modal" class="contact-notes-modal hidden" role="dialog" aria-modal="true" aria-labelledby="email-queue-title">
+        <div class="contact-notes-backdrop" data-close-queue></div>
+        <div class="contact-notes-dialog">
+          <div class="contact-notes-header">
+            <h3 id="email-queue-title" data-i18n="email.queueTitle">加入发送队列</h3>
+            <button type="button" class="secondary-btn" data-close-queue data-i18n="common.close">关闭</button>
+          </div>
+          <p id="email-queue-subtitle" class="contact-notes-subtitle"></p>
+          <form id="email-queue-form" class="contact-note-form">
+            <label class="field">
+              <span data-i18n="email.queueTemplate">邮件模板</span>
+              <select id="email-queue-template"></select>
+            </label>
+            <label class="field checkbox-field">
+              <input id="email-queue-skip-sent" type="checkbox" checked>
+              <span data-i18n="email.queueSkipSent">跳过已标记已发的联系人</span>
+            </label>
+            <button type="submit" class="primary-btn" data-i18n="email.queueConfirm">加入队列</button>
           </form>
         </div>
       </div>
