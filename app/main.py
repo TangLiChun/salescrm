@@ -84,7 +84,7 @@ from app.database import (
     update_user_password,
 )
 from app.email_render import render_email
-from app.email_sender import build_message, send_smtp
+from app.email_sender import build_message, send_smtp, start_email_sender, stop_email_sender
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
 from app.pi_chat_store import (
@@ -147,7 +147,9 @@ async def lifespan(_: FastAPI):
     init_db()
     await recover_background_jobs_on_startup()
     await start_scheduler()
+    await start_email_sender()
     yield
+    await stop_email_sender()
     await stop_scheduler()
 
 

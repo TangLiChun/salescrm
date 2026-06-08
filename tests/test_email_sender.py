@@ -67,3 +67,45 @@ def test_send_smtp_starttls_path(monkeypatch):
     email_sender.send_smtp(settings, msg)
     kinds = [c[0] for c in calls]
     assert kinds == ["ctor", "starttls", "login", "send", "quit"]
+
+
+def test_sender_tick_respects_gates(monkeypatch):
+    from app import email_sender as es
+
+    # settings: enabled, interval 5, cap 50, hours 0-0 (24h)
+    settings = {
+        "email_sender_enabled": "1",
+        "email_send_interval_minutes": "5",
+        "email_daily_cap": "50",
+        "email_active_start_hour": "0",
+        "email_active_end_hour": "0",
+        "smtp_host": "h",
+        "smtp_from_email": "o@a.com",
+    }
+    claimed = {
+        "row": {
+            "id": 1,
+            "user_id": 1,
+            "to_email": "x@y.com",
+            "subject": "s",
+            "body_text": "t",
+            "body_html": "",
+            "contact_id": 5,
+            "attempts": 0,
+        }
+    }
+    actions = []
+    monkeypatch.setattr(es, "get_settings", lambda: settings)
+    monkeypatch.setattr(es, "count_sent_emails_today", lambda uid=None: 0)
+    monkeypatch.setattr(es, "last_sent_email_at", lambda uid=None: None)
+    monkeypatch.setattr(es, "claim_next_queued_email", lambda: claimed["row"])
+    monkeypatch.setattr(es, "send_smtp", lambda s, m: actions.append("sent"))
+    monkeypatch.setattr(es, "mark_email_sent", lambda eid: actions.append(("done", eid)))
+    monkeypatch.setattr(
+        es, "mark_contact_sent", lambda uid, cid, sent=True: actions.append(("contact", cid))
+    )
+
+    import asyncio
+
+    asyncio.run(es.sender_tick())
+    assert "sent" in actions and ("done", 1) in actions and ("contact", 5) in actions
