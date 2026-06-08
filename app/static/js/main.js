@@ -13,6 +13,7 @@ import { sendPiChat, stopPiChat, clearPiChat, createPiThread, switchPiThread, de
 import { createSchedule, loadSchedules, toggleSchedule, deleteSchedule, runScheduleNow, updateScheduleFormMode, } from "./modules/schedules.js";
 import { saveSettings, regenerateAgentToken, copyAgentToken, changePassword, switchSettingsCat, resetLeadPreferences, sendSmtpTest, } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
+import { loadOutbox, toggleSender, outboxAction } from "./modules/outbox.js";
 import { loadWorkbench, importSelectedLeadReviews, handleLeadReviewSelection, handleLeadReviewAction, } from "./modules/workbench.js";
 import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore, getViewFromHash, initViewRouting, } from "./modules/views.js";
 const { asnInput, lookupBtn, exportBtn, importBtn, roleFilter, resultsBody, currentUserEl, logoutBtn, refreshWorkbenchBtn, leadReviewBody, importReviewedLeadsBtn, piChatForm, piChatInput, piChatStopBtn, piChatClearBtn, piThreadNewBtn, piThreadListEl, discoverBtn, discoverViaPiBtn, retryDiscoverBtn, importLeadsBtn, contactStatusFilter, contactFollowUpFilter, contactSearchInput, contactsPageSizeSelect, contactsPrevBtn, contactsNextBtn, contactsListViewBtn, contactsOrgViewBtn, contactsSelectAll, contactsBody, bulkApplyStatusBtn, bulkStatusSelect, bulkMarkSentBtn, bulkDeleteBtn, contactEditForm, contactEditModal, downloadBackupBtn, exportContactsBtn, dedupeContactsBtn, refreshContactsBtn, refreshSchedulesBtn, refreshStatsBtn, scheduleForm, scheduleRunModeInput, scheduleIntervalPreset, settingsForm, saveTemplateBtn, emailTemplatesListEl, contactNoteForm, contactNotesModal, tabs, aiLeadsBody, leadDetailModal, leadDetailImport, backgroundJobsBar, jobsPanelEl, leadQueryInput, scheduleQueryInput, } = dom;
@@ -229,6 +230,21 @@ document.getElementById("copy-agent-token-btn")?.addEventListener("click", () =>
 });
 document.getElementById("smtp-test-btn")?.addEventListener("click", () => {
     sendSmtpTest().catch(() => { });
+});
+document.getElementById("refresh-outbox-btn")?.addEventListener("click", () => {
+    loadOutbox().catch(showApiError);
+});
+document.getElementById("outbox-status-filter")?.addEventListener("change", () => {
+    loadOutbox().catch(showApiError);
+});
+document.getElementById("outbox-sender-toggle")?.addEventListener("click", () => {
+    toggleSender().catch(showApiError);
+});
+document.getElementById("outbox-body")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-outbox-action]");
+    if (!btn)
+        return;
+    outboxAction(btn.dataset.outboxAction, Number(btn.dataset.id)).catch(showApiError);
 });
 document.getElementById("reset-lead-prefs-btn")?.addEventListener("click", () => {
     resetLeadPreferences().catch(showApiError);

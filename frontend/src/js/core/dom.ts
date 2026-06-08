@@ -49,6 +49,7 @@ export const piChatProgressText = document.getElementById("pi-chat-progress-text
 export const piChatJumpBtn = document.getElementById("pi-chat-jump");
 export const piChatStatusLiveEl = document.getElementById("pi-chat-status-live");
 export const schedulesView = document.getElementById("schedules-view");
+export const outboxView = document.getElementById("outbox-view");
 export const contactsView = document.getElementById("contacts-view");
 export const statsView = document.getElementById("stats-view");
 export const dashboardStatsEl = document.getElementById("dashboard-stats");

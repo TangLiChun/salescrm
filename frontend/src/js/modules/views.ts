@@ -4,6 +4,12 @@ import { state } from "../core/state.js";
 import { replayAnimation } from "../core/motion.js";
 import { switchSettingsCat } from "./settings.js";
 import { loadSchedules, startSchedulesAutoRefresh, stopSchedulesAutoRefresh } from "./schedules.js";
+import {
+  loadOutbox,
+  refreshSenderState,
+  startOutboxAutoRefresh,
+  stopOutboxAutoRefresh,
+} from "./outbox.js";
 import { loadStats } from "./stats.js";
 import { loadContacts, renderContacts, renderMailTemplateSelect, renderEmailTemplatesList, loadEmailTemplates } from "./contacts.js";
 import { loadSettingsForm } from "./settings.js";
@@ -15,7 +21,7 @@ import { loadWorkbench } from "./workbench.js";
 import { renderBackgroundJobsBar } from "../jobs/index.js";
 import { showApiError } from "../core/api-feedback.js";
 
-const { tabs, workbenchView, lookupView, aiLeadsView, piAgentView, schedulesView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
+const { tabs, workbenchView, lookupView, aiLeadsView, piAgentView, schedulesView, outboxView, settingsView, contactsView, statsView, pageTitle, statsEl } = dom;
 
 const VIEW_ELEMENTS = {
   workbench: workbenchView,
@@ -23,12 +29,13 @@ const VIEW_ELEMENTS = {
   "ai-leads": aiLeadsView,
   "pi-agent": piAgentView,
   schedules: schedulesView,
+  outbox: outboxView,
   settings: settingsView,
   contacts: contactsView,
   stats: statsView,
 };
 
-const MOBILE_OVERFLOW_VIEWS = new Set(["ai-leads", "schedules", "stats", "settings"]);
+const MOBILE_OVERFLOW_VIEWS = new Set(["ai-leads", "schedules", "outbox", "stats", "settings"]);
 
 export const VALID_VIEWS = new Set([
   "workbench",
@@ -36,6 +43,7 @@ export const VALID_VIEWS = new Set([
   "ai-leads",
   "pi-agent",
   "schedules",
+  "outbox",
   "settings",
   "contacts",
   "stats",
@@ -108,6 +116,7 @@ export function switchView(view, { updateHash = true } = {}) {
   aiLeadsView.classList.toggle("hidden", view !== "ai-leads");
   piAgentView.classList.toggle("hidden", view !== "pi-agent");
   schedulesView.classList.toggle("hidden", view !== "schedules");
+  outboxView.classList.toggle("hidden", view !== "outbox");
   settingsView.classList.toggle("hidden", view !== "settings");
   contactsView.classList.toggle("hidden", view !== "contacts");
   statsView.classList.toggle("hidden", view !== "stats");
@@ -132,6 +141,11 @@ export function switchView(view, { updateHash = true } = {}) {
     pageTitle.textContent = t("page.schedules.title");
     loadSchedules().catch(showApiError);
     startSchedulesAutoRefresh();
+  } else if (view === "outbox") {
+    pageTitle.textContent = t("page.outbox.title");
+    refreshSenderState().catch(() => {});
+    loadOutbox().catch(showApiError);
+    startOutboxAutoRefresh();
   } else if (view === "settings") {
     switchSettingsCat(state.activeSettingsCat);
     loadSettingsForm().catch(showApiError);
@@ -146,6 +160,9 @@ export function switchView(view, { updateHash = true } = {}) {
   }
   if (view !== "schedules") {
     stopSchedulesAutoRefresh();
+  }
+  if (view !== "outbox") {
+    stopOutboxAutoRefresh();
   }
 }
 

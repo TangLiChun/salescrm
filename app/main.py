@@ -74,12 +74,14 @@ from app.database import (
     list_email_templates,
     list_job_runs,
     list_lead_reviews,
+    list_outbox,
     list_scheduled_jobs,
     mark_contact_sent,
     update_contact,
     update_contact_follow_up_status,
     update_email_template,
     update_lead_review_status,
+    update_outbox_status,
     update_scheduled_job,
     update_user_password,
 )
@@ -560,6 +562,33 @@ async def queue_emails(body: EmailQueueRequest, user: CurrentUser) -> dict:
         already.add(email.lower())
         queued += 1
     return {"queued": queued, "skipped": skipped}
+
+
+@app.get("/api/email/outbox")
+def get_outbox(user: CurrentUser, status: str | None = None) -> dict:
+    return {"items": list_outbox(user["id"], status=status)}
+
+
+@app.post("/api/email/outbox/{email_id}/cancel")
+def cancel_outbox(email_id: int, user: CurrentUser) -> dict:
+    update_outbox_status(user["id"], email_id, "cancelled")
+    return {"ok": True}
+
+
+@app.post("/api/email/outbox/{email_id}/retry")
+def retry_outbox(email_id: int, user: CurrentUser) -> dict:
+    update_outbox_status(user["id"], email_id, "queued")
+    return {"ok": True}
+
+
+class SenderToggleRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/email/sender/toggle")
+def toggle_sender(body: SenderToggleRequest, _: CurrentUser) -> dict:
+    update_settings({"email_sender_enabled": "1" if body.enabled else "0"})
+    return {"ok": True, "enabled": body.enabled}
 
 
 class PiRestorePrefsRequest(BaseModel):

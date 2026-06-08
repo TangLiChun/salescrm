@@ -54,6 +54,10 @@
             <span class="nav-icon" aria-hidden="true">CR</span>
             <span class="nav-label" data-i18n="nav.schedules">定时任务</span>
           </button>
+          <button type="button" class="tab nav-item" data-view="outbox">
+            <span class="nav-icon" aria-hidden="true">@→</span>
+            <span class="nav-label" data-i18n="nav.outbox">发送队列</span>
+          </button>
           <button type="button" class="tab nav-item" data-view="stats">
             <span class="nav-icon" aria-hidden="true">#</span>
             <span class="nav-label" data-i18n="nav.stats">统计</span>
@@ -456,6 +460,45 @@
           <tbody id="schedules-body">
             <tr class="empty-row">
               <td colspan="7" data-i18n="schedules.empty">暂无定时任务</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="outbox-view" class="panel contacts-panel hidden">
+      <div class="results-header">
+        <div>
+          <h2 data-i18n="email.outboxTitle">发送队列</h2>
+          <p id="outbox-counts" class="stats"></p>
+        </div>
+        <div class="results-actions">
+          <select id="outbox-status-filter">
+            <option value="" data-i18n="email.statusAll">全部状态</option>
+            <option value="queued" data-i18n="email.statusQueued">排队中</option>
+            <option value="sending" data-i18n="email.statusSending">发送中</option>
+            <option value="sent" data-i18n="email.statusSent">已发送</option>
+            <option value="failed" data-i18n="email.statusFailed">失败</option>
+            <option value="cancelled" data-i18n="email.statusCancelled">已取消</option>
+          </select>
+          <button id="outbox-sender-toggle" type="button" class="secondary-btn" data-i18n="email.pause">暂停发送</button>
+          <button id="refresh-outbox-btn" type="button" class="secondary-btn" data-i18n="common.refresh">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table outbox-table">
+          <thead>
+            <tr>
+              <th data-i18n="email.colTo">收件人</th>
+              <th data-i18n="email.colSubject">主题</th>
+              <th data-i18n="email.colStatus">状态</th>
+              <th data-i18n="email.colAttempts">尝试</th>
+              <th data-i18n="email.colActions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="outbox-body">
+            <tr class="empty-row">
+              <td colspan="5" data-i18n="email.outboxEmpty">队列为空</td>
             </tr>
           </tbody>
         </table>

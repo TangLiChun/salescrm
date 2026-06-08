@@ -16,6 +16,7 @@ export const state = {
     scheduleRuns: {},
     schedulerStatus: null,
     schedulesRefreshTimer: null,
+    outboxRefreshTimer: null,
     aiLeads: [],
     leadReviews: [],
     selectedLeadReviewIds: new Set(),

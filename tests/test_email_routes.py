@@ -64,3 +64,23 @@ async def test_queue_renders_and_skips(monkeypatch):
     assert result["skipped"]["no_email"] == 1
     # rendered subject/body present in the enqueue call
     assert any("Hi A" in str(a) for a in enq[0])
+
+
+def test_outbox_routes_delegate(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "list_outbox", lambda uid, status=None: [{"id": 1, "status": status}])
+    monkeypatch.setattr(
+        main, "update_outbox_status", lambda uid, eid, s: calls.append(("status", uid, eid, s))
+    )
+    monkeypatch.setattr(
+        main, "update_settings", lambda updates: calls.append(("settings", updates))
+    )
+
+    assert main.get_outbox({"id": 1})["items"][0]["id"] == 1
+    main.cancel_outbox(7, {"id": 1})
+    main.retry_outbox(8, {"id": 1})
+    main.toggle_sender(main.SenderToggleRequest(enabled=True), {"id": 1})
+
+    assert ("status", 1, 7, "cancelled") in calls
+    assert ("status", 1, 8, "queued") in calls
+    assert ("settings", {"email_sender_enabled": "1"}) in calls
