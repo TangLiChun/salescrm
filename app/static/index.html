@@ -766,6 +766,7 @@
                   <button id="smtp-test-btn" type="button" class="secondary-btn" data-i18n="email.testBtn">发送测试邮件</button>
                 </div>
                 <p id="smtp-test-result" class="stats"></p>
+                <p class="hint" data-i18n="email.deliverabilityHint">为提升送达率，请为发件域名配置 SPF、DKIM、DMARC 记录，并使用与发件邮箱一致的域名。</p>
               </fieldset>
               <fieldset>
                 <legend data-i18n="email.cadenceTitle">发送节流</legend>
@@ -793,6 +794,11 @@
                   <input id="template-subject" type="text" data-i18n-placeholder="settings.templateSubjectPlaceholder" placeholder=""></label>
                 <label class="field"><span data-i18n="settings.body">正文</span>
                   <textarea id="template-body" rows="6" data-i18n-placeholder="settings.templateBodyPlaceholder" placeholder=""></textarea></label>
+                <p class="hint" data-i18n="settings.templateMarkdownHint">正文支持 Markdown（**加粗**、- 列表、[链接](https://…)）与变量 {org} {name} {email} {asn} {roles}；队列发送会渲染为图文邮件，mailto 一键发信仍发送纯文本。</p>
+                <div class="template-preview-wrap">
+                  <span class="settings-section-label" data-i18n="settings.templatePreview">预览</span>
+                  <div id="template-preview" class="template-preview"></div>
+                </div>
                 <div class="controls">
                   <button id="save-template-btn" type="button" class="secondary-btn" data-i18n="settings.saveTemplate">保存模板</button>
                 </div>

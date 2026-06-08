@@ -4548,3 +4548,23 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .outbox-table td .link-btn + .link-btn {
   margin-left: var(--space-2);
 }
+
+.template-preview-wrap {
+  margin: var(--space-3) 0;
+}
+
+.template-preview {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface-sunk);
+  min-height: 2.5rem;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.template-preview:empty::before {
+  content: "—";
+  color: var(--ink-soft);
+}

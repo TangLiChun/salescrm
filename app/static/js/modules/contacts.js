@@ -5,6 +5,7 @@ import { api, escapeHtml, formatTime } from "../core/utils.js";
 import { closeModal, openModal } from "../core/modal.js";
 import { notifyError, notifyInfo } from "../core/toast.js";
 import { showApiError, showApiSuccess } from "../core/api-feedback.js";
+import { renderMarkdown } from "./pi.js";
 const { contactsBody, contactsStatsEl, contactsMetricTotalEl, contactsMetricSentEl, contactsMetricUnsentEl, contactsBulkBar, contactsSelectedCountEl, contactsSelectAll, contactsPagination, contactsPrevBtn, contactsNextBtn, contactsPageInfo, contactStatusFilter, contactFollowUpFilter, contactSearchInput, contactsListViewBtn, contactsOrgViewBtn, contactsTableShell, contactOrgsView, contactOrgsList, contactEditModal, contactEditSubtitle, contactEditForm, contactEditOrg, contactEditName, contactEditRoles, contactEditNotes, contactEditLinkedin, contactEditX, contactEditFacebook, contactNotesModal, contactNotesTitle, contactNotesSubtitle, contactNotesList, contactNoteForm, contactNoteBody, mailTemplateSelect, emailTemplatesListEl, templateNameInput, templateSubjectInput, templateBodyInput, saveTemplateBtn, templateStatusEl, } = dom;
 export function followUpStatusBadge(status) {
     const key = status || "new";
@@ -453,6 +454,20 @@ export function renderTemplateText(text, contact) {
         .replaceAll("{asn}", asn)
         .replaceAll("{roles}", contact.roles || "");
 }
+const TEMPLATE_SAMPLE_CONTACT = {
+    org: "Acme Networks",
+    name: "Jordan",
+    email: "jordan@acme.net",
+    asn: 64500,
+    roles: "NOC, Peering",
+};
+export function updateTemplatePreview() {
+    const preview = document.getElementById("template-preview");
+    if (!preview)
+        return;
+    const body = templateBodyInput?.value || "";
+    preview.innerHTML = renderMarkdown(renderTemplateText(body, TEMPLATE_SAMPLE_CONTACT));
+}
 export function openMailClient(contactId) {
     const contact = state.contacts.find((item) => String(item.id) === String(contactId));
     if (!contact?.email)
@@ -525,6 +540,7 @@ export function resetTemplateForm() {
     templateBodyInput.value = "";
     saveTemplateBtn.textContent = t("settings.saveTemplate");
     templateStatusEl.textContent = "";
+    updateTemplatePreview();
 }
 export async function saveEmailTemplate() {
     const name = templateNameInput.value.trim();
@@ -561,6 +577,7 @@ export async function editEmailTemplate(templateId) {
     templateBodyInput.value = template.body || "";
     saveTemplateBtn.textContent = t("msg.updateTemplate");
     templateStatusEl.textContent = t("msg.editingTemplate", { name: template.name });
+    updateTemplatePreview();
 }
 export async function deleteEmailTemplate(templateId) {
     if (!confirm(t("msg.confirmDeleteTemplate")))

@@ -7,7 +7,7 @@ import { registerDeps } from "./core/deps.js";
 import { closeModal, handleModalKeydown } from "./core/modal.js";
 import { startJobEventStream, resumeBackgroundJobs, openJobsPanel, closeJobsPanel, initJobsPanelHandlers, } from "./jobs/index.js";
 import { runLookup, downloadCsv, importResults, renderRows, refreshAsnPreview, updateStats, ensureRowSelected, getSelectedImportableRows, } from "./modules/lookup.js";
-import { loadContacts, bulkContactsAction, openEnqueueModal, enqueueSelectedForSend, openContactEdit, closeContactEdit, saveContactEdit, downloadBackup, exportContactsCsv, dedupeContacts, markContactSent, changeContactFollowUpStatus, openMailClient, openContactNotes, closeContactNotes, addContactNote, deleteContactNote, deleteContact, renderContacts, updateContactsBulkBar, syncContactsSelectAllCheckbox, closeAllContactActionMenus, positionContactActionMenu, switchContactViewMode, saveEmailTemplate, editEmailTemplate, deleteEmailTemplate, } from "./modules/contacts.js";
+import { loadContacts, bulkContactsAction, openEnqueueModal, enqueueSelectedForSend, openContactEdit, closeContactEdit, saveContactEdit, downloadBackup, exportContactsCsv, dedupeContacts, markContactSent, changeContactFollowUpStatus, openMailClient, openContactNotes, closeContactNotes, addContactNote, deleteContactNote, deleteContact, renderContacts, updateContactsBulkBar, syncContactsSelectAllCheckbox, closeAllContactActionMenus, positionContactActionMenu, switchContactViewMode, saveEmailTemplate, updateTemplatePreview, editEmailTemplate, deleteEmailTemplate, } from "./modules/contacts.js";
 import { runLeadDiscovery, importAiLeads, openLeadDetail, closeLeadDetail, renderAiLeads, updateAiLeadsStats, loadLlmStatus, ensureLeadSelected, hideLeadsState, } from "./modules/leads.js";
 import { sendPiChat, stopPiChat, clearPiChat, createPiThread, switchPiThread, deletePiThread, savePiThreadsStore, openPiAgentForLeads, enrichContactViaBackground, loadPiChatForUser, appendPiChatStatus, fetchActivePiThreadHistory, restorePiChatUi, initPiAgentUi, handlePiChatInputKeydown, syncPiBackgroundJob, } from "./modules/pi.js";
 import { createSchedule, loadSchedules, toggleSchedule, deleteSchedule, runScheduleNow, updateScheduleFormMode, } from "./modules/schedules.js";
@@ -206,6 +206,7 @@ scheduleIntervalPreset?.addEventListener("change", updateScheduleFormMode);
 updateScheduleFormMode();
 settingsForm.addEventListener("submit", (event) => saveSettings(event).catch(showApiError));
 saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch(showApiError));
+document.getElementById("template-body")?.addEventListener("input", () => updateTemplatePreview());
 emailTemplatesListEl.addEventListener("click", (event) => {
     const editBtn = event.target.closest(".template-edit");
     if (editBtn) {

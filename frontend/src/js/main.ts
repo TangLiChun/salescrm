@@ -48,6 +48,7 @@ import {
   positionContactActionMenu,
   switchContactViewMode,
   saveEmailTemplate,
+  updateTemplatePreview,
   editEmailTemplate,
   deleteEmailTemplate,
 } from "./modules/contacts.js";
@@ -366,6 +367,7 @@ scheduleIntervalPreset?.addEventListener("change", updateScheduleFormMode);
 updateScheduleFormMode();
 settingsForm.addEventListener("submit", (event) => saveSettings(event).catch(showApiError));
 saveTemplateBtn.addEventListener("click", () => saveEmailTemplate().catch(showApiError));
+document.getElementById("template-body")?.addEventListener("input", () => updateTemplatePreview());
 emailTemplatesListEl.addEventListener("click", (event) => {
   const editBtn = event.target.closest(".template-edit");
   if (editBtn) {
