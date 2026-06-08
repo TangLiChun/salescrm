@@ -304,6 +304,31 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS email_outbox (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+                template_id INTEGER,
+                to_email TEXT NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                body_text TEXT NOT NULL DEFAULT '',
+                body_html TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                sent_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_email_outbox_claim "
+            "ON email_outbox (status, scheduled_at)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS background_jobs (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -1795,6 +1820,142 @@ def delete_email_template(user_id: int, template_id: int) -> bool:
             (template_id, user_id),
         )
         return cursor.rowcount > 0
+
+
+def enqueue_email(
+    user_id, contact_id, template_id, to_email, subject, body_text, body_html, *, conn=None
+):
+    def run(c):
+        return c.execute(
+            """
+            INSERT INTO email_outbox
+              (user_id, contact_id, template_id, to_email, subject, body_text, body_html)
+            VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id
+            """,
+            (user_id, contact_id, template_id, to_email, subject, body_text, body_html),
+        ).fetchone()["id"]
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def email_queued_addresses(user_id, *, conn=None) -> set[str]:
+    def run(c):
+        rows = c.execute(
+            "SELECT lower(to_email) AS e FROM email_outbox "
+            "WHERE user_id=%s AND status IN ('queued','sending')",
+            (user_id,),
+        ).fetchall()
+        return {r["e"] for r in rows}
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def count_sent_emails_today(user_id, *, conn=None) -> int:
+    def run(c):
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM email_outbox "
+            "WHERE user_id=%s AND status = 'sent' AND sent_at::date = NOW()::date",
+            (user_id,),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def last_sent_email_at(user_id, *, conn=None):
+    def run(c):
+        row = c.execute(
+            "SELECT MAX(sent_at) AS t FROM email_outbox WHERE user_id=%s AND status='sent'",
+            (user_id,),
+        ).fetchone()
+        return row["t"] if row else None
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def claim_next_queued_email(user_id=None, *, conn=None):
+    where = (
+        "WHERE user_id=%s AND status='queued'" if user_id is not None else "WHERE status='queued'"
+    )
+    params = (user_id,) if user_id is not None else ()
+    sql = f"""
+        UPDATE email_outbox SET status = 'sending', updated_at=NOW()
+        WHERE id = (
+            SELECT id FROM email_outbox {where}
+            ORDER BY scheduled_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
+        )
+        RETURNING id, user_id, contact_id, to_email, subject, body_text, body_html, attempts
+    """
+
+    def run(c):
+        return c.execute(sql, params).fetchone()
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def mark_email_sent(email_id, *, conn=None):
+    def run(c):
+        c.execute(
+            "UPDATE email_outbox SET status='sent', sent_at=NOW(), updated_at=NOW() WHERE id=%s",
+            (email_id,),
+        )
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def mark_email_failed(email_id, error, requeue, *, conn=None):
+    status = "queued" if requeue else "failed"
+
+    def run(c):
+        c.execute(
+            "UPDATE email_outbox SET status=%s, attempts=attempts+1, last_error=%s, "
+            "updated_at=NOW() WHERE id=%s",
+            (status, str(error)[:500], email_id),
+        )
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def list_outbox(user_id, status=None, limit=200):
+    where = "WHERE user_id=%s" + (" AND status=%s" if status else "")
+    params = (user_id, status) if status else (user_id,)
+    with get_conn() as c:
+        rows = c.execute(
+            f"SELECT id, contact_id, to_email, subject, status, attempts, last_error, "
+            f"scheduled_at, sent_at FROM email_outbox {where} "
+            f"ORDER BY scheduled_at DESC LIMIT {int(limit)}",
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_outbox_status(user_id, email_id, status):
+    with get_conn() as c:
+        c.execute(
+            "UPDATE email_outbox SET status=%s, updated_at=NOW() WHERE id=%s AND user_id=%s",
+            (status, email_id, user_id),
+        )
 
 
 def get_contact_stats(user_id: int) -> dict:
