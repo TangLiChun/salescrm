@@ -18,9 +18,9 @@
 #   GIT_BRANCH      分支（默认 main）
 #   SKIP_PULL=1     跳过 git pull（仅重建容器）
 #   FORCE_REBUILD=1 构建镜像时使用 --no-cache
-#   DEPLOY_FAST=1   快速更新：跳过镜像构建（仅改代码时）、缩短健康检查、跳过 Pi 重装
+#   DEPLOY_FAST=1   快速更新：跳过镜像构建（仅改代码时）、缩短健康检查、跳过 Reasonix 重装
 #   DEPLOY_FAST=0   完整部署：总是重建镜像 + 完整健康检查（旧行为）
-#   SKIP_PI=1       跳过 Pi Coding Agent 安装与配置
+#   SKIP_REASONIX=1 跳过 Reasonix 安装与配置
 #   DEPLOY_WAIT_CONTAINER_SEC  等待容器 running（默认 90；快速模式 30）
 #   DEPLOY_WAIT_HTTP_SEC         等待 HTTP /health 秒数（默认 120；快速模式 45）
 #   DEPLOY_FULL_RETRIES          完整检查重试次数（默认 5；快速模式 2）
@@ -46,7 +46,7 @@ APP_PORT="${APP_PORT:-8000}"
 SKIP_PULL="${SKIP_PULL:-0}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 DEPLOY_FAST="${DEPLOY_FAST:-auto}"
-SKIP_PI="${SKIP_PI:-0}"
+SKIP_REASONIX="${SKIP_REASONIX:-0}"
 DEPLOY_WAIT_CONTAINER_SEC="${DEPLOY_WAIT_CONTAINER_SEC:-90}"
 DEPLOY_WAIT_HTTP_SEC="${DEPLOY_WAIT_HTTP_SEC:-120}"
 DEPLOY_FULL_RETRIES="${DEPLOY_FULL_RETRIES:-5}"
@@ -55,8 +55,8 @@ DEPLOY_STRICT_SMOKE="${DEPLOY_STRICT_SMOKE:-0}"
 DEPLOY_STRATEGY="${DEPLOY_STRATEGY:-auto}"
 GIT_BEFORE_HEAD=""
 GIT_AFTER_HEAD=""
-PI_ENV_FILE=""
-PI_SETUP_OK=0
+REASONIX_ENV_FILE=""
+REASONIX_SETUP_OK=0
 
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
@@ -458,7 +458,7 @@ install_node() {
   run_apt install -y -qq nodejs
   major="$(node_major_version)"
   if [[ "${major}" -lt 18 ]]; then
-    warn "Node.js 版本过低 ($(node -v 2>/dev/null || echo none))，Pi 需要 18+"
+    warn "Node.js 版本过低 ($(node -v 2>/dev/null || echo none))，Reasonix 需要 Node 18+"
     return 1
   fi
   log "Node.js 安装完成: $(node -v)"
@@ -470,22 +470,22 @@ fetch_agent_token() {
     | tr -d '\r' | head -n 1
 }
 
-write_pi_env_file() {
+write_reasonix_env_file() {
   local token="$1"
-  PI_ENV_FILE="${APP_DIR}/.pi-env"
+  REASONIX_ENV_FILE="${APP_DIR}/.reasonix-env"
   umask 077
-  cat > "${PI_ENV_FILE}" <<EOF
-# Sales CRM Pi Agent — 由 deploy.sh 自动生成，请勿提交到 git
+  cat > "${REASONIX_ENV_FILE}" <<EOF
+# Sales CRM Reasonix Agent — 由 deploy.sh 自动生成，请勿提交到 git
 export SALESCRM_URL="http://127.0.0.1:${APP_PORT}"
 export SALESCRM_TOKEN="${token}"
 EOF
-  chmod 600 "${PI_ENV_FILE}"
-  $SUDO chown "$(id -un)":"$(id -gn)" "${PI_ENV_FILE}" 2>/dev/null || true
+  chmod 600 "${REASONIX_ENV_FILE}"
+  $SUDO chown "$(id -un)":"$(id -gn)" "${REASONIX_ENV_FILE}" 2>/dev/null || true
 }
 
-ensure_pi_env_autoload() {
-  local marker="# salescrm-pi-env"
-  local line="[[ -f \"${APP_DIR}/.pi-env\" ]] && source \"${APP_DIR}/.pi-env\""
+ensure_reasonix_env_autoload() {
+  local marker="# salescrm-reasonix-env"
+  local line="[[ -f \"${APP_DIR}/.reasonix-env\" ]] && source \"${APP_DIR}/.reasonix-env\""
   local rc="${HOME}/.bashrc"
   [[ -f "${rc}" ]] || return 0
   if grep -qF "${marker}" "${rc}" 2>/dev/null; then
@@ -498,83 +498,106 @@ ensure_pi_env_autoload() {
   } >> "${rc}"
 }
 
-install_pi_cli() {
-  if command -v pi >/dev/null 2>&1; then
-    log "Pi CLI 已安装: $(pi --version 2>/dev/null | head -n 1 || echo pi)"
+install_reasonix_cli() {
+  if command -v reasonix >/dev/null 2>&1; then
+    log "Reasonix 已安装: $(reasonix --version 2>/dev/null | head -n 1 || echo reasonix)"
     return 0
   fi
-  log "安装 Pi Coding Agent CLI..."
-  npm install -g @mariozechner/pi-coding-agent
-  command -v pi >/dev/null 2>&1
+  log "安装 DeepSeek-Reasonix..."
+  npm install -g reasonix
+  command -v reasonix >/dev/null 2>&1
 }
 
-install_pi_extension() {
-  log "安装 Sales CRM Pi 扩展包..."
-  pi install "${APP_DIR}/integrations/pi"
+link_salescrm_cli() {
+  local src="${APP_DIR}/integrations/reasonix/bin/salescrm"
+  [[ -f "${src}" ]] || return 1
+  chmod +x "${src}" 2>/dev/null || true
+  $SUDO ln -sf "${src}" /usr/local/bin/salescrm
 }
 
-verify_pi_agent_api() {
+register_reasonix_skill() {
+  local cfg="${APP_DIR}/reasonix.toml"
+  local skills_path="${APP_DIR}/integrations/reasonix/skills"
+  # Already registered with the exact path — nothing to do.
+  if [[ -f "${cfg}" ]] && grep -qF "${skills_path}" "${cfg}" 2>/dev/null; then
+    return 0
+  fi
+  # A [skills] table already exists with a different path — skip to avoid producing
+  # invalid TOML (duplicate tables are spec-illegal).
+  if [[ -f "${cfg}" ]] && grep -qE '^\[skills\]' "${cfg}" 2>/dev/null; then
+    warn "reasonix.toml 已有 [skills] 配置但路径不符，跳过自动注册；请手动添加 paths = [\"${skills_path}\"]"
+    return 0
+  fi
+  cat >> "${cfg}" <<EOF
+
+[skills]
+paths = ["${skills_path}"]
+EOF
+}
+
+verify_agent_api() {
   local token="$1"
   curl -fsS --max-time 10 \
     -H "Authorization: Bearer ${token}" \
     "http://127.0.0.1:${APP_PORT}/api/agent/health" >/dev/null
 }
 
-setup_pi_agent() {
-  if [[ "${SKIP_PI}" == "1" ]]; then
-    log "跳过 Pi Agent 安装 (SKIP_PI=1)"
+setup_reasonix_agent() {
+  if [[ "${SKIP_REASONIX}" == "1" ]]; then
+    log "跳过 Reasonix 安装 (SKIP_REASONIX=1)"
     return 0
   fi
 
-  if [[ -f "${APP_DIR}/.pi-env" ]] && command -v pi >/dev/null 2>&1; then
+  if [[ -f "${APP_DIR}/.reasonix-env" ]] && command -v reasonix >/dev/null 2>&1; then
     if [[ "${DEPLOY_STRATEGY}" == "restart" || "${DEPLOY_FAST}" == "1" ]]; then
-      PI_ENV_FILE="${APP_DIR}/.pi-env"
-      PI_SETUP_OK=1
-      log "Pi 已安装，跳过重复配置（快速部署）"
+      REASONIX_ENV_FILE="${APP_DIR}/.reasonix-env"
+      REASONIX_SETUP_OK=1
+      log "Reasonix 已安装，跳过重复配置（快速部署）"
       return 0
     fi
   fi
 
-  if [[ ! -d "${APP_DIR}/integrations/pi" ]]; then
-    warn "未找到 ${APP_DIR}/integrations/pi，跳过 Pi 安装"
+  if [[ ! -d "${APP_DIR}/integrations/reasonix" ]]; then
+    warn "未找到 ${APP_DIR}/integrations/reasonix，跳过 Reasonix 安装"
     return 0
   fi
 
-  log "配置 Pi Coding Agent..."
+  log "配置 DeepSeek-Reasonix..."
   if ! install_node; then
-    warn "Pi Agent 未安装：Node.js 不可用"
+    warn "Reasonix 未安装：Node.js 不可用"
     return 0
   fi
 
   local token
   token="$(fetch_agent_token)"
   if [[ -z "${token}" ]]; then
-    warn "无法读取 Agent API Token，跳过 Pi 配置"
+    warn "无法读取 Agent API Token，跳过 Reasonix 配置"
     return 0
   fi
 
-  write_pi_env_file "${token}"
-  # shellcheck disable=SC1090
+  write_reasonix_env_file "${token}"
   set +u
-  source "${PI_ENV_FILE}"
+  # shellcheck disable=SC1090
+  source "${REASONIX_ENV_FILE}"
   set -u
 
-  if ! install_pi_cli; then
-    warn "Pi CLI 安装失败，已写入 ${PI_ENV_FILE}，可稍后手动: npm i -g @mariozechner/pi-coding-agent"
+  if ! link_salescrm_cli; then
+    warn "salescrm CLI 链接失败：未找到 ${APP_DIR}/integrations/reasonix/bin/salescrm"
+    return 0
+  fi
+  register_reasonix_skill || warn "reasonix.toml 注册失败，请手动添加 [skills] 配置"
+
+  if ! install_reasonix_cli; then
+    warn "Reasonix 安装失败，已写入 ${REASONIX_ENV_FILE}，可稍后手动: npm i -g reasonix"
     return 0
   fi
 
-  if ! install_pi_extension; then
-    warn "Pi 扩展安装失败，可稍后手动: source ${PI_ENV_FILE} && pi install ${APP_DIR}/integrations/pi"
-    return 0
-  fi
-
-  if verify_pi_agent_api "${token}"; then
-    PI_SETUP_OK=1
-    ensure_pi_env_autoload
-    log "Pi Agent 配置完成"
+  if verify_agent_api "${token}"; then
+    REASONIX_SETUP_OK=1
+    ensure_reasonix_env_autoload
+    log "Reasonix 配置完成"
   else
-    warn "Pi 扩展已安装，但 Agent API 验证失败，请运行 ./scripts/check.sh"
+    warn "Reasonix 已安装，但 Agent API 验证失败，请运行 ./scripts/check.sh"
   fi
 }
 
@@ -592,11 +615,11 @@ print_summary() {
   echo " 更新:    cd ${APP_DIR} && sudo ./scripts/deploy.sh"
   echo " 快速:    cd ${APP_DIR} && sudo DEPLOY_FAST=1 ./scripts/deploy.sh"
   echo " 状态:    cd ${APP_DIR} && ./scripts/check.sh"
-  if [[ "${PI_SETUP_OK}" == "1" && -n "${PI_ENV_FILE}" ]]; then
-    echo " Pi:      source ${PI_ENV_FILE} && cd ${APP_DIR} && pi"
-    echo " Pi 验证: curl -s -H \"Authorization: Bearer \$SALESCRM_TOKEN\" http://127.0.0.1:${APP_PORT}/api/agent/health"
-  elif [[ "${SKIP_PI}" != "1" ]]; then
-    echo " Pi:      安装未完成，见上方 WARNING 或 integrations/pi/README.md"
+  if [[ "${REASONIX_SETUP_OK}" == "1" && -n "${REASONIX_ENV_FILE}" ]]; then
+    echo " Reasonix: source ${REASONIX_ENV_FILE} && cd ${APP_DIR} && reasonix"
+    echo " 验证:     source ${REASONIX_ENV_FILE} && salescrm health"
+  elif [[ "${SKIP_REASONIX}" != "1" ]]; then
+    echo " Reasonix: 安装未完成，见上方 WARNING 或 integrations/reasonix/README.md"
   fi
   echo " 数据库:  PostgreSQL (volume salescrm_pgdata)"
   echo " 迁移:    旧 SQLite → 复制 data/salescrm.db 到服务器后执行:"
@@ -631,7 +654,7 @@ main() {
   deploy_compose
   wait_healthy
   migrate_legacy_sqlite
-  setup_pi_agent
+  setup_reasonix_agent
   print_summary
 }
 
