@@ -3,6 +3,7 @@
 The gate is server-controlled (allow_destructive), NOT a model-settable arg, so a
 misbehaving model can never self-confirm a deletion. Worst case is a no-op.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -34,13 +35,20 @@ async def test_delete_contacts_requires_confirmation(monkeypatch) -> None:
 
 
 async def test_delete_contacts_executes_when_allowed(monkeypatch) -> None:
-    monkeypatch.setattr(agent_chat, "get_contact", lambda uid, cid: {"id": cid, "email": "x@y.com", "roles": []})
     monkeypatch.setattr(
-        agent_chat, "bulk_delete_contacts",
+        agent_chat, "get_contact", lambda uid, cid: {"id": cid, "email": "x@y.com", "roles": []}
+    )
+    monkeypatch.setattr(
+        agent_chat,
+        "bulk_delete_contacts",
         lambda uid, ids: {"deleted": len(ids), "requested": len(ids)},
     )
     result = await agent_chat._run_tool(
-        1, "delete_contacts", {"contact_ids": [1, 2]}, _noop_emit, allow_destructive=True,
+        1,
+        "delete_contacts",
+        {"contact_ids": [1, 2]},
+        _noop_emit,
+        allow_destructive=True,
     )
     assert not result.get("confirm_required")
     assert result["deleted"] == 2

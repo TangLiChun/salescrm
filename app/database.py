@@ -1406,13 +1406,15 @@ def dedupe_contacts(*, user_id: int | None = None, conn: Any | None = None) -> d
             if key in seen:
                 connection.execute("DELETE FROM contacts WHERE id = %s", (row["id"],))
                 removed += 1
-                removed_rows.append({
-                    "email": row["email"],
-                    "org": row["org"],
-                    "name": row["name"],
-                    "roles": row["roles"],
-                    "notes": row["notes"],
-                })
+                removed_rows.append(
+                    {
+                        "email": row["email"],
+                        "org": row["org"],
+                        "name": row["name"],
+                        "roles": row["roles"],
+                        "notes": row["notes"],
+                    }
+                )
                 continue
             seen.add(key)
         return {"removed": removed, "remaining": len(seen), "removed_rows": removed_rows}

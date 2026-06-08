@@ -1208,9 +1208,7 @@ async def _run_tool(
         if not ids:
             return {"error": "contact_ids 为空"}
         undo_rows = [
-            _contact_to_undo_row(contact)
-            for cid in ids
-            if (contact := get_contact(user_id, cid))
+            _contact_to_undo_row(contact) for cid in ids if (contact := get_contact(user_id, cid))
         ]
         if len(ids) == 1:
             ok = delete_contact(user_id, ids[0])
