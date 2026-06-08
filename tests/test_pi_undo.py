@@ -67,7 +67,9 @@ async def test_delete_contacts_includes_undo_payload(monkeypatch) -> None:
         agent_chat, "bulk_delete_contacts",
         lambda uid, ids: {"deleted": len(ids), "requested": len(ids)},
     )
-    result = await agent_chat._run_tool(1, "delete_contacts", {"contact_ids": [11, 12]}, _noop_emit)
+    result = await agent_chat._run_tool(
+        1, "delete_contacts", {"contact_ids": [11, 12]}, _noop_emit, allow_destructive=True,
+    )
     assert result["deleted"] == 2
     assert result["undo_kind"] == "contacts"
     assert {r["email"] for r in result["undo_payload"]} == {"a@x.com", "b@x.com"}
@@ -83,7 +85,9 @@ async def test_delete_single_contact_includes_undo_payload(monkeypatch) -> None:
         lambda uid, cid: {"id": cid, "email": "solo@x.com", "org": "Z", "roles": ["abuse"]},
     )
     monkeypatch.setattr(agent_chat, "delete_contact", lambda uid, cid: True)
-    result = await agent_chat._run_tool(1, "delete_contacts", {"contact_ids": [7]}, _noop_emit)
+    result = await agent_chat._run_tool(
+        1, "delete_contacts", {"contact_ids": [7]}, _noop_emit, allow_destructive=True,
+    )
     assert result["deleted"] == 1
     assert result["undo_kind"] == "contacts"
     assert result["undo_payload"][0]["email"] == "solo@x.com"
@@ -93,7 +97,9 @@ async def test_reset_lead_preferences_includes_undo_payload(monkeypatch) -> None
     prior = {"min_score_hint": 70, "stats": {"imports": 5}}
     monkeypatch.setattr(agent_chat, "get_prefs", lambda uid: prior)
     monkeypatch.setattr(agent_chat, "reset_prefs", lambda uid: {"min_score_hint": 60})
-    result = await agent_chat._run_tool(1, "reset_lead_preferences", {}, _noop_emit)
+    result = await agent_chat._run_tool(
+        1, "reset_lead_preferences", {}, _noop_emit, allow_destructive=True,
+    )
     assert result["ok"] is True
     assert result["undo_kind"] == "prefs"
     assert result["undo_payload"] == prior

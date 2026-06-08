@@ -1680,6 +1680,90 @@ export async function undoPiDestructive(result, btn) {
         showApiError(error, t("pi.undoFailed"));
     }
 }
+// Execute-before-confirm: when a destructive tool returns confirm_required, turn
+// its card into a confirm/cancel prompt. Confirming hits a dedicated endpoint
+// (the only path that may execute it); the model can never self-confirm.
+export function renderPiConfirmCard(toolEl, name, summary, pendingArgs) {
+    if (!toolEl)
+        return;
+    stopPiDiscoverTimer(toolEl);
+    toolEl.classList.remove("pi-chat-tool-running");
+    toolEl.classList.add("pi-chat-tool-confirm");
+    toolEl.querySelector(".pi-chat-tool-head")?.classList.add("confirm");
+    toolEl.querySelector(".pi-chat-live-panel")?.classList.add("hidden");
+    const progress = toolEl.querySelector(".pi-chat-tool-progress");
+    if (progress) {
+        progress.style.display = "";
+        progress.textContent = summary || t("pi.confirmPrompt");
+    }
+    const actions = document.createElement("div");
+    actions.className = "pi-chat-confirm-actions";
+    const yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "danger-btn pi-confirm-yes";
+    yes.textContent = t("pi.confirmYes");
+    const no = document.createElement("button");
+    no.type = "button";
+    no.className = "secondary-btn pi-confirm-no";
+    no.textContent = t("pi.confirmNo");
+    yes.addEventListener("click", () => {
+        confirmPiTool(toolEl, name, pendingArgs || {}).catch(() => { });
+    });
+    no.addEventListener("click", () => cancelPiConfirm(toolEl));
+    actions.appendChild(yes);
+    actions.appendChild(no);
+    toolEl.appendChild(actions);
+    announcePi(summary || t("pi.confirmPrompt"));
+    scrollPiChatToBottom();
+}
+export async function confirmPiTool(toolEl, name, args) {
+    const actions = toolEl.querySelector(".pi-chat-confirm-actions");
+    actions?.querySelectorAll("button").forEach((b) => {
+        b.disabled = true;
+    });
+    try {
+        const data = await api("/api/pi/confirm-tool", {
+            method: "POST",
+            body: JSON.stringify({ thread_id: state.activePiThreadId, name, args }),
+        });
+        const result = data?.result || {};
+        actions?.remove();
+        toolEl.classList.remove("pi-chat-tool-confirm");
+        toolEl.querySelector(".pi-chat-tool-head")?.classList.remove("confirm");
+        if (result.error) {
+            markPiChatToolFailed(toolEl, String(result.error));
+            announcePi(String(result.error));
+            return;
+        }
+        markPiChatToolDone(toolEl);
+        const sum = formatPiToolSummary(name, result);
+        const progress = toolEl.querySelector(".pi-chat-tool-progress");
+        if (progress && sum)
+            progress.textContent = sum;
+        applyPiDestructiveHint(toolEl, name);
+        if (result.undo_payload)
+            addPiUndoButton(toolEl, result);
+        appendPiHistoryEntry({ role: "tool", name, summary: sum || "" });
+        announcePi(sum || t("pi.done"));
+        if (name === "delete_contacts" || name === "dedupe_contacts")
+            deps.loadContacts?.();
+    }
+    catch (error) {
+        actions?.querySelectorAll("button").forEach((b) => {
+            b.disabled = false;
+        });
+        showApiError(error, t("pi.requestFailed"));
+    }
+}
+export function cancelPiConfirm(toolEl) {
+    const actions = toolEl.querySelector(".pi-chat-confirm-actions");
+    if (actions) {
+        actions.innerHTML = `<span class="pi-confirm-cancelled">${escapeHtml(t("pi.confirmCancelled"))}</span>`;
+    }
+    toolEl.classList.remove("pi-chat-tool-confirm");
+    toolEl.querySelector(".pi-chat-tool-head")?.classList.remove("confirm");
+    announcePi(t("pi.confirmCancelled"));
+}
 export function appendPiChatTool(name) {
     clearPiChatEmpty();
     const el = document.createElement("div");
@@ -2106,6 +2190,14 @@ export async function streamPiTurn(text) {
                     }
                 }
                 else if (payload.type === "tool_result") {
+                    if (payload.result?.confirm_required) {
+                        if (activeToolEl) {
+                            renderPiConfirmCard(activeToolEl, payload.name, payload.result.summary, payload.result.pending_args || {});
+                            activeToolEl = null;
+                        }
+                        setProgressFill(piChatProgressFill, 85);
+                        continue;
+                    }
                     const summary = formatPiToolSummary(payload.name, payload.result);
                     const toolEntry = {
                         role: "tool",

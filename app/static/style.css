@@ -3306,6 +3306,35 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   cursor: default;
 }
 
+.pi-chat-tool-confirm {
+  border-color: color-mix(in srgb, var(--caution) 45%, var(--line));
+  background: color-mix(in srgb, var(--caution) 5%, var(--surface));
+}
+
+.pi-chat-tool-head.confirm .dot {
+  animation: none;
+  background: var(--caution);
+}
+
+.pi-chat-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.pi-confirm-yes,
+.pi-confirm-no {
+  min-height: 2rem;
+  padding: 0.3rem 0.9rem;
+}
+
+.pi-confirm-cancelled {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
 .pi-chat-tool-raw {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
