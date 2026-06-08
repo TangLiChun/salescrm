@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Sales CRM helper CLI for DeepSeek-Reasonix.
+
+Stdlib only. Wraps the Sales CRM Agent API (/api/agent/*) so a Reasonix agent can
+drive lead import/discovery through its built-in `bash` tool.
+
+Env:
+  SALESCRM_URL    default http://127.0.0.1:8000
+  SALESCRM_TOKEN  required — CRM 设置 → 自动化 → 外部 Agent API → Agent Token
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def base_url() -> str:
+    return (os.environ.get("SALESCRM_URL") or "http://127.0.0.1:8000").rstrip("/")
+
+
+def token() -> str:
+    return (os.environ.get("SALESCRM_TOKEN") or "").strip()
+
+
+def _open(req: urllib.request.Request):
+    """HTTP seam — patched in tests."""
+    return urllib.request.urlopen(req, timeout=30)
+
+
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    try:
+        payload = json.loads(exc.read().decode())
+        if isinstance(payload, dict) and "detail" in payload:
+            return str(payload["detail"])
+    except Exception:  # noqa: BLE001 - fall back to reason on any parse failure
+        pass
+    return exc.reason or "request failed"
+
+
+def request(method: str, path: str, *, params: dict | None = None, body=None) -> dict:
+    tok = token()
+    if not tok:
+        raise SystemExit(
+            "错误：SALESCRM_TOKEN 未设置。在 CRM 设置 → 自动化 → 外部 Agent API 生成 Token，"
+            "并 export SALESCRM_TOKEN。"
+        )
+    url = base_url() + path
+    if params:
+        clean = {k: v for k, v in params.items() if v is not None}
+        if clean:
+            url += "?" + urllib.parse.urlencode(clean)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Authorization", f"Bearer {tok}")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with _open(req) as resp:
+            raw = resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"Sales CRM {exc.code}: {_error_detail(exc)}") from exc
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"无法连接 Sales CRM ({base_url()}): {exc.reason}") from exc
+    return json.loads(raw) if raw else {}
+
+
+def cmd_health(args) -> dict:
+    return request("GET", "/api/agent/health")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="salescrm", description="Sales CRM agent CLI")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_health = sub.add_parser("health", help="检查 CRM 与数据库连通性")
+    p_health.set_defaults(func=cmd_health)
+
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    result = args.func(args)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
