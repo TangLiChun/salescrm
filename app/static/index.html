@@ -698,6 +698,46 @@
                 </label>
                 <p id="agent-token-status" class="stats"></p>
               </fieldset>
+              <fieldset>
+                <legend data-i18n="email.smtpTitle">SMTP 发信</legend>
+                <label class="field"><span data-i18n="email.host">SMTP 服务器</span>
+                  <input id="smtp-host" type="text" data-i18n-placeholder="email.hostPlaceholder" placeholder="smtp.example.com"></label>
+                <label class="field"><span data-i18n="email.port">端口</span>
+                  <input id="smtp-port" type="number" min="1" max="65535" placeholder="587"></label>
+                <label class="field"><span data-i18n="email.security">加密方式</span>
+                  <select id="smtp-security">
+                    <option value="starttls" data-i18n="email.secStarttls">STARTTLS（587，推荐）</option>
+                    <option value="ssl" data-i18n="email.secSsl">SSL/TLS（465）</option>
+                    <option value="none" data-i18n="email.secNone">无加密（不推荐）</option>
+                  </select></label>
+                <label class="field"><span data-i18n="email.username">用户名</span>
+                  <input id="smtp-username" type="text" autocomplete="off"></label>
+                <label class="field"><span data-i18n="email.password">密码</span>
+                  <input id="smtp-password" type="password" autocomplete="new-password" data-i18n-placeholder="settings.leaveBlankNoChange" placeholder="留空则不修改"></label>
+                <label class="field"><span data-i18n="email.fromName">发件人名称</span>
+                  <input id="smtp-from-name" type="text"></label>
+                <label class="field"><span data-i18n="email.fromEmail">发件邮箱</span>
+                  <input id="smtp-from-email" type="email" data-i18n-placeholder="email.fromEmailPlaceholder" placeholder="留空则用用户名"></label>
+                <div class="controls">
+                  <input id="smtp-test-to" type="email" data-i18n-placeholder="email.testToPlaceholder" placeholder="测试收件邮箱">
+                  <button id="smtp-test-btn" type="button" class="secondary-btn" data-i18n="email.testBtn">发送测试邮件</button>
+                </div>
+                <p id="smtp-test-result" class="stats"></p>
+              </fieldset>
+              <fieldset>
+                <legend data-i18n="email.cadenceTitle">发送节流</legend>
+                <label class="field checkbox-field">
+                  <input id="email-sender-enabled" type="checkbox">
+                  <span data-i18n="email.senderEnabled">启用后台队列发送</span></label>
+                <label class="field"><span data-i18n="email.interval">发送间隔（分钟）</span>
+                  <input id="email-send-interval-minutes" type="number" min="1" max="1440" placeholder="5"></label>
+                <label class="field"><span data-i18n="email.dailyCap">每日上限（0 = 不限）</span>
+                  <input id="email-daily-cap" type="number" min="0" max="100000" placeholder="50"></label>
+                <label class="field"><span data-i18n="email.activeStart">活跃起始小时（0-23）</span>
+                  <input id="email-active-start-hour" type="number" min="0" max="23" placeholder="9"></label>
+                <label class="field"><span data-i18n="email.activeEnd">活跃结束小时（0-23，与起始相同 = 全天）</span>
+                  <input id="email-active-end-hour" type="number" min="0" max="23" placeholder="18"></label>
+              </fieldset>
             </div>
 
             <div class="settings-pane hidden" data-settings-pane="templates">

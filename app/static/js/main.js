@@ -11,7 +11,7 @@ import { loadContacts, bulkContactsAction, openContactEdit, closeContactEdit, sa
 import { runLeadDiscovery, importAiLeads, openLeadDetail, closeLeadDetail, renderAiLeads, updateAiLeadsStats, loadLlmStatus, ensureLeadSelected, hideLeadsState, } from "./modules/leads.js";
 import { sendPiChat, stopPiChat, clearPiChat, createPiThread, switchPiThread, deletePiThread, savePiThreadsStore, openPiAgentForLeads, enrichContactViaBackground, loadPiChatForUser, appendPiChatStatus, fetchActivePiThreadHistory, restorePiChatUi, initPiAgentUi, handlePiChatInputKeydown, syncPiBackgroundJob, } from "./modules/pi.js";
 import { createSchedule, loadSchedules, toggleSchedule, deleteSchedule, runScheduleNow, updateScheduleFormMode, } from "./modules/schedules.js";
-import { saveSettings, regenerateAgentToken, copyAgentToken, changePassword, switchSettingsCat, resetLeadPreferences, } from "./modules/settings.js";
+import { saveSettings, regenerateAgentToken, copyAgentToken, changePassword, switchSettingsCat, resetLeadPreferences, sendSmtpTest, } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
 import { loadWorkbench, importSelectedLeadReviews, handleLeadReviewSelection, handleLeadReviewAction, } from "./modules/workbench.js";
 import { switchView, refreshUiOnLanguageChange, closeMobileNavMore, openMobileNavMore, getViewFromHash, initViewRouting, } from "./modules/views.js";
@@ -214,6 +214,9 @@ document.getElementById("regenerate-agent-token-btn")?.addEventListener("click",
 });
 document.getElementById("copy-agent-token-btn")?.addEventListener("click", () => {
     copyAgentToken().catch(showApiError);
+});
+document.getElementById("smtp-test-btn")?.addEventListener("click", () => {
+    sendSmtpTest().catch(() => { });
 });
 document.getElementById("reset-lead-prefs-btn")?.addEventListener("click", () => {
     resetLeadPreferences().catch(showApiError);

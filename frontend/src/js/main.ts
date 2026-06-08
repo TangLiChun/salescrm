@@ -93,6 +93,7 @@ import {
   changePassword,
   switchSettingsCat,
   resetLeadPreferences,
+  sendSmtpTest,
 } from "./modules/settings.js";
 import { loadStats } from "./modules/stats.js";
 import {
@@ -370,6 +371,9 @@ document.getElementById("regenerate-agent-token-btn")?.addEventListener("click",
 });
 document.getElementById("copy-agent-token-btn")?.addEventListener("click", () => {
   copyAgentToken().catch(showApiError);
+});
+document.getElementById("smtp-test-btn")?.addEventListener("click", () => {
+  sendSmtpTest().catch(() => {});
 });
 document.getElementById("reset-lead-prefs-btn")?.addEventListener("click", () => {
   resetLeadPreferences().catch(showApiError);

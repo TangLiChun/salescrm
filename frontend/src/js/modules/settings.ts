@@ -1,8 +1,8 @@
 import { t } from "../../i18n.js";
 import * as dom from "../core/dom.js";
 import { state, SETTINGS_FORM_CATS } from "../core/state.js";
-import { api, escapeHtml, setInputValue } from "../core/utils.js";
-import { notifyError, showToast } from "../core/toast.js";
+import { api, errorMessage, escapeHtml, setInputValue } from "../core/utils.js";
+import { notifyError, notifyInfo, showToast } from "../core/toast.js";
 import { replayAnimation } from "../core/motion.js";
 import { loadLlmStatus } from "./leads.js";
 
@@ -256,6 +256,19 @@ export async function loadSettingsForm() {
   setInputValue("setting-import-blocklist", data.import_blocklist || "");
   setInputValue("setting-import-allowlist", data.import_allowlist || "");
 
+  setInputValue("smtp-host", data.smtp_host || "");
+  setInputValue("smtp-port", data.smtp_port || "587");
+  setInputValue("smtp-security", data.smtp_security || "starttls");
+  setInputValue("smtp-username", data.smtp_username || "");
+  setInputValue("smtp-from-name", data.smtp_from_name || "");
+  setInputValue("smtp-from-email", data.smtp_from_email || "");
+  setInputValue("email-send-interval-minutes", data.email_send_interval_minutes || "5");
+  setInputValue("email-daily-cap", data.email_daily_cap || "50");
+  setInputValue("email-active-start-hour", data.email_active_start_hour || "9");
+  setInputValue("email-active-end-hour", data.email_active_end_hour || "18");
+  document.getElementById("email-sender-enabled").checked =
+    (data.email_sender_enabled || "0") === "1";
+
   const agentTokenEl = document.getElementById("setting-agent-api-token");
   if (agentTokenEl && !agentTokenEl.dataset.revealed) {
     agentTokenEl.value = "";
@@ -274,6 +287,7 @@ export async function loadSettingsForm() {
     ["setting-brave-search-key", data.brave_search_key, data.brave_search_key_configured],
     ["setting-zhipu-api-key", data.zhipu_api_key, data.zhipu_api_key_configured],
     ["setting-shodan-api-key", data.shodan_api_key, data.shodan_api_key_configured],
+    ["smtp-password", data.smtp_password, data.smtp_password_configured],
   ];
   for (const [id, masked, configured] of secretFields) {
     const el = document.getElementById(id);
@@ -319,6 +333,19 @@ export async function saveSettings(event) {
     scheduler_poll_seconds: document.getElementById("setting-scheduler-poll-seconds").value.trim(),
     import_blocklist: document.getElementById("setting-import-blocklist").value,
     import_allowlist: document.getElementById("setting-import-allowlist").value,
+    smtp_host: document.getElementById("smtp-host").value.trim(),
+    smtp_port: document.getElementById("smtp-port").value.trim() || "587",
+    smtp_security: document.getElementById("smtp-security").value.trim(),
+    smtp_username: document.getElementById("smtp-username").value.trim(),
+    smtp_from_name: document.getElementById("smtp-from-name").value.trim(),
+    smtp_from_email: document.getElementById("smtp-from-email").value.trim(),
+    email_sender_enabled: document.getElementById("email-sender-enabled").checked ? "1" : "0",
+    email_send_interval_minutes:
+      document.getElementById("email-send-interval-minutes").value.trim() || "5",
+    email_daily_cap: document.getElementById("email-daily-cap").value.trim() || "50",
+    email_active_start_hour:
+      document.getElementById("email-active-start-hour").value.trim() || "9",
+    email_active_end_hour: document.getElementById("email-active-end-hour").value.trim() || "18",
   };
 
   const secrets = [
@@ -331,6 +358,7 @@ export async function saveSettings(event) {
     ["brave_search_key", "setting-brave-search-key"],
     ["zhipu_api_key", "setting-zhipu-api-key"],
     ["shodan_api_key", "setting-shodan-api-key"],
+    ["smtp_password", "smtp-password"],
   ];
   for (const [key, id] of secrets) {
     const value = document.getElementById(id).value.trim();
@@ -341,6 +369,36 @@ export async function saveSettings(event) {
   settingsStatusEl.textContent = t("msg.settingsSaved");
   await loadLlmStatus();
   await loadSettingsForm();
+}
+
+export async function sendSmtpTest() {
+  const to = (document.getElementById("smtp-test-to").value || "").trim();
+  const resultEl = document.getElementById("smtp-test-result");
+  if (!to) {
+    notifyInfo(t("email.testNeedTo"));
+    return;
+  }
+  resultEl.textContent = t("email.testSending");
+  try {
+    const data = await api("/api/email/test", {
+      method: "POST",
+      body: JSON.stringify({
+        to,
+        host: document.getElementById("smtp-host").value,
+        port: document.getElementById("smtp-port").value,
+        security: document.getElementById("smtp-security").value,
+        username: document.getElementById("smtp-username").value,
+        password: document.getElementById("smtp-password").value,
+        from_name: document.getElementById("smtp-from-name").value,
+        from_email: document.getElementById("smtp-from-email").value,
+      }),
+    });
+    resultEl.textContent = data.ok
+      ? t("email.testOk")
+      : t("email.testFail", { error: data.error || "" });
+  } catch (error) {
+    resultEl.textContent = t("email.testFail", { error: errorMessage(error, "") });
+  }
 }
 
 export async function changePassword() {
