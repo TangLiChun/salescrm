@@ -89,3 +89,80 @@ def test_url_error_surfaces_connect_failure(monkeypatch):
     with pytest.raises(SystemExit) as ei:
         cli.main(["health"])
     assert "无法连接" in str(ei.value)
+
+
+def test_contacts_passes_query_params(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    monkeypatch.setenv("SALESCRM_URL", "http://crm:9000")
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"contacts": [], "total": 0}))
+
+    cli.main(["contacts", "--status", "unsent", "--limit", "10", "--q", "isp"])
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(captured["req"].full_url)
+    q = parse_qs(parsed.query)
+    assert parsed.path == "/api/agent/contacts"
+    assert q["status"] == ["unsent"] and q["limit"] == ["10"] and q["q"] == ["isp"]
+    assert "follow_up_status" not in q
+
+
+def test_import_leads_array_from_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    p = tmp_path / "rows.json"
+    p.write_text(json.dumps([{"email": "a@b.com"}]), encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"imported": 1}))
+
+    cli.main(["import-leads", str(p), "--source", "scrape"])
+    req = captured["req"]
+    assert req.get_method() == "POST"
+    assert req.full_url.endswith("/api/agent/leads/import")
+    body = json.loads(req.data.decode())
+    assert body["rows"] == [{"email": "a@b.com"}]
+    assert body["source"] == "scrape"
+
+
+def test_import_leads_rows_wrapper_from_stdin_default_source(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps({"rows": [{"email": "x@y.com"}]})))
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"imported": 1}))
+
+    cli.main(["import-leads", "-"])
+    body = json.loads(captured["req"].data.decode())
+    assert body["rows"] == [{"email": "x@y.com"}]
+    assert body["source"] == "reasonix-agent"
+
+
+def test_discover_builds_post_body(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"imported": 0}))
+
+    cli.main(["discover", "find US ISP peering", "--min-score", "70", "--auto-import"])
+    req = captured["req"]
+    assert req.full_url.endswith("/api/agent/leads/discover")
+    body = json.loads(req.data.decode())
+    assert body == {
+        "query": "find US ISP peering",
+        "min_score": 70,
+        "delay": 0.5,
+        "auto_import": True,
+    }
+
+
+def test_import_leads_missing_file_errors(monkeypatch, tmp_path):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["import-leads", str(tmp_path / "nope.json")])
+    assert "错误" in str(ei.value)
+
+
+def test_import_leads_bad_json_errors(monkeypatch, tmp_path):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    p = tmp_path / "bad.json"
+    p.write_text("{bad", encoding="utf-8")
+    with pytest.raises(SystemExit) as ei:
+        cli.main(["import-leads", str(p)])
+    assert "错误" in str(ei.value)

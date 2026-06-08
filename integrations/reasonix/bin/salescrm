@@ -70,8 +70,65 @@ def request(method: str, path: str, *, params: dict | None = None, body=None) ->
     return json.loads(raw) if raw else {}
 
 
+def load_rows(source: str) -> list:
+    try:
+        if source == "-":
+            text = sys.stdin.read()
+        else:
+            with open(source, encoding="utf-8") as fh:
+                text = fh.read()
+    except OSError as exc:
+        raise SystemExit(f"错误：无法读取文件 {source!r}: {exc.strerror}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"错误：JSON 解析失败（第 {exc.lineno} 行第 {exc.colno} 列）: {exc.msg}"
+        ) from exc
+    rows = data["rows"] if isinstance(data, dict) and "rows" in data else data
+    if not isinstance(rows, list):
+        raise SystemExit('错误：import-leads 需要 JSON 数组或 {"rows":[...]}')
+    return rows
+
+
 def cmd_health(args) -> dict:
     return request("GET", "/api/agent/health")
+
+
+def cmd_contacts(args) -> dict:
+    return request(
+        "GET",
+        "/api/agent/contacts",
+        params={
+            "q": args.q,
+            "status": args.status,
+            "follow_up_status": args.follow_up,
+            "limit": args.limit,
+            "offset": args.offset,
+        },
+    )
+
+
+def cmd_import_leads(args) -> dict:
+    rows = load_rows(args.file)
+    return request(
+        "POST",
+        "/api/agent/leads/import",
+        body={"rows": rows, "source": args.source},
+    )
+
+
+def cmd_discover(args) -> dict:
+    return request(
+        "POST",
+        "/api/agent/leads/discover",
+        body={
+            "query": args.query,
+            "min_score": args.min_score,
+            "delay": args.delay,
+            "auto_import": args.auto_import,
+        },
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +137,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_health = sub.add_parser("health", help="检查 CRM 与数据库连通性")
     p_health.set_defaults(func=cmd_health)
+
+    p_contacts = sub.add_parser("contacts", help="列出联系人")
+    p_contacts.add_argument("--q", default=None, help="搜索关键词")
+    p_contacts.add_argument(
+        "--status", default="all", choices=["all", "sent", "unsent"], help="发信状态"
+    )
+    p_contacts.add_argument("--follow-up", dest="follow_up", default=None, help="跟进状态")
+    p_contacts.add_argument("--limit", type=int, default=50, help="每页数量 (1-500)")
+    p_contacts.add_argument("--offset", type=int, default=0, help="偏移")
+    p_contacts.set_defaults(func=cmd_contacts)
+
+    p_import = sub.add_parser("import-leads", help="导入线索 (JSON 数组或 {rows:[...]})")
+    p_import.add_argument("file", help="JSON 文件路径，或 - 表示从 stdin 读取")
+    p_import.add_argument("--source", default="reasonix-agent", help="来源标签")
+    p_import.set_defaults(func=cmd_import_leads)
+
+    p_discover = sub.add_parser("discover", help="AI 线索发现")
+    p_discover.add_argument("query", help="自然语言查询 (至少 4 字)")
+    p_discover.add_argument("--min-score", dest="min_score", type=int, default=60, help="最低分 0-100")
+    p_discover.add_argument("--delay", type=float, default=0.5, help="每条请求间隔秒")
+    p_discover.add_argument("--auto-import", dest="auto_import", action="store_true", help="自动导入")
+    p_discover.set_defaults(func=cmd_discover)
 
     return parser
 
