@@ -24,7 +24,7 @@ const {
   piChatMessagesEl, piChatForm, piChatInput, piChatSendBtn, piChatStopBtn, piChatClearBtn,
   piChatHistoryHintEl, piChatContextMeterEl, piChatContextMeterFillEl, piChatContextMeterLabelEl,
   piChatBackgroundInput, piThreadListEl, piChatProgressEl, piChatProgressFill,
-  piChatProgressText, leadQueryInput, minScoreInput, autoImportInput,
+  piChatProgressText, piChatJumpBtn, piChatStatusLiveEl, leadQueryInput, minScoreInput, autoImportInput,
   piChatShellEl, piLlmSetupEl, piGotoLlmSettingsBtn, piInputHintEl,
   piMobileTabChatBtn, piMobileTabThreadsBtn,
 } = dom;
@@ -50,7 +50,6 @@ export function renderPiEmptyStateHtml() {
     return `
       <div class="pi-chat-empty pi-chat-empty-state">
         <p class="pi-chat-empty-lead">${escapeHtml(t("pi.emptyHintAlt"))}</p>
-        <p class="pi-chat-empty-desc">${escapeHtml(t("pi.desc"))}</p>
       </div>`;
   }
   const chips = PI_EXAMPLE_PROMPTS.map(
@@ -60,7 +59,6 @@ export function renderPiEmptyStateHtml() {
   return `
     <div class="pi-chat-empty pi-chat-empty-state">
       <p class="pi-chat-empty-lead">${escapeHtml(t("pi.emptyHint"))}</p>
-      <p class="pi-chat-empty-desc">${escapeHtml(t("pi.desc"))}</p>
       <div class="pi-example-prompts">
         <span class="pi-example-label">${escapeHtml(t("pi.exampleLabel"))}</span>
         <div class="pi-example-chips">${chips}</div>
@@ -75,6 +73,12 @@ export function mountPiEmptyState() {
 
 export function updatePiInputHint() {
   if (!piInputHintEl) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    piInputHintEl.textContent = t("pi.offlineBanner");
+    piInputHintEl.classList.add("pi-input-hint-offline");
+    return;
+  }
+  piInputHintEl.classList.remove("pi-input-hint-offline");
   piInputHintEl.textContent = t("pi.inputHint", { mod: piSendModKey() });
 }
 
@@ -136,6 +140,10 @@ export function initPiAgentUi() {
     piChatInput.focus();
     setPiMobilePanel("chat");
   });
+  piChatMessagesEl?.addEventListener("scroll", handlePiChatScroll, { passive: true });
+  piChatJumpBtn?.addEventListener("click", jumpPiChatToLatest);
+  window.addEventListener("online", updatePiInputHint);
+  window.addEventListener("offline", updatePiInputHint);
 }
 
 export function handlePiChatInputKeydown(event) {
@@ -510,6 +518,7 @@ export function beginPiThread(title?: string) {
     notifyInfo(t("pi.busySwitch"));
     return null;
   }
+  clearPiTurnError();
   syncActivePiThreadHistory();
   const thread = {
     id: createPiThreadId(),
@@ -544,6 +553,7 @@ export async function switchPiThread(threadId) {
     notifyInfo(t("pi.busySwitch"));
     return;
   }
+  clearPiTurnError();
   syncActivePiThreadHistory();
   savePiThreadsStoreLocal();
   state.activePiThreadId = threadId;
@@ -627,9 +637,14 @@ export function restorePiChatToolEntry(item) {
       el.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
     }
   } else if (summary && pre) {
-    pre.classList.remove("hidden");
-    pre.textContent = summary;
+    if (/^[[{]/.test(summary.trim()) && summary.length > 120) {
+      showPiToolRawDetail(el, summary);
+    } else {
+      pre.classList.remove("hidden");
+      pre.textContent = summary;
+    }
   }
+  applyPiDestructiveHint(el, name);
 }
 
 export function restorePiChatUi() {
@@ -651,6 +666,7 @@ export function restorePiChatUi() {
   }
   renderPiThreadList();
   updatePiChatHistoryHint();
+  if (piLastError) renderPiChatError(piLastError.message, piLastError.retryText);
   settlePiChatAtBottom();
 }
 
@@ -678,6 +694,7 @@ export function updatePiContextMeter() {
     return;
   }
   piChatContextMeterEl.classList.remove("hidden");
+  piChatContextMeterEl.title = t("pi.contextTooltip");
   const pct = Math.max(0, Math.min(100, Number(stats.usage_percent) || 0));
   piChatContextMeterFillEl.style.transform = `scaleX(${pct / 100})`;
   piChatContextMeterFillEl.classList.toggle("warn", pct >= 75);
@@ -877,6 +894,67 @@ export function formatPiToolSummary(name, result) {
   return "";
 }
 
+export function piSelectableRows(toolEl): HTMLElement[] {
+  return Array.from(toolEl?.querySelectorAll(".pi-chat-leads-body tr, .pi-chat-lookup-body tr") || []) as HTMLElement[];
+}
+
+export function piRowCheckbox(tr) {
+  return tr?.querySelector?.(".pi-row-check") || null;
+}
+
+export function updatePiSelectionUi(toolEl) {
+  if (!toolEl) return;
+  const rows = piSelectableRows(toolEl);
+  const total = rows.length;
+  const selected = rows.filter((tr) => piRowCheckbox(tr)?.checked).length;
+  const countEl = toolEl.querySelector(".pi-sel-count");
+  if (countEl) countEl.textContent = total ? t("pi.selectedCount", { n: selected, total }) : "";
+  const all = toolEl.querySelector(".pi-sel-all");
+  if (all) {
+    all.checked = total > 0 && selected === total;
+    all.indeterminate = selected > 0 && selected < total;
+  }
+  const importBtn = toolEl.querySelector(".pi-chat-import-leads, .pi-chat-import-lookup");
+  if (importBtn) importBtn.disabled = selected === 0;
+}
+
+// Real checkboxes (keyboard-reachable, aria-labelled) drive selection, with a
+// header select-all. Row clicks toggle the row's checkbox for mouse convenience.
+export function wirePiSelection(toolEl) {
+  const body = toolEl?.querySelector(".pi-chat-leads-body, .pi-chat-lookup-body");
+  if (body && !body.dataset.selBound) {
+    body.dataset.selBound = "1";
+    body.addEventListener("change", (event) => {
+      const cb = (event.target as HTMLElement | null)?.closest(".pi-row-check") as HTMLInputElement | null;
+      if (!cb) return;
+      cb.closest("tr")?.classList.toggle("selected", cb.checked);
+      updatePiSelectionUi(toolEl);
+    });
+    body.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("a, input, label, button")) return;
+      const cb = piRowCheckbox(target?.closest("tr"));
+      if (!cb) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  const all = toolEl?.querySelector(".pi-sel-all");
+  if (all && !all.dataset.selBound) {
+    all.dataset.selBound = "1";
+    all.addEventListener("change", () => {
+      for (const tr of piSelectableRows(toolEl)) {
+        const cb = piRowCheckbox(tr);
+        if (cb) {
+          cb.checked = all.checked;
+          tr.classList.toggle("selected", all.checked);
+        }
+      }
+      updatePiSelectionUi(toolEl);
+    });
+  }
+}
+
 export function appendPiChatLookupTool(name) {
   const el = appendPiChatTool(name);
   el.classList.add("pi-chat-tool-lookup");
@@ -886,6 +964,7 @@ export function appendPiChatLookupTool(name) {
     <table>
       <thead>
         <tr>
+          <th class="pi-sel-th"><input type="checkbox" class="pi-sel-all" aria-label="${escapeHtml(t("pi.selectAll"))}" checked></th>
           <th>RIR</th>
           <th>ASN</th>
           <th>组织</th>
@@ -898,10 +977,14 @@ export function appendPiChatLookupTool(name) {
   `;
   const actionsEl = document.createElement("div");
   actionsEl.className = "pi-chat-leads-actions hidden";
-  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-lookup">${t("pi.importSelectedEmails")}</button>`;
+  actionsEl.innerHTML = `
+    <span class="pi-sel-count" aria-live="polite"></span>
+    <button type="button" class="success-btn pi-chat-import-lookup">${t("pi.importSelectedEmails")}</button>
+  `;
   el.appendChild(lookupWrap);
   el.appendChild(actionsEl);
   el._piLookupRows = [];
+  wirePiSelection(el);
   return el;
 }
 
@@ -917,6 +1000,7 @@ export function appendPiChatLookupRow(toolEl, row) {
   const roles = (row.roles || []).join(", ");
   const tr = document.createElement("tr");
   tr.innerHTML = `
+    <td class="pi-sel-cell"><input type="checkbox" class="pi-row-check" checked aria-label="${escapeHtml(t("pi.selectRowAria"))}"></td>
     <td>${escapeHtml(row.rir || "—")}</td>
     <td class="mono">AS${row.asn}</td>
     <td>${escapeHtml(row.org || "—")}</td>
@@ -925,19 +1009,16 @@ export function appendPiChatLookupRow(toolEl, row) {
   `;
   tr.dataset.index = String(index);
   tr.classList.add("selected");
-  tr.title = t("pi.toggleSelectTitle");
-  tr.addEventListener("click", () => tr.classList.toggle("selected"));
   body.appendChild(tr);
   toolEl.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
+  updatePiSelectionUi(toolEl);
 }
 
 export async function importPiChatLookup(toolEl) {
-  const selectedRows = Array.from(toolEl?.querySelectorAll("tr.selected") || []) as HTMLElement[];
   const allRows = toolEl?._piLookupRows || [];
-  const rows =
-    selectedRows.length > 0
-      ? selectedRows.map((row) => allRows[Number(row.dataset.index)])
-      : allRows;
+  const rows = piSelectableRows(toolEl)
+    .filter((tr) => piRowCheckbox(tr)?.checked)
+    .map((tr) => allRows[Number((tr as HTMLElement).dataset.index)]);
   const payload = normalizeImportRows(
     rows.filter((row) => row?.email).map((row) => ({
       ...row,
@@ -960,13 +1041,53 @@ export async function importPiChatLookup(toolEl) {
   }
 }
 
+const PI_SCROLL_STICK_THRESHOLD = 96;
+let piFollowBottom = true;
+
+export function isPiChatNearBottom() {
+  if (!piChatMessagesEl) return true;
+  const gap = piChatMessagesEl.scrollHeight - piChatMessagesEl.scrollTop - piChatMessagesEl.clientHeight;
+  return gap <= PI_SCROLL_STICK_THRESHOLD;
+}
+
+export function setPiChatJumpVisible(visible) {
+  piChatJumpBtn?.classList.toggle("hidden", !visible);
+}
+
+export function resumePiChatFollow() {
+  piFollowBottom = true;
+  setPiChatJumpVisible(false);
+}
+
+export function handlePiChatScroll() {
+  piFollowBottom = isPiChatNearBottom();
+  if (piFollowBottom) setPiChatJumpVisible(false);
+}
+
+// Follow the conversation bottom only while the user is already near it. If they
+// have scrolled up to read, leave their position alone and surface a
+// jump-to-latest button instead of yanking them down on every stream delta.
 export function scrollPiChatToBottom() {
   if (!piChatMessagesEl) return;
+  if (piFollowBottom) {
+    piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+    setPiChatJumpVisible(false);
+  } else {
+    setPiChatJumpVisible(true);
+  }
+}
+
+export function jumpPiChatToLatest() {
+  if (!piChatMessagesEl) return;
+  piFollowBottom = true;
+  setPiChatJumpVisible(false);
   piChatMessagesEl.scrollTo({ top: piChatMessagesEl.scrollHeight, behavior: "smooth" });
 }
 
 export function settlePiChatAtBottom() {
   if (!piChatMessagesEl) return;
+  piFollowBottom = true;
+  setPiChatJumpVisible(false);
   const scroll = () => {
     piChatMessagesEl.scrollTo({ top: piChatMessagesEl.scrollHeight, behavior: "auto" });
   };
@@ -1127,6 +1248,12 @@ export function finalizePiDiscoverTool(toolEl, event) {
   if (event?.message) {
     pushPiDiscoverTicker(toolEl, event.message);
   }
+  if (!toolEl._piLeads?.length && !toolEl.querySelector(".pi-chat-empty-leads")) {
+    const note = document.createElement("p");
+    note.className = "pi-chat-empty-leads";
+    note.textContent = t("pi.emptyLeadsRelax");
+    toolEl.appendChild(note);
+  }
 }
 
 export function handlePiDiscoverToolEvent(toolEl, event) {
@@ -1220,6 +1347,7 @@ export function appendPiChatDiscoverTool(name) {
     <table>
       <thead>
         <tr>
+          <th class="pi-sel-th"><input type="checkbox" class="pi-sel-all" aria-label="${escapeHtml(t("pi.selectAll"))}" checked></th>
           <th>分数</th>
           <th>组织</th>
           <th>邮箱</th>
@@ -1231,12 +1359,16 @@ export function appendPiChatDiscoverTool(name) {
   `;
   const actionsEl = document.createElement("div");
   actionsEl.className = "pi-chat-leads-actions hidden";
-  actionsEl.innerHTML = `<button type="button" class="success-btn pi-chat-import-leads">${t("pi.importSelectedLeads")}</button>`;
+  actionsEl.innerHTML = `
+    <span class="pi-sel-count" aria-live="polite"></span>
+    <button type="button" class="success-btn pi-chat-import-leads">${t("pi.importSelectedLeads")}</button>
+  `;
   el.appendChild(livePanel);
   el.appendChild(planEl);
   el.appendChild(leadsWrap);
   el.appendChild(actionsEl);
   el._piLeads = [];
+  wirePiSelection(el);
   initPiDiscoverChannelState(el);
   renderPiDiscoverLivePanel(el);
   startPiDiscoverTimer(el);
@@ -1254,6 +1386,7 @@ export function appendPiChatLeadRow(toolEl, lead) {
   toolEl._piLeads.push(lead);
   const tr = document.createElement("tr");
   tr.innerHTML = `
+    <td class="pi-sel-cell"><input type="checkbox" class="pi-row-check" checked aria-label="${escapeHtml(t("pi.selectRowAria"))}"></td>
     <td><span class="${scoreBadgeClass(lead.lead_score)}">${lead.lead_score || 0}</span></td>
     <td>${escapeHtml(lead.org || lead.network_name || "—")}</td>
     <td><a class="email-link" href="mailto:${lead.email}">${escapeHtml(lead.email || "—")}</a></td>
@@ -1261,13 +1394,10 @@ export function appendPiChatLeadRow(toolEl, lead) {
   `;
   tr.dataset.index = String(index);
   tr.classList.add("selected");
-  tr.title = t("pi.toggleSelectTitle");
-  tr.addEventListener("click", () => {
-    tr.classList.toggle("selected");
-  });
   body.appendChild(tr);
   tr.classList.add("pi-lead-row-in");
   toolEl.querySelector(".pi-chat-leads-actions")?.classList.remove("hidden");
+  updatePiSelectionUi(toolEl);
   scrollPiChatToBottom();
 }
 
@@ -1280,12 +1410,10 @@ export function renderPiChatPlan(toolEl, plan) {
 }
 
 export async function importPiChatLeads(toolEl) {
-  const selectedRows = Array.from(toolEl?.querySelectorAll("tr.selected") || []) as HTMLElement[];
   const allLeads = toolEl?._piLeads || [];
-  const rows =
-    selectedRows.length > 0
-      ? selectedRows.map((row) => allLeads[Number(row.dataset.index)])
-      : allLeads;
+  const rows = piSelectableRows(toolEl)
+    .filter((tr) => piRowCheckbox(tr)?.checked)
+    .map((tr) => allLeads[Number((tr as HTMLElement).dataset.index)]);
   const payload = normalizeImportRows(
     rows
       .filter((lead) => lead?.email)
@@ -1469,7 +1597,7 @@ export function appendPiChatBubble(role, text) {
     el.textContent = text;
   }
   piChatMessagesEl.appendChild(el);
-  piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+  scrollPiChatToBottom();
   return el;
 }
 
@@ -1481,8 +1609,20 @@ export function updatePiChatAssistantBubble(el, text, streaming = false) {
   if (piChatStreamRaf) cancelAnimationFrame(piChatStreamRaf);
   piChatStreamRaf = requestAnimationFrame(() => {
     el.innerHTML = renderMarkdown(sanitizePiAssistantDisplay(text || ""));
-    piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+    scrollPiChatToBottom();
     piChatStreamRaf = null;
+  });
+}
+
+// Announce only meaningful state to screen readers via one polite region,
+// instead of leaving the whole transcript live (which reads every stream delta).
+export function announcePi(message) {
+  if (!piChatStatusLiveEl) return;
+  const text = String(message || "").trim();
+  if (!text) return;
+  piChatStatusLiveEl.textContent = "";
+  requestAnimationFrame(() => {
+    if (piChatStatusLiveEl) piChatStatusLiveEl.textContent = text;
   });
 }
 
@@ -1492,8 +1632,51 @@ export function appendPiChatStatus(text) {
   el.className = "pi-chat-status";
   el.textContent = text;
   piChatMessagesEl.appendChild(el);
-  piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+  scrollPiChatToBottom();
   return el;
+}
+
+const PI_DESTRUCTIVE_TOOLS = new Set([
+  "delete_contacts",
+  "dedupe_contacts",
+  "reset_lead_preferences",
+]);
+
+// Destructive tool results carry a clear, non-color-only danger marker so the
+// operator can never miss that Pi just deleted/reset data on their behalf.
+export function applyPiDestructiveHint(toolEl, name) {
+  if (!toolEl || !PI_DESTRUCTIVE_TOOLS.has(name)) return;
+  toolEl.classList.add("pi-chat-tool-destructive");
+  if (toolEl.querySelector(".pi-chat-destructive-note")) return;
+  const note = document.createElement("p");
+  note.className = "pi-chat-destructive-note";
+  note.innerHTML = `<span class="pi-destructive-badge">${escapeHtml(t("pi.destructiveLabel"))}</span><span>${escapeHtml(t("pi.irreversible"))}</span>`;
+  const head = toolEl.querySelector(".pi-chat-tool-head");
+  if (head?.nextSibling) {
+    toolEl.insertBefore(note, head.nextSibling);
+  } else {
+    toolEl.appendChild(note);
+  }
+}
+
+// Collapse raw JSON tool dumps behind a "show details" disclosure instead of a
+// wall of machine output.
+export function showPiToolRawDetail(toolEl, text) {
+  if (!toolEl || !text) return;
+  let details = toolEl.querySelector(".pi-chat-tool-raw") as HTMLDetailsElement | null;
+  if (!details) {
+    details = document.createElement("details");
+    details.className = "pi-chat-tool-raw";
+    const summary = document.createElement("summary");
+    summary.textContent = t("pi.expandDetail");
+    const pre = document.createElement("pre");
+    pre.className = "pi-chat-tool-result-raw";
+    details.appendChild(summary);
+    details.appendChild(pre);
+    toolEl.appendChild(details);
+  }
+  const preEl = details.querySelector("pre");
+  if (preEl) preEl.textContent = text;
 }
 
 export function appendPiChatTool(name) {
@@ -1508,7 +1691,7 @@ export function appendPiChatTool(name) {
     <pre class="pi-chat-tool-result hidden"></pre>
   `;
   piChatMessagesEl.appendChild(el);
-  piChatMessagesEl.scrollTop = piChatMessagesEl.scrollHeight;
+  scrollPiChatToBottom();
   return el;
 }
 
@@ -1626,6 +1809,7 @@ function applyPiBackgroundEvent(event) {
     if (message) {
       appendPiChatBubble("assistant", message);
       appendPiHistoryEntry({ role: "assistant", content: message });
+      announcePi(message);
     }
     setProgressFill(piChatProgressFill, 100);
     return;
@@ -1688,6 +1872,64 @@ function isPiBackgroundActive(job) {
   return job.status === "pending" || job.status === "running";
 }
 
+let piLastError: { message: string; retryText: string } | null = null;
+
+export function renderPiChatError(message, retryText) {
+  if (!piChatMessagesEl) return null;
+  clearPiChatEmpty();
+  const el = document.createElement("div");
+  el.className = "pi-chat-status pi-chat-error";
+  el.setAttribute("role", "alert");
+  const msg = document.createElement("span");
+  msg.className = "pi-chat-error-msg";
+  msg.textContent = message;
+  el.appendChild(msg);
+  if (retryText) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary-btn pi-chat-retry-btn";
+    btn.textContent = t("pi.retry");
+    btn.addEventListener("click", () => {
+      retryLastPiTurn().catch(() => {});
+    });
+    el.appendChild(btn);
+  }
+  piChatMessagesEl.appendChild(el);
+  scrollPiChatToBottom();
+  return el;
+}
+
+export function showPiTurnError(message, retryText?) {
+  piLastError = { message: String(message || t("msg.errorGeneric")), retryText: retryText || "" };
+  renderPiChatError(piLastError.message, piLastError.retryText);
+}
+
+export function clearPiTurnError() {
+  piLastError = null;
+  piChatMessagesEl?.querySelectorAll(".pi-chat-error").forEach((el) => el.remove());
+}
+
+// Re-run the last user turn after a network/stream failure: drop the failed
+// partial tail, then re-stream without appending a duplicate user message.
+export async function retryLastPiTurn() {
+  if (state.piChatBusy || !state.llmConfigured) return;
+  let idx = -1;
+  for (let i = state.piChatHistory.length - 1; i >= 0; i -= 1) {
+    if (state.piChatHistory[i]?.role === "user") {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) return;
+  const text = String(state.piChatHistory[idx].content || "").trim();
+  if (!text) return;
+  state.piChatHistory = state.piChatHistory.slice(0, idx + 1);
+  clearPiTurnError();
+  restorePiChatUi();
+  resumePiChatFollow();
+  await streamPiTurn(text);
+}
+
 export async function sendPiChatMessage(message) {
   const text = String(message || "").trim();
   if (!text) return;
@@ -1703,6 +1945,8 @@ export async function sendPiChatMessage(message) {
   piChatInput.value = "";
   resizePiChatInput();
   updatePiAgentStatus();
+  resumePiChatFollow();
+  clearPiTurnError();
   appendPiChatBubble("user", text);
   state.piChatHistory.push({ role: "user", content: text });
   const thread = getActivePiThread();
@@ -1732,6 +1976,11 @@ export async function sendPiChatMessage(message) {
     return;
   }
 
+  await streamPiTurn(text);
+}
+
+export async function streamPiTurn(text) {
+  clearPiTurnError();
   setPiChatBusy(true);
   setProgressFill(piChatProgressFill, 12);
   piChatProgressText.textContent = t("pi.processingShort");
@@ -1922,10 +2171,11 @@ export async function sendPiChatMessage(message) {
               pre.classList.remove("hidden");
               pre.textContent = summary;
             } else {
-              pre.classList.remove("hidden");
-              pre.textContent = JSON.stringify(payload.result, null, 2);
-              toolEntry.summary = pre.textContent.slice(0, 8000);
+              const raw = JSON.stringify(payload.result, null, 2);
+              showPiToolRawDetail(toolEl, raw);
+              toolEntry.summary = raw.slice(0, 8000);
             }
+            if (!toolFailed) applyPiDestructiveHint(toolEl, payload.name);
           }
           appendPiHistoryEntry(toolEntry);
           activeToolEl = null;
@@ -1954,6 +2204,7 @@ export async function sendPiChatMessage(message) {
               activeAssistantEl = appendPiChatBubble("assistant", assistantStreamText);
             }
             appendPiHistoryEntry({ role: "assistant", content: assistantStreamText });
+            announcePi(assistantStreamText);
           }
           activeAssistantEl = null;
           assistantStreamText = "";
@@ -1963,13 +2214,14 @@ export async function sendPiChatMessage(message) {
           if (assistantText) {
             appendPiChatBubble("assistant", assistantText);
             appendPiHistoryEntry({ role: "assistant", content: assistantText });
+            announcePi(assistantText);
             setProgressFill(piChatProgressFill, 100);
           }
         } else if (payload.type === "error") {
           streamEnded = true;
           settlePendingAssistantBubble();
           failActiveTool(payload.message || t("msg.errorGeneric"));
-          appendPiChatStatus(payload.message || t("msg.errorGeneric"));
+          showPiTurnError(payload.message || t("msg.errorGeneric"), text);
         } else if (payload.type === "done") {
           streamEnded = true;
           piChatProgressText.textContent = t("pi.done");
@@ -1986,13 +2238,13 @@ export async function sendPiChatMessage(message) {
             streamEnded = true;
             settlePendingAssistantBubble();
             failActiveTool(payload.message || t("msg.errorGeneric"));
-            appendPiChatStatus(payload.message || t("msg.errorGeneric"));
+            showPiTurnError(payload.message || t("msg.errorGeneric"), text);
           }
         } catch {
           if (!streamEnded) {
             settlePendingAssistantBubble();
             failActiveTool(t("pi.streamInterrupted"));
-            appendPiChatStatus(t("pi.streamInterrupted"));
+            showPiTurnError(t("pi.streamInterrupted"), text);
           }
         }
       }
@@ -2001,16 +2253,21 @@ export async function sendPiChatMessage(message) {
     if (!streamEnded) {
       settlePendingAssistantBubble();
       failActiveTool(t("pi.streamInterrupted"));
-      appendPiChatStatus(t("pi.streamInterrupted"));
+      showPiTurnError(t("pi.streamInterrupted"), text);
     }
   } catch (error) {
     settlePendingAssistantBubble();
-    if (error.name !== "AbortError") {
-      failActiveTool(errorMessage(error, t("pi.requestFailed")));
-      appendPiChatStatus(errorMessage(error, t("pi.requestFailed")));
-    } else {
+    if (error.name === "AbortError") {
       failActiveTool(t("pi.stopped"));
       appendPiChatStatus(t("pi.stopped"));
+    } else {
+      const failMsg = !navigator.onLine
+        ? t("pi.errorOffline")
+        : error instanceof TypeError
+          ? t("pi.errorNetwork")
+          : errorMessage(error, t("pi.requestFailed"));
+      failActiveTool(failMsg);
+      showPiTurnError(failMsg, text);
     }
   } finally {
     state.piChatController = null;
@@ -2049,6 +2306,7 @@ export function clearPiChat() {
   if (state.piChatHistory.length && !window.confirm(t("pi.confirmClear"))) {
     return;
   }
+  clearPiTurnError();
   state.piChatHistory = [];
   const thread = getActivePiThread();
   if (thread) {

@@ -345,7 +345,11 @@
           <ul id="pi-thread-list" class="pi-thread-list"></ul>
         </aside>
         <div id="pi-chat-main-panel" class="pi-chat-main" role="tabpanel" aria-labelledby="pi-mobile-tab-chat">
-          <div id="pi-chat-messages" class="pi-chat-messages" aria-live="polite"></div>
+          <div class="pi-chat-scroll">
+            <div id="pi-chat-messages" class="pi-chat-messages" role="log"></div>
+            <button type="button" id="pi-chat-jump" class="pi-chat-jump hidden" data-i18n="pi.jumpToLatest" aria-label="跳到最新消息">↓ 新消息</button>
+          </div>
+          <p id="pi-chat-status-live" class="visually-hidden" aria-live="polite" aria-atomic="true"></p>
           <div id="pi-chat-progress" class="progress hidden" aria-live="polite">
             <div class="progress-bar"><div id="pi-chat-progress-fill"></div></div>
             <p id="pi-chat-progress-text" data-i18n="common.preparing">准备中…</p>
