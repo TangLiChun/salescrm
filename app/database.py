@@ -1384,6 +1384,7 @@ def delete_contact(user_id: int, contact_id: int) -> bool:
 
 def dedupe_contacts(*, user_id: int | None = None, conn: Any | None = None) -> dict:
     removed = 0
+    removed_rows: list[dict] = []
 
     def run(connection: Any) -> dict:
         nonlocal removed
@@ -1405,9 +1406,16 @@ def dedupe_contacts(*, user_id: int | None = None, conn: Any | None = None) -> d
             if key in seen:
                 connection.execute("DELETE FROM contacts WHERE id = %s", (row["id"],))
                 removed += 1
+                removed_rows.append({
+                    "email": row["email"],
+                    "org": row["org"],
+                    "name": row["name"],
+                    "roles": row["roles"],
+                    "notes": row["notes"],
+                })
                 continue
             seen.add(key)
-        return {"removed": removed, "remaining": len(seen)}
+        return {"removed": removed, "remaining": len(seen), "removed_rows": removed_rows}
 
     if conn is not None:
         return run(conn)

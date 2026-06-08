@@ -578,7 +578,9 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮销售/BD 操作网络运
 入库与数据规则：
 - import_leads 每行必须含 email，尽量带 org 和 name；asn 必须是纯数字（如 395092，不要带 AS 前缀）。
 - 线索含 linkedin/x/facebook/profile_url 时，导入会自动写入联系人社交链接字段。
-- 导入前用 list_contacts 查重；要屏蔽域名用 update_import_filters。"""
+- 导入前用 list_contacts 查重；要屏蔽域名用 update_import_filters。
+
+破坏性操作确认：调用 delete_contacts / dedupe_contacts / reset_lead_preferences 后若返回 confirm_required，表示系统在等用户确认。不要重试、不要自行再次调用该工具，用一句中文说明将发生什么（含数量），并提示用户点界面上的「确认执行」按钮。"""
 
 
 async def _stream_lead_events(
@@ -1081,12 +1083,55 @@ def _import_filters_payload() -> dict[str, Any]:
     }
 
 
+PI_DESTRUCTIVE_TOOLS = {"delete_contacts", "dedupe_contacts", "reset_lead_preferences"}
+
+
+def _destructive_confirm_summary(name: str, args: dict[str, Any], user_id: int) -> str:
+    if name == "delete_contacts":
+        ids = [item for item in (args.get("contact_ids") or []) if item]
+        return f"将删除 {len(ids)} 个联系人，此操作不可逆。"
+    if name == "dedupe_contacts":
+        return "将按邮箱合并并删除重复联系人，此操作不可逆。"
+    if name == "reset_lead_preferences":
+        return "将清空已学习的线索偏好并恢复默认，此操作不可逆。"
+    return "此操作不可逆，确认后才会执行。"
+
+
+def _contact_to_undo_row(contact: dict[str, Any]) -> dict[str, Any]:
+    """Shape a contact into an import-ready row so an accidental delete/dedupe
+    can be re-imported via the normal contacts import path."""
+    roles = contact.get("roles")
+    if isinstance(roles, (list, tuple)):
+        roles = ", ".join(str(role) for role in roles if role)
+    return {
+        "email": contact.get("email") or "",
+        "org": contact.get("org") or "",
+        "name": contact.get("name") or "",
+        "roles": roles or "",
+        "notes": contact.get("notes") or "",
+        "source": "undo-restore",
+    }
+
+
 async def _run_tool(
     user_id: int,
     name: str,
     args: dict[str, Any],
     emit: ToolEmitter,
+    *,
+    allow_destructive: bool = False,
 ) -> Any:
+    # Hard gate: destructive tools never run from the agent loop. They return a
+    # confirm_required marker; only an explicit user confirmation (the
+    # /api/pi/confirm-tool endpoint) sets allow_destructive=True. The model
+    # cannot self-confirm because this flag is not a tool argument.
+    if name in PI_DESTRUCTIVE_TOOLS and not allow_destructive:
+        return {
+            "confirm_required": True,
+            "name": name,
+            "summary": _destructive_confirm_summary(name, args, user_id),
+            "pending_args": args,
+        }
     if name == "list_contacts":
         q = args.get("q")
         limit = max(1, min(int(args.get("limit") or 20), 100))
@@ -1162,10 +1207,20 @@ async def _run_tool(
         ids = [int(item) for item in (args.get("contact_ids") or []) if int(item) > 0]
         if not ids:
             return {"error": "contact_ids 为空"}
+        undo_rows = [
+            _contact_to_undo_row(contact)
+            for cid in ids
+            if (contact := get_contact(user_id, cid))
+        ]
         if len(ids) == 1:
             ok = delete_contact(user_id, ids[0])
-            return {"deleted": 1 if ok else 0, "requested": 1}
-        return bulk_delete_contacts(user_id, ids)
+            result = {"deleted": 1 if ok else 0, "requested": 1}
+        else:
+            result = bulk_delete_contacts(user_id, ids)
+        if undo_rows and result.get("deleted"):
+            result["undo_payload"] = undo_rows
+            result["undo_kind"] = "contacts"
+        return result
 
     if name == "add_contact_note":
         contact_id = int(args.get("contact_id") or 0)
@@ -1202,12 +1257,23 @@ async def _run_tool(
         }
 
     if name == "reset_lead_preferences":
+        prior = get_prefs(user_id)
         prefs = reset_prefs(user_id)
-        return {"ok": True, "preferences": prefs, "message": "线索偏好已重置为默认"}
+        return {
+            "ok": True,
+            "preferences": prefs,
+            "message": "线索偏好已重置为默认",
+            "undo_payload": prior,
+            "undo_kind": "prefs",
+        }
 
     if name == "dedupe_contacts":
         result = dedupe_contacts(user_id=user_id)
+        removed_rows = result.pop("removed_rows", [])
         result["total_contacts"] = count_contacts(user_id)
+        if removed_rows:
+            result["undo_payload"] = [_contact_to_undo_row(row) for row in removed_rows]
+            result["undo_kind"] = "contacts"
         return result
 
     if name == "get_import_filters":

@@ -482,6 +482,56 @@ def reset_lead_preferences(user: CurrentUser) -> dict:
     return {"preferences": reset_prefs(user["id"]), "ok": True}
 
 
+class PiRestorePrefsRequest(BaseModel):
+    preferences: dict = Field(default_factory=dict)
+
+
+@app.post("/api/pi/restore-prefs")
+def restore_pi_prefs(body: PiRestorePrefsRequest, user: CurrentUser) -> dict:
+    """Undo a Pi-triggered reset_lead_preferences by writing the captured blob back."""
+    from app.lead_preferences import save_prefs
+
+    return {"ok": True, "preferences": save_prefs(user["id"], body.preferences or {})}
+
+
+class PiConfirmToolRequest(BaseModel):
+    thread_id: str | None = None
+    name: str
+    args: dict = Field(default_factory=dict)
+
+
+@app.post("/api/pi/confirm-tool")
+async def confirm_pi_tool(body: PiConfirmToolRequest, user: CurrentUser) -> dict:
+    """Execute a destructive Pi tool after the user confirms it on screen.
+
+    This is the only path that passes allow_destructive=True, so the model can
+    never trigger a deletion on its own from the agent loop.
+    """
+    from app.agent_chat import (
+        PI_DESTRUCTIVE_TOOLS,
+        ToolEmitter,
+        _run_tool,
+        tool_result_summary,
+    )
+
+    if body.name not in PI_DESTRUCTIVE_TOOLS:
+        raise HTTPException(status_code=400, detail="该操作无需确认")
+
+    emitter = ToolEmitter(asyncio.Queue())
+    result = await _run_tool(
+        user["id"], body.name, body.args or {}, emitter, allow_destructive=True
+    )
+    if body.thread_id and isinstance(result, dict) and not result.get("error"):
+        summary = tool_result_summary(body.name, result)
+        await asyncio.to_thread(
+            append_pi_thread_history_entries,
+            user["id"],
+            body.thread_id,
+            [{"role": "tool", "name": body.name, "summary": summary}],
+        )
+    return {"result": result}
+
+
 @app.put("/api/settings")
 async def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
     from app.settings_store import get_settings
