@@ -482,6 +482,18 @@ def reset_lead_preferences(user: CurrentUser) -> dict:
     return {"preferences": reset_prefs(user["id"]), "ok": True}
 
 
+class PiRestorePrefsRequest(BaseModel):
+    preferences: dict = Field(default_factory=dict)
+
+
+@app.post("/api/pi/restore-prefs")
+def restore_pi_prefs(body: PiRestorePrefsRequest, user: CurrentUser) -> dict:
+    """Undo a Pi-triggered reset_lead_preferences by writing the captured blob back."""
+    from app.lead_preferences import save_prefs
+
+    return {"ok": True, "preferences": save_prefs(user["id"], body.preferences or {})}
+
+
 @app.put("/api/settings")
 async def save_settings(body: SettingsUpdateRequest, _: CurrentUser) -> dict:
     from app.settings_store import get_settings

@@ -1679,6 +1679,48 @@ export function showPiToolRawDetail(toolEl, text) {
   if (preEl) preEl.textContent = text;
 }
 
+// Undo a destructive op live in-session: re-import captured contacts, or write
+// the captured lead-preferences blob back. (Undo is best-effort, current session.)
+export function addPiUndoButton(toolEl, result) {
+  if (!toolEl || !result?.undo_payload || toolEl.querySelector(".pi-undo-btn")) return;
+  const host = toolEl.querySelector(".pi-chat-destructive-note") || toolEl;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "secondary-btn pi-undo-btn";
+  btn.textContent = t("pi.undo");
+  btn.addEventListener("click", () => {
+    undoPiDestructive(result, btn).catch(() => {});
+  });
+  host.appendChild(btn);
+}
+
+export async function undoPiDestructive(result, btn) {
+  if (!result?.undo_payload) return;
+  btn.disabled = true;
+  try {
+    if (result.undo_kind === "prefs") {
+      await api("/api/pi/restore-prefs", {
+        method: "POST",
+        body: JSON.stringify({ preferences: result.undo_payload }),
+      });
+      showApiSuccess(t("pi.undonePrefs"));
+    } else {
+      const rows = normalizeImportRows(result.undo_payload || []);
+      const res = await api("/api/contacts/import", {
+        method: "POST",
+        body: JSON.stringify({ rows }),
+      });
+      showApiSuccess(t("pi.undone", { n: res?.imported ?? rows.length }));
+      await deps.loadContacts?.();
+    }
+    btn.textContent = t("pi.undoneState");
+    btn.classList.add("pi-undo-done");
+  } catch (error) {
+    btn.disabled = false;
+    showApiError(error, t("pi.undoFailed"));
+  }
+}
+
 export function appendPiChatTool(name) {
   clearPiChatEmpty();
   const el = document.createElement("div");
@@ -2175,7 +2217,10 @@ export async function streamPiTurn(text) {
               showPiToolRawDetail(toolEl, raw);
               toolEntry.summary = raw.slice(0, 8000);
             }
-            if (!toolFailed) applyPiDestructiveHint(toolEl, payload.name);
+            if (!toolFailed) {
+              applyPiDestructiveHint(toolEl, payload.name);
+              if (payload.result?.undo_payload) addPiUndoButton(toolEl, payload.result);
+            }
           }
           appendPiHistoryEntry(toolEntry);
           activeToolEl = null;

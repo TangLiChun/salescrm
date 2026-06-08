@@ -1081,6 +1081,22 @@ def _import_filters_payload() -> dict[str, Any]:
     }
 
 
+def _contact_to_undo_row(contact: dict[str, Any]) -> dict[str, Any]:
+    """Shape a contact into an import-ready row so an accidental delete/dedupe
+    can be re-imported via the normal contacts import path."""
+    roles = contact.get("roles")
+    if isinstance(roles, (list, tuple)):
+        roles = ", ".join(str(role) for role in roles if role)
+    return {
+        "email": contact.get("email") or "",
+        "org": contact.get("org") or "",
+        "name": contact.get("name") or "",
+        "roles": roles or "",
+        "notes": contact.get("notes") or "",
+        "source": "undo-restore",
+    }
+
+
 async def _run_tool(
     user_id: int,
     name: str,
@@ -1162,10 +1178,20 @@ async def _run_tool(
         ids = [int(item) for item in (args.get("contact_ids") or []) if int(item) > 0]
         if not ids:
             return {"error": "contact_ids 为空"}
+        undo_rows = [
+            _contact_to_undo_row(contact)
+            for cid in ids
+            if (contact := get_contact(user_id, cid))
+        ]
         if len(ids) == 1:
             ok = delete_contact(user_id, ids[0])
-            return {"deleted": 1 if ok else 0, "requested": 1}
-        return bulk_delete_contacts(user_id, ids)
+            result = {"deleted": 1 if ok else 0, "requested": 1}
+        else:
+            result = bulk_delete_contacts(user_id, ids)
+        if undo_rows and result.get("deleted"):
+            result["undo_payload"] = undo_rows
+            result["undo_kind"] = "contacts"
+        return result
 
     if name == "add_contact_note":
         contact_id = int(args.get("contact_id") or 0)
@@ -1202,12 +1228,23 @@ async def _run_tool(
         }
 
     if name == "reset_lead_preferences":
+        prior = get_prefs(user_id)
         prefs = reset_prefs(user_id)
-        return {"ok": True, "preferences": prefs, "message": "线索偏好已重置为默认"}
+        return {
+            "ok": True,
+            "preferences": prefs,
+            "message": "线索偏好已重置为默认",
+            "undo_payload": prior,
+            "undo_kind": "prefs",
+        }
 
     if name == "dedupe_contacts":
         result = dedupe_contacts(user_id=user_id)
+        removed_rows = result.pop("removed_rows", [])
         result["total_contacts"] = count_contacts(user_id)
+        if removed_rows:
+            result["undo_payload"] = [_contact_to_undo_row(row) for row in removed_rows]
+            result["undo_kind"] = "contacts"
         return result
 
     if name == "get_import_filters":

@@ -3293,6 +3293,19 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
+.pi-undo-btn {
+  min-height: 1.9rem;
+  margin-left: auto;
+  padding: 0.25rem 0.7rem;
+  font-size: var(--text-xs);
+}
+
+.pi-undo-btn.pi-undo-done {
+  color: var(--positive-ink);
+  border-color: color-mix(in srgb, var(--positive) 40%, var(--line));
+  cursor: default;
+}
+
 .pi-chat-tool-raw {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
