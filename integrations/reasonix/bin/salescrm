@@ -5,8 +5,9 @@ Stdlib only. Wraps the Sales CRM Agent API (/api/agent/*) so a Reasonix agent ca
 drive lead import/discovery through its built-in `bash` tool.
 
 Env:
-  SALESCRM_URL    default http://127.0.0.1:8000
-  SALESCRM_TOKEN  required — CRM 设置 → 自动化 → 外部 Agent API → Agent Token
+  SALESCRM_URL      default http://127.0.0.1:8000
+  SALESCRM_TOKEN    required — CRM 设置 → 自动化 → 外部 Agent API → Agent Token
+  SALESCRM_TIMEOUT  optional request timeout seconds (default 30; discover 300)
 """
 
 from __future__ import annotations
@@ -28,9 +29,22 @@ def token() -> str:
     return (os.environ.get("SALESCRM_TOKEN") or "").strip()
 
 
-def _open(req: urllib.request.Request):
+def _open(req: urllib.request.Request, timeout: int = 30):
     """HTTP seam — patched in tests."""
-    return urllib.request.urlopen(req, timeout=30)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _effective_timeout(default: int) -> int:
+    """Return the effective timeout: env override if valid, else the passed default."""
+    raw = os.environ.get("SALESCRM_TIMEOUT", "").strip()
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return default
 
 
 def _error_detail(exc: urllib.error.HTTPError) -> str:
@@ -43,7 +57,7 @@ def _error_detail(exc: urllib.error.HTTPError) -> str:
     return exc.reason or "request failed"
 
 
-def request(method: str, path: str, *, params: dict | None = None, body=None) -> dict:
+def request(method: str, path: str, *, params: dict | None = None, body=None, timeout: int = 30) -> dict:
     tok = token()
     if not tok:
         raise SystemExit(
@@ -61,7 +75,7 @@ def request(method: str, path: str, *, params: dict | None = None, body=None) ->
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with _open(req) as resp:
+        with _open(req, _effective_timeout(timeout)) as resp:
             raw = resp.read().decode()
     except urllib.error.HTTPError as exc:
         raise SystemExit(f"Sales CRM {exc.code}: {_error_detail(exc)}") from exc
@@ -128,6 +142,7 @@ def cmd_discover(args) -> dict:
             "delay": args.delay,
             "auto_import": args.auto_import,
         },
+        timeout=300,
     )
 
 

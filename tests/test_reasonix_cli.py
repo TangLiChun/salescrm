@@ -38,8 +38,9 @@ class FakeResp:
 
 
 def _capture(captured, payload=None):
-    def _open(req):
+    def _open(req, timeout=None):
         captured["req"] = req
+        captured["timeout"] = timeout
         return FakeResp(payload if payload is not None else {"ok": True})
 
     return _open
@@ -70,7 +71,7 @@ def test_http_error_surfaces_status_and_detail(monkeypatch):
     body = io.BytesIO(json.dumps({"detail": "未配置 LLM API Key"}).encode())
     err = urllib.error.HTTPError("http://x/api/agent/health", 503, "Unavailable", {}, body)
 
-    def boom(req):
+    def boom(req, timeout=None):
         raise err
 
     monkeypatch.setattr(cli, "_open", boom)
@@ -82,7 +83,7 @@ def test_http_error_surfaces_status_and_detail(monkeypatch):
 def test_url_error_surfaces_connect_failure(monkeypatch):
     monkeypatch.setenv("SALESCRM_TOKEN", "T")
 
-    def boom(req):
+    def boom(req, timeout=None):
         raise urllib.error.URLError("Connection refused")
 
     monkeypatch.setattr(cli, "_open", boom)
@@ -166,3 +167,50 @@ def test_import_leads_bad_json_errors(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as ei:
         cli.main(["import-leads", str(p)])
     assert "错误" in str(ei.value)
+
+
+def test_default_timeout_is_30(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    monkeypatch.delenv("SALESCRM_TIMEOUT", raising=False)
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"ok": True}))
+
+    cli.main(["health"])
+    assert captured["timeout"] == 30
+
+
+def test_discover_uses_generous_timeout(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    monkeypatch.delenv("SALESCRM_TIMEOUT", raising=False)
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"imported": 0}))
+
+    cli.main(["discover", "find US ISP peering"])
+    assert captured["timeout"] == 300
+
+
+def test_env_overrides_timeout(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    monkeypatch.setenv("SALESCRM_TIMEOUT", "120")
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"ok": True}))
+
+    # env override wins for health (default 30)
+    cli.main(["health"])
+    assert captured["timeout"] == 120
+
+    # env override also wins for discover (default 300)
+    captured2 = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured2, {"imported": 0}))
+    cli.main(["discover", "find US ISP peering"])
+    assert captured2["timeout"] == 120
+
+
+def test_invalid_env_timeout_falls_back(monkeypatch):
+    monkeypatch.setenv("SALESCRM_TOKEN", "T")
+    monkeypatch.setenv("SALESCRM_TIMEOUT", "abc")
+    captured = {}
+    monkeypatch.setattr(cli, "_open", _capture(captured, {"ok": True}))
+
+    cli.main(["health"])
+    assert captured["timeout"] == 30
