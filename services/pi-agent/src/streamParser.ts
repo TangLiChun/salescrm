@@ -112,8 +112,9 @@ export function consumeStreamChunk(
       state.reasoningParts.push(String(reasoningPiece));
       if (!state.toolStatusEmitted && !state.contentParts.length) {
         state.toolStatusEmitted = true;
-        events.push({ type: "status", message: "模型推理中…" });
+        events.push({ type: "reasoning_start" });
       }
+      events.push({ type: "reasoning_delta", text: String(reasoningPiece) });
     }
 
     for (const toolDelta of (delta.tool_calls as Record<string, unknown>[]) || []) {

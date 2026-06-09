@@ -622,14 +622,14 @@ export function restorePiChatUi() {
         settlePiChatAtBottom();
         return;
     }
-    for (const item of state.piChatHistory) {
+    state.piChatHistory.forEach((item, index) => {
         if (item.role === "user" || item.role === "assistant") {
-            appendPiChatBubble(item.role, item.content);
+            appendPiChatBubble(item.role, item.content, { throughIndex: index + 1 });
         }
         else if (item.role === "tool") {
             restorePiChatToolEntry(item);
         }
-    }
+    });
     renderPiThreadList();
     updatePiChatHistoryHint();
     if (piLastError)
@@ -1580,7 +1580,7 @@ export function sanitizePiAssistantDisplay(text) {
         return "";
     return trimmed;
 }
-export function appendPiChatBubble(role, text) {
+export function appendPiChatBubble(role, text, options = {}) {
     clearPiChatEmpty();
     const el = document.createElement("div");
     el.className = `pi-chat-bubble ${role}`;
@@ -1591,9 +1591,38 @@ export function appendPiChatBubble(role, text) {
     else {
         el.textContent = text;
     }
+    if (role === "assistant" && options.throughIndex != null && state.activePiThreadId) {
+        const actions = document.createElement("div");
+        actions.className = "pi-chat-bubble-actions";
+        const forkBtn = document.createElement("button");
+        forkBtn.type = "button";
+        forkBtn.className = "secondary-btn pi-fork-btn";
+        forkBtn.textContent = t("pi.forkFromHere");
+        forkBtn.addEventListener("click", () => {
+            forkPiThreadAt(options.throughIndex).catch((error) => showApiError(error, t("msg.errorGeneric")));
+        });
+        actions.appendChild(forkBtn);
+        el.appendChild(actions);
+    }
     piChatMessagesEl.appendChild(el);
     scrollPiChatToBottom();
     return el;
+}
+export async function forkPiThreadAt(throughIndex) {
+    const threadId = state.activePiThreadId;
+    if (!threadId || state.piChatBusy)
+        return;
+    const data = await api(`/api/pi/threads/${encodeURIComponent(threadId)}/fork`, {
+        method: "POST",
+        body: JSON.stringify({ through_index: throughIndex }),
+    });
+    const mapped = mapServerPiThreadFull(data);
+    state.piThreads.unshift(mapped);
+    if (state.piThreads.length > PI_THREADS_MAX) {
+        state.piThreads = state.piThreads.slice(0, PI_THREADS_MAX);
+    }
+    await switchPiThread(mapped.id);
+    notifyInfo(t("pi.forkDone"));
 }
 export let piChatStreamRaf = null;
 export function updatePiChatAssistantBubble(el, text, streaming = false) {
@@ -2110,9 +2139,25 @@ export async function streamPiTurn(text) {
     state.piChatController = new AbortController();
     let activeToolEl = null;
     let activeAssistantEl = null;
+    let activeReasoningEl = null;
+    let activeReasoningBody = null;
+    let reasoningStreamText = "";
     let assistantStreamText = "";
     let streamEnded = false;
+    const finalizeReasoningBlock = (collapse = true) => {
+        if (!activeReasoningEl)
+            return;
+        if (activeReasoningBody && reasoningStreamText.trim()) {
+            activeReasoningBody.textContent = reasoningStreamText.trim();
+        }
+        if (collapse)
+            activeReasoningEl.open = false;
+        activeReasoningEl = null;
+        activeReasoningBody = null;
+        reasoningStreamText = "";
+    };
     const settlePendingAssistantBubble = () => {
+        finalizeReasoningBlock(true);
         const visibleText = sanitizePiAssistantDisplay(assistantStreamText);
         if (activeAssistantEl) {
             if (visibleText) {
@@ -2183,6 +2228,33 @@ export async function streamPiTurn(text) {
                 }
                 if (payload.type === "context") {
                     applyPiContextStats(payload.stats);
+                }
+                else if (payload.type === "reasoning_start") {
+                    clearPiChatEmpty();
+                    if (!activeReasoningEl) {
+                        activeReasoningEl = document.createElement("details");
+                        activeReasoningEl.className = "pi-chat-reasoning";
+                        activeReasoningEl.open = true;
+                        const summary = document.createElement("summary");
+                        summary.textContent = t("pi.reasoning");
+                        activeReasoningBody = document.createElement("div");
+                        activeReasoningBody.className = "pi-chat-reasoning-body";
+                        activeReasoningEl.appendChild(summary);
+                        activeReasoningEl.appendChild(activeReasoningBody);
+                        piChatMessagesEl.appendChild(activeReasoningEl);
+                        scrollPiChatToBottom();
+                    }
+                    piChatProgressText.textContent = t("pi.reasoningInProgress");
+                }
+                else if (payload.type === "reasoning_delta") {
+                    reasoningStreamText += payload.text || "";
+                    if (activeReasoningBody) {
+                        activeReasoningBody.textContent = reasoningStreamText;
+                        scrollPiChatToBottom();
+                    }
+                }
+                else if (payload.type === "reasoning_done") {
+                    finalizeReasoningBlock(true);
                 }
                 else if (payload.type === "status") {
                     piChatProgressText.textContent = payload.message || t("msg.piProcessingShort");
@@ -2322,6 +2394,7 @@ export async function streamPiTurn(text) {
                     setProgressFill(piChatProgressFill, 85);
                 }
                 else if (payload.type === "assistant_start") {
+                    finalizeReasoningBlock(true);
                     settlePendingAssistantBubble();
                     assistantStreamText = "";
                     setProgressFill(piChatProgressFill, 90);

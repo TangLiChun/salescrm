@@ -89,10 +89,16 @@ from app.email_render import render_email
 from app.email_sender import build_message, send_smtp, start_email_sender, stop_email_sender
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
+from app.pi_agent_proxy import (
+    pi_agent_service_url,
+    sanitize_agent_history,
+    stream_pi_agent_events,
+)
 from app.pi_chat_store import (
     append_pi_thread_history_entries,
     compress_thread_context_until_current,
     create_pi_thread,
+    fork_pi_thread,
     delete_pi_thread,
     get_pi_thread,
     list_pi_threads,
@@ -322,89 +328,6 @@ class AgentChatRequest(BaseModel):
     thread_id: str | None = Field(default=None, max_length=64)
 
 
-def _sanitize_agent_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop non-string fields (e.g. tool preview arrays) before LLM context build."""
-    cleaned: list[dict[str, Any]] = []
-    for item in history:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "").strip()
-        if role in {"user", "assistant"}:
-            content = str(item.get("content") or "").strip()
-            if content:
-                cleaned.append({"role": role, "content": content})
-        elif role == "tool":
-            name = str(item.get("name") or "").strip()
-            summary = str(item.get("summary") or "").strip()
-            if name:
-                cleaned.append({"role": "tool", "name": name, "summary": summary})
-    return cleaned
-
-
-def _pi_agent_service_url() -> str:
-    return os.environ.get("PI_AGENT_SERVICE_URL", "").strip().rstrip("/")
-
-
-def _pi_internal_secret() -> str:
-    return os.environ.get("PI_INTERNAL_SECRET", "").strip()
-
-
-async def _proxy_pi_agent_stream_events(
-    user_id: int,
-    body: AgentChatRequest,
-    *,
-    cancel_check,
-) -> AsyncIterator[dict[str, Any]]:
-    import httpx
-
-    url = f"{_pi_agent_service_url()}/stream"
-    secret = _pi_internal_secret()
-    if not secret:
-        yield {"type": "error", "message": "Pi agent 服务未配置 PI_INTERNAL_SECRET"}
-        yield {"type": "done"}
-        return
-
-    payload = {
-        "user_id": user_id,
-        "message": body.message,
-        "thread_id": body.thread_id,
-        "history": _sanitize_agent_history(body.history),
-    }
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream(
-            "POST",
-            url,
-            json=payload,
-            headers={"X-Internal-Secret": secret},
-        ) as resp:
-            if resp.status_code >= 400:
-                detail = (await resp.aread()).decode("utf-8", "replace")[:300]
-                yield {
-                    "type": "error",
-                    "message": f"Pi agent 服务错误 ({resp.status_code}): {detail}",
-                }
-                yield {"type": "done"}
-                return
-            async for line in resp.aiter_lines():
-                if cancel_check():
-                    yield {"type": "error", "message": "任务已停止"}
-                    yield {"type": "done"}
-                    return
-                stripped = line.strip()
-                if not stripped.startswith("data:"):
-                    continue
-                payload_line = stripped[5:].strip()
-                if not payload_line:
-                    continue
-                try:
-                    event = json.loads(payload_line)
-                except json.JSONDecodeError:
-                    continue
-                yield event
-                if event.get("type") == "done":
-                    return
-
-
 class PiThreadCreateRequest(BaseModel):
     title: str = Field(default="", max_length=200)
 
@@ -417,6 +340,10 @@ class PiThreadUpdateRequest(BaseModel):
 class PiThreadSyncRequest(BaseModel):
     threads: list[dict] = Field(default_factory=list)
     active_thread_id: str | None = Field(default=None, max_length=64)
+
+
+class PiThreadForkRequest(BaseModel):
+    through_index: int = Field(ge=0, le=10000)
 
 
 def render_page(filename: str) -> HTMLResponse:
@@ -1110,16 +1037,18 @@ async def agent_chat_stream_route(
 
         try:
             stream_source = (
-                _proxy_pi_agent_stream_events(
+                stream_pi_agent_events(
                     user_id,
-                    body,
+                    body.message,
+                    thread_id=body.thread_id,
+                    history=body.history,
                     cancel_check=lambda: disconnected["value"],
                 )
-                if _pi_agent_service_url()
+                if pi_agent_service_url()
                 else agent_chat_stream(
                     user_id,
                     body.message,
-                    _sanitize_agent_history(body.history),
+                    sanitize_agent_history(body.history),
                     thread_id=thread_id,
                     cancel_check=lambda: disconnected["value"],
                 )
@@ -1181,6 +1110,14 @@ def get_pi_thread_route(thread_id: str, user: CurrentUser) -> dict:
 @app.post("/api/pi/threads")
 def create_pi_thread_route(body: PiThreadCreateRequest, user: CurrentUser) -> dict:
     return create_pi_thread(user["id"], title=body.title)
+
+
+@app.post("/api/pi/threads/{thread_id}/fork")
+def fork_pi_thread_route(thread_id: str, body: PiThreadForkRequest, user: CurrentUser) -> dict:
+    thread = fork_pi_thread(user["id"], thread_id, body.through_index)
+    if not thread:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return thread
 
 
 @app.put("/api/pi/threads/{thread_id}")

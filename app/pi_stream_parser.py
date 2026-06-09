@@ -143,7 +143,8 @@ def consume_stream_chunk(
             reasoning_parts.append(str(reasoning_piece))
             if not tool_status_emitted[0] and not content_parts:
                 tool_status_emitted[0] = True
-                events.append({"type": "status", "message": "模型推理中…"})
+                events.append({"type": "reasoning_start"})
+            events.append({"type": "reasoning_delta", "text": str(reasoning_piece)})
 
         for tool_delta in delta.get("tool_calls") or []:
             if isinstance(tool_delta, dict):

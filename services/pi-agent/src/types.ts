@@ -27,6 +27,9 @@ export type AssistantMessage = {
 export type LlmStreamEvent =
   | { type: "content_delta"; text: string }
   | { type: "status"; message: string }
+  | { type: "reasoning_start" }
+  | { type: "reasoning_delta"; text: string }
+  | { type: "reasoning_done" }
   | { type: "message"; message: AssistantMessage }
   | { type: "error"; message: string };
 

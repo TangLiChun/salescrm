@@ -1703,6 +1703,7 @@ async def agent_chat_stream(
             content_buffer = ""
             streamed_reply = False
             last_streamed_visible = ""
+            reasoning_open = False
 
             tool_choice: str | dict[str, Any] | None = (
                 "required" if llm_nudge_count > 0 and AGENT_TOOLS else None
@@ -1715,7 +1716,12 @@ async def agent_chat_stream(
                     yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
                     yield {"type": "done"}
                     return
-                if event_type == "content_delta":
+                if event_type == "reasoning_start":
+                    reasoning_open = True
+                    yield {"type": "reasoning_start"}
+                elif event_type == "reasoning_delta":
+                    yield event
+                elif event_type == "content_delta":
                     piece = str(event.get("text") or "")
                     if piece:
                         content_buffer += piece
@@ -1725,6 +1731,9 @@ async def agent_chat_stream(
                             last_streamed_visible = visible
                             if delta:
                                 if not streamed_reply:
+                                    if reasoning_open:
+                                        reasoning_open = False
+                                        yield {"type": "reasoning_done"}
                                     streamed_reply = True
                                     yield {"type": "assistant_start"}
                                 yield {"type": "assistant_delta", "text": delta}

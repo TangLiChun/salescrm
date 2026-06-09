@@ -12,6 +12,7 @@ from app.agent_chat import (
     is_pi_thread_streaming,
     tool_result_summary,
 )
+from app.pi_agent_proxy import pi_agent_service_url, stream_pi_agent_events
 from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     create_background_job,
@@ -505,13 +506,24 @@ async def _run_pi_agent_job(job_id: int) -> None:
     error_msg: str | None = None
 
     try:
-        async for event in agent_chat_stream(
-            user_id,
-            message,
-            None,
-            thread_id=thread_id,
-            cancel_check=lambda: _is_cancelled(job_id),
-        ):
+        stream_source = (
+            stream_pi_agent_events(
+                user_id,
+                message,
+                thread_id=thread_id,
+                history=None,
+                cancel_check=lambda: _is_cancelled(job_id),
+            )
+            if pi_agent_service_url()
+            else agent_chat_stream(
+                user_id,
+                message,
+                None,
+                thread_id=thread_id,
+                cancel_check=lambda: _is_cancelled(job_id),
+            )
+        )
+        async for event in stream_source:
             event_type = event.get("type")
             if event_type == "error":
                 error_msg = str(event.get("message") or "Pi 任务失败")

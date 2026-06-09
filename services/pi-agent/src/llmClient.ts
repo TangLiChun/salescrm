@@ -147,6 +147,10 @@ export async function* streamChat(
             emittedAny = true;
             if (event.type === "content_delta") {
               yield { type: "content_delta", text: String(event.text || "") };
+            } else if (event.type === "reasoning_start") {
+              yield { type: "reasoning_start" };
+            } else if (event.type === "reasoning_delta") {
+              yield { type: "reasoning_delta", text: String(event.text || "") };
             } else if (event.type === "status") {
               yield { type: "status", message: String(event.message || "Pi 助手处理中…") };
             }

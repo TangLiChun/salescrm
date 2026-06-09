@@ -5,6 +5,7 @@ import {
   assistantIntroBeforeTools,
   meaningfulAssistantContent,
 } from "./replyHeuristics.js";
+import { canParallelizeToolBatch } from "./parallelTools.js";
 import {
   MAX_LLM_CALLS_PER_TURN,
   MAX_LLM_NUDGES,
@@ -128,6 +129,7 @@ export async function* agentChatStream(input: {
       contentBuffer = "";
       streamedReply = false;
       let lastStreamedVisible = "";
+      let reasoningOpen = false;
 
       const toolChoice = llmNudgeCount > 0 && tools.length ? "required" : null;
       llmCallCount += 1;
@@ -138,7 +140,16 @@ export async function* agentChatStream(input: {
           yield { type: "done" };
           return;
         }
-        if (event.type === "content_delta") {
+        if (event.type === "reasoning_start") {
+          reasoningOpen = true;
+          yield { type: "reasoning_start" };
+        } else if (event.type === "reasoning_delta") {
+          yield { type: "reasoning_delta", text: event.text };
+        } else if (event.type === "content_delta") {
+          if (reasoningOpen) {
+            reasoningOpen = false;
+            yield { type: "reasoning_done" };
+          }
           contentBuffer += event.text;
           const visible = meaningfulAssistantContent(contentBuffer);
           if (visible && visible.length > lastStreamedVisible.length) {
@@ -157,6 +168,9 @@ export async function* agentChatStream(input: {
         } else if (event.type === "message") {
           assistant = event.message;
         }
+      }
+      if (reasoningOpen) {
+        yield { type: "reasoning_done" };
       }
 
       const decision = decideTurn(assistant, contentBuffer, {
@@ -238,40 +252,12 @@ export async function* agentChatStream(input: {
     const currentBatchNames = new Set(preparedCalls.map(([, name]) => name));
     let shouldForceSummary = false;
 
-    for (const [toolCall, name, args] of preparedCalls) {
-      const block = await python.checkToolBlock({
-        name,
-        user_message: message,
-        current_batch_names: [...currentBatchNames],
-        executed_names: executedToolNames,
-        executed_count: executedToolCount,
-      });
-
-      if (block.blocked) {
-        const blockedResult = block.result || { error: block.reason || "blocked" };
-        yield {
-          type: "tool_blocked",
-          name,
-          args,
-          reason: block.reason,
-        };
-        messages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: block.llm_content || JSON.stringify(blockedResult),
-        });
-        const allowAsnLookupCorrection =
-          String(block.reason || "").startsWith("明确 ASN") &&
-          !executedToolNames.includes("lookup_asns") &&
-          !currentBatchNames.has("lookup_asns");
-        if (!allowAsnLookupCorrection) shouldForceSummary = true;
-        continue;
-      }
-
-      yield { type: "tool_start", name, args };
-      executedToolCount += 1;
-      executedToolNames.push(name);
-
+    const runOneTool = async (
+      toolCall: PreparedCall[0],
+      name: string,
+      args: Record<string, unknown>,
+      onProgress: (event: AgentEvent) => void,
+    ): Promise<{ toolResult: Record<string, unknown>; llmContent: string }> => {
       const toolGen = python.runTool({ user_id: userId, name, args });
       let toolResult: Record<string, unknown> = { error: "工具执行失败" };
       let llmContent = "";
@@ -287,7 +273,7 @@ export async function* agentChatStream(input: {
           timeoutPromise,
         ]);
         if ("timedOut" in winner && winner.timedOut) {
-          yield { type: "status", message: `仍在执行 ${name}…` };
+          onProgress({ type: "status", message: `仍在执行 ${name}…` });
           lastHeartbeat = Date.now();
           continue;
         }
@@ -299,28 +285,138 @@ export async function* agentChatStream(input: {
         }
         const event = step.value;
         if (event.type === "tool_progress") {
-          yield { type: "tool_progress", name, message: event.message };
+          onProgress({ type: "tool_progress", name, message: event.message });
         } else if (event.type === "tool_event") {
-          yield { type: "tool_event", name, event: event.event };
+          onProgress({ type: "tool_event", name, event: event.event });
         }
         lastHeartbeat = Date.now();
       }
+      return { toolResult, llmContent };
+    };
 
-      yield { type: "tool_result", name, result: toolResult };
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: llmContent || JSON.stringify(toolResult),
+    const allowedCalls: PreparedCall[] = [];
+    for (const call of preparedCalls) {
+      const [, name, args] = call;
+      const block = await python.checkToolBlock({
+        name,
+        user_message: message,
+        current_batch_names: [...currentBatchNames],
+        executed_names: executedToolNames,
+        executed_count: executedToolCount,
       });
-
-      if (
-        await python.shouldForceSummary({
+      if (block.blocked) {
+        const blockedResult = block.result || { error: block.reason || "blocked" };
+        yield {
+          type: "tool_blocked",
           name,
-          user_message: message,
-          executed_count: executedToolCount,
-        })
-      ) {
-        shouldForceSummary = true;
+          args,
+          reason: block.reason,
+        };
+        messages.push({
+          role: "tool",
+          tool_call_id: call[0].id,
+          content: block.llm_content || JSON.stringify(blockedResult),
+        });
+        const allowAsnLookupCorrection =
+          String(block.reason || "").startsWith("明确 ASN") &&
+          !executedToolNames.includes("lookup_asns") &&
+          !currentBatchNames.has("lookup_asns");
+        if (!allowAsnLookupCorrection) shouldForceSummary = true;
+        continue;
+      }
+      allowedCalls.push(call);
+    }
+
+    const parallelBatch =
+      allowedCalls.length > 1 &&
+      canParallelizeToolBatch(allowedCalls.map(([, name]) => name));
+
+    if (parallelBatch) {
+      for (const [, name, args] of allowedCalls) {
+        yield { type: "tool_start", name, args };
+      }
+      const progressQueues = allowedCalls.map(() => [] as AgentEvent[]);
+      const outcomes = await Promise.all(
+        allowedCalls.map(async ([toolCall, name, args], index) => {
+          const outcome = await runOneTool(toolCall, name, args, (event) => {
+            progressQueues[index].push(event);
+          });
+          return { toolCall, name, ...outcome };
+        }),
+      );
+      for (let i = 0; i < outcomes.length; i += 1) {
+        for (const event of progressQueues[i]) {
+          if (event.type === "tool_progress") {
+            yield { type: "tool_progress", name: event.name, message: event.message };
+          } else if (event.type === "tool_event") {
+            yield { type: "tool_event", name: event.name, event: event.event };
+          } else if (event.type === "status") {
+            yield { type: "status", message: event.message };
+          }
+        }
+        const { toolCall, name, toolResult, llmContent } = outcomes[i];
+        executedToolCount += 1;
+        executedToolNames.push(name);
+        yield { type: "tool_result", name, result: toolResult };
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: llmContent || JSON.stringify(toolResult),
+        });
+        if (
+          await python.shouldForceSummary({
+            name,
+            user_message: message,
+            executed_count: executedToolCount,
+          })
+        ) {
+          shouldForceSummary = true;
+        }
+      }
+    } else {
+      for (const [toolCall, name, args] of allowedCalls) {
+        yield { type: "tool_start", name, args };
+        executedToolCount += 1;
+        executedToolNames.push(name);
+        const pending: AgentEvent[] = [];
+        const outcomePromise = runOneTool(toolCall, name, args, (event) => {
+          pending.push(event);
+        });
+        while (true) {
+          while (pending.length) {
+            const event = pending.shift()!;
+            if (event.type === "tool_progress") {
+              yield { type: "tool_progress", name: event.name, message: event.message };
+            } else if (event.type === "tool_event") {
+              yield { type: "tool_event", name: event.name, event: event.event };
+            } else if (event.type === "status") {
+              yield { type: "status", message: event.message };
+            }
+          }
+          const raced = await Promise.race([
+            outcomePromise.then((value) => ({ kind: "done" as const, value })),
+            new Promise<{ kind: "wait" }>((resolve) => setTimeout(() => resolve({ kind: "wait" }), 100)),
+          ]);
+          if (raced.kind === "done") {
+            const { toolResult, llmContent } = raced.value;
+            yield { type: "tool_result", name, result: toolResult };
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: llmContent || JSON.stringify(toolResult),
+            });
+            if (
+              await python.shouldForceSummary({
+                name,
+                user_message: message,
+                executed_count: executedToolCount,
+              })
+            ) {
+              shouldForceSummary = true;
+            }
+            break;
+          }
+        }
       }
     }
 

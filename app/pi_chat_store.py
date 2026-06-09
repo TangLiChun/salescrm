@@ -249,11 +249,18 @@ def compress_thread_context_until_current(
 
 
 def create_pi_thread(
-    user_id: int, *, title: str = "", history: list[dict[str, Any]] | None = None
+    user_id: int,
+    *,
+    title: str = "",
+    history: list[dict[str, Any]] | None = None,
+    context_summary: str = "",
+    context_summary_through: int = 0,
 ) -> dict[str, Any]:
     now = utc_now()
     thread_id = new_thread_id()
     payload = _normalize_history(history or [])
+    summary = (context_summary or "")[:6000]
+    through = max(0, min(int(context_summary_through), len(payload)))
     with get_conn() as conn:
         conn.execute(
             """
@@ -263,17 +270,42 @@ def create_pi_thread(
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (thread_id, user_id, title.strip(), Json(payload), "", 0, now, now),
+            (thread_id, user_id, title.strip(), Json(payload), summary, through, now, now),
         )
     return {
         "id": thread_id,
         "title": title.strip(),
         "history": payload,
-        "context_summary": "",
-        "context_summary_through": 0,
+        "context_summary": summary,
+        "context_summary_through": through,
         "created_at": now,
         "updated_at": now,
     }
+
+
+def fork_pi_thread(user_id: int, thread_id: str, through_index: int) -> dict[str, Any] | None:
+    """Create a branch thread with history copied up to through_index (exclusive end)."""
+    parent = get_pi_thread(user_id, thread_id)
+    if not parent:
+        return None
+    history = list(parent.get("history") or [])
+    end = max(0, min(int(through_index), len(history)))
+    branch_history = history[:end]
+    parent_through = int(parent.get("context_summary_through") or 0)
+    summary = str(parent.get("context_summary") or "")
+    if end <= parent_through:
+        summary_through = end
+    else:
+        summary_through = min(parent_through, len(branch_history))
+    base_title = (parent.get("title") or "").strip() or "对话"
+    title = f"分支 · {base_title[:40]}"
+    return create_pi_thread(
+        user_id,
+        title=title,
+        history=branch_history,
+        context_summary=summary if summary_through > 0 else "",
+        context_summary_through=summary_through,
+    )
 
 
 def upsert_pi_thread(

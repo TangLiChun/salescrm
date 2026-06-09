@@ -3211,6 +3211,41 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   font-weight: 600;
 }
 
+.pi-chat-reasoning {
+  margin: 0.35rem 0 0.5rem 2.25rem;
+  max-width: min(48rem, 92%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.pi-chat-reasoning > summary {
+  cursor: pointer;
+  padding: 0.45rem 0.65rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  list-style-position: inside;
+}
+
+.pi-chat-reasoning-body {
+  padding: 0 0.65rem 0.65rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.pi-chat-bubble-actions {
+  margin-top: 0.45rem;
+}
+
+.pi-fork-btn {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.55rem;
+}
+
 .pi-chat-bubble.streaming::after {
   content: "▍";
   display: inline-block;
