@@ -34,7 +34,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-salescrm}
       DATABASE_URL: postgresql://${POSTGRES_USER:-salescrm}:${POSTGRES_PASSWORD:-salescrm}@postgres:5432/${POSTGRES_DB:-salescrm}
       PI_AGENT_SERVICE_URL: ${PI_AGENT_SERVICE_URL:-http://pi-agent:8001}
-      PI_INTERNAL_SECRET: ${PI_INTERNAL_SECRET:-change-me-in-production}
+      # 必须是 ≥16 字符的强随机值（openssl rand -hex 24）。留空或弱值时
+      # 内部 API 自动禁用，Pi 回退内置 Python loop（sidecar 不可用）。
+      PI_INTERNAL_SECRET: ${PI_INTERNAL_SECRET:-}
     volumes:
       # git pull 后重启容器即可生效，日常更新无需重建镜像
       - ./app:/app/app:ro
@@ -65,7 +67,7 @@ services:
     environment:
       PORT: "8001"
       CRM_INTERNAL_URL: http://salescrm:8000
-      PI_INTERNAL_SECRET: ${PI_INTERNAL_SECRET:-change-me-in-production}
+      PI_INTERNAL_SECRET: ${PI_INTERNAL_SECRET:-}
     healthcheck:
       test:
         - CMD

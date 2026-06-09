@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -56,11 +55,8 @@ from app.database import (
     delete_contact_note,
     delete_email_template,
     delete_scheduled_job,
-    email_queued_addresses,
-    enqueue_email,
     get_contact,
     get_contact_stats,
-    get_email_template,
     get_scheduled_job,
     get_user_auth_by_id,
     get_workbench_summary,
@@ -85,7 +81,7 @@ from app.database import (
     update_scheduled_job,
     update_user_password,
 )
-from app.email_render import render_email
+from app.email_queue import queue_emails_for_contacts
 from app.email_sender import build_message, send_smtp, start_email_sender, stop_email_sender
 from app.lead_discovery import discover_leads_stream
 from app.llm import llm_configured
@@ -98,14 +94,15 @@ from app.pi_chat_store import (
     append_pi_thread_history_entries,
     compress_thread_context_until_current,
     create_pi_thread,
-    fork_pi_thread,
     delete_pi_thread,
+    fork_pi_thread,
     get_pi_thread,
     list_pi_threads,
     sync_pi_threads_from_client,
     upsert_pi_thread,
 )
 from app.pi_internal_routes import router as pi_internal_router
+from app.rate_limit import login_limiter
 from app.scheduler import (
     get_scheduler_status,
     restart_scheduler,
@@ -114,6 +111,7 @@ from app.scheduler import (
     stop_scheduler,
 )
 from app.security import verify_password
+from app.security_headers import SecurityHeadersMiddleware
 from app.settings_store import (
     get_public_settings,
     get_setting,
@@ -150,9 +148,25 @@ def asset_version() -> str:
         return str(int(time.time()))
 
 
+def _warn_insecure_defaults() -> None:
+    from app.settings_store import DEFAULTS
+
+    if get_setting("default_admin_password", "") == DEFAULTS["default_admin_password"]:
+        logger.warning(
+            "管理员账号仍在使用默认密码（%s）。商用/公网部署前请登录后立即修改密码。",
+            DEFAULTS["default_admin_user"],
+        )
+    if get_setting("session_https_only", "0") != "1":
+        logger.info(
+            "session_https_only=0：会话 Cookie 未启用 Secure 标记。"
+            "通过 HTTPS 反向代理对外服务时，请在系统设置中开启。"
+        )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    _warn_insecure_defaults()
     await recover_background_jobs_on_startup()
     await start_scheduler()
     await start_email_sender()
@@ -166,11 +180,14 @@ app = FastAPI(title="Sales CRM — ASN RDAP Lookup", lifespan=lifespan)
 # Session middleware reads app_settings — tables must exist before import-time setup.
 init_db()
 
+_https_only = get_setting("session_https_only", "0") == "1"
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret(),
-    https_only=get_setting("session_https_only", "0") == "1",
+    https_only=_https_only,
 )
+# 外层包安全头：对包括 4xx/5xx 在内的所有 HTTP 响应生效。
+app.add_middleware(SecurityHeadersMiddleware, hsts=_https_only)
 app.mount("/static", VersionedStaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(agent_router)
 app.include_router(pi_internal_router)
@@ -465,30 +482,12 @@ class EmailQueueRequest(BaseModel):
 
 @app.post("/api/email/queue")
 async def queue_emails(body: EmailQueueRequest, user: CurrentUser) -> dict:
-    uid = user["id"]
-    template = get_email_template(uid, body.template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="模板不存在")
-    already = email_queued_addresses(uid)
-    queued = 0
-    skipped = {"no_email": 0, "duplicate": 0, "already_sent": 0}
-    for cid in body.contact_ids:
-        contact = get_contact(uid, cid)
-        if not contact or not (contact.get("email") or "").strip():
-            skipped["no_email"] += 1
-            continue
-        email = contact["email"].strip()
-        if email.lower() in already:
-            skipped["duplicate"] += 1
-            continue
-        if body.skip_sent and contact.get("email_sent"):
-            skipped["already_sent"] += 1
-            continue
-        subject, text, html = render_email(template, contact)
-        enqueue_email(uid, cid, body.template_id, email, subject, text, html)
-        already.add(email.lower())
-        queued += 1
-    return {"queued": queued, "skipped": skipped}
+    result = queue_emails_for_contacts(
+        user["id"], body.contact_ids, body.template_id, skip_sent=body.skip_sent
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=str(result["error"]))
+    return result
 
 
 @app.get("/api/email/outbox")
@@ -680,11 +679,31 @@ def change_password(body: ChangePasswordRequest, user: CurrentUser) -> dict:
 
 @app.post("/api/login")
 def login(body: LoginRequest, request: Request) -> dict:
+    client_ip = request.client.host if request.client else "unknown"
+    limiter_key = f"{client_ip}:{body.username.strip().lower()}"
+    retry_after = login_limiter.retry_after(limiter_key)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="登录尝试过于频繁，请稍后再试",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = authenticate_user(body.username, body.password)
     if not user:
+        login_limiter.record_failure(limiter_key)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
+
+    login_limiter.reset(limiter_key)
+    # Drop any pre-login session state so an attacker-supplied cookie cannot
+    # carry over into the authenticated session.
+    request.session.clear()
     request.session[SESSION_USER_KEY] = user["id"]
-    return user
+
+    result = dict(user)
+    if body.password == get_setting("default_admin_password", ""):
+        result["must_change_password"] = True
+    return result
 
 
 @app.post("/api/logout")

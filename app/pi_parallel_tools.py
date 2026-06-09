@@ -12,6 +12,10 @@ PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset(
         "get_import_filters",
         "get_search_config",
         "list_schedules",
+        "get_workbench",
+        "list_email_templates",
+        "preview_email",
+        "list_lead_reviews",
     }
 )
 

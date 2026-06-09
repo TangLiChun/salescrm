@@ -32,11 +32,15 @@
 ```bash
 git clone https://github.com/TangLiChun/salescrm.git
 cd salescrm
-cp .env.example .env          # 本地默认值即可直接用
+cp .env.example .env
+# 启用 Pi TS sidecar 必需（留空则 Pi 自动回退内置 Python loop）：
+echo "PI_INTERNAL_SECRET=$(openssl rand -hex 24)" >> .env
 docker compose up -d --build  # 拉起 postgres + salescrm + pi-agent
 ```
 
 打开 <http://localhost:8000/>，默认账号 **admin / admin123**（登录后请到「系统设置」修改密码）。
+
+> **对外/商用部署请先读 [docs/production.md](docs/production.md)**：HTTPS 反代、密钥要求、备份、监控与升级清单。
 
 常用命令：
 
@@ -130,7 +134,7 @@ docker compose down               # 停止（数据保留在 salescrm_pgdata 卷
 | `APP_PORT` | `8000` | 对外端口 |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | `salescrm` | 数据库账号/密码/库名 |
 | `DATABASE_URL` | （由上面拼出） | 直接指定完整连接串则忽略上面几项 |
-| `PI_INTERNAL_SECRET` | `change-me-in-production` | 应用 ↔ pi-agent 内部鉴权，**生产务必改** |
+| `PI_INTERNAL_SECRET` | 空（禁用内部 API） | 应用 ↔ pi-agent 内部鉴权；须 ≥16 字符强随机（`openssl rand -hex 24`），弱值会被双端拒绝 |
 
 应用内运行时配置（LLM Key、搜索渠道、SMTP、外部 Agent Token 等）在 **Web UI → 系统设置** 里维护，存于数据库。
 
@@ -227,11 +231,11 @@ docker compose restart salescrm
 # 停止（数据保留在 salescrm_pgdata 卷）
 docker compose down
 
-# 备份数据库
-docker compose exec postgres pg_dump -U salescrm salescrm > backup.sql
+# 备份数据库（压缩格式 + 自动清理旧备份，推荐配 cron）
+./scripts/backup_db.sh
 
-# 恢复数据库
-cat backup.sql | docker compose exec -T postgres psql -U salescrm salescrm
+# 恢复数据库（会先停应用、提示确认）
+./scripts/restore_db.sh backups/salescrm_<时间戳>.dump
 
 # 彻底卸载（含数据）—— 会删除 salescrm_pgdata 卷，数据丢失，不可恢复
 docker compose down -v

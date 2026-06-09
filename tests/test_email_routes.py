@@ -45,19 +45,22 @@ async def test_email_test_uses_form_values_and_saved_password_fallback(monkeypat
 
 
 async def test_queue_renders_and_skips(monkeypatch):
+    # 排队逻辑已抽到 app.email_queue（Pi 工具与路由共用），在那里打桩。
+    import app.email_queue as email_queue
+
     contacts = {
         1: {"id": 1, "email": "a@x.com", "name": "A", "org": "X"},
         2: {"id": 2, "email": "", "name": "B"},  # no email -> skipped
     }
     enq = []
-    monkeypatch.setattr(main, "get_contact", lambda uid, cid: contacts.get(cid))
+    monkeypatch.setattr(email_queue, "get_contact", lambda uid, cid: contacts.get(cid))
     monkeypatch.setattr(
-        main,
+        email_queue,
         "get_email_template",
         lambda uid, tid: {"subject": "Hi {name}", "body": "**Yo** {org}"},
     )
-    monkeypatch.setattr(main, "email_queued_addresses", lambda uid: set())
-    monkeypatch.setattr(main, "enqueue_email", lambda *a, **k: enq.append(a) or len(enq))
+    monkeypatch.setattr(email_queue, "email_queued_addresses", lambda uid: set())
+    monkeypatch.setattr(email_queue, "enqueue_email", lambda *a, **k: enq.append(a) or len(enq))
     body = main.EmailQueueRequest(contact_ids=[1, 2], template_id=10, skip_sent=True)
     result = await main.queue_emails(body, {"id": 1})
     assert result["queued"] == 1

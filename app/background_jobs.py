@@ -12,7 +12,6 @@ from app.agent_chat import (
     is_pi_thread_streaming,
     tool_result_summary,
 )
-from app.pi_agent_proxy import pi_agent_service_url, stream_pi_agent_events
 from app.contact_enrichment import enrich_contact_stream
 from app.database import (
     create_background_job,
@@ -29,6 +28,7 @@ from app.lead_checkpoint import (
     progress_from_checkpoint,
 )
 from app.lead_discovery import discover_leads_stream
+from app.pi_agent_proxy import pi_agent_service_url, stream_pi_agent_events
 from app.pi_chat_store import (
     append_pi_thread_history_entries,
     compress_thread_context_until_current,

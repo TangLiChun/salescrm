@@ -6,7 +6,7 @@ the schema/prompt structure the model relies on.
 """
 
 from app.agent_chat import AGENT_TOOLS, SYSTEM_PROMPT
-from app.pi_tool_calls import KNOWN_TOOL_NAMES
+from app.pi_tool_calls import KNOWN_TOOL_NAMES, TOOL_NAME_ALIASES, tool_name_aliases
 
 
 def _tool(name: str) -> dict:
@@ -37,6 +37,12 @@ def test_schema_names_match_known_tool_names():
     # Every advertised tool must be a first-class known name (so name
     # normalization/inference treats it correctly), and vice versa.
     assert set(_tool_names()) == set(KNOWN_TOOL_NAMES)
+
+
+def test_tool_aliases_point_to_advertised_tools():
+    assert tool_name_aliases() == TOOL_NAME_ALIASES
+    assert TOOL_NAME_ALIASES
+    assert set(TOOL_NAME_ALIASES.values()).issubset(set(_tool_names()))
 
 
 def test_required_params_are_declared_properties():

@@ -6,8 +6,8 @@ Not exposed publicly — requires X-Internal-Secret and is only reachable on the
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
-import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,7 +23,9 @@ from app.agent_chat import (
     _should_force_summary_after_tool,
     _tool_block_reason,
     append_user_turn_to_messages,
+    system_prompt_now,
 )
+from app.internal_secret import internal_secret_problem, usable_internal_secret
 from app.llm import get_setting, llm_configured
 from app.pi_chat_store import (
     append_pi_thread_history_entries,
@@ -31,21 +33,26 @@ from app.pi_chat_store import (
     get_pi_thread,
 )
 from app.pi_context import compress_tool_result_for_llm, context_stats, should_compress_thread
+from app.pi_tool_calls import tool_name_aliases
 
 router = APIRouter(prefix="/api/internal/pi", tags=["pi-internal"])
 
 
 def _internal_secret() -> str:
-    return os.environ.get("PI_INTERNAL_SECRET", "").strip()
+    return usable_internal_secret() or ""
 
 
 def _verify_internal(request: Request) -> None:
     secret = _internal_secret()
     if not secret:
+        # Missing/weak secrets keep the internal API disabled — these routes sit
+        # on the public port, so a guessable value would be an auth bypass.
         raise HTTPException(
-            status_code=503, detail="PI internal API disabled (no PI_INTERNAL_SECRET)"
+            status_code=503,
+            detail=f"PI internal API disabled: {internal_secret_problem() or 'no secret'}",
         )
-    if request.headers.get("X-Internal-Secret") != secret:
+    provided = request.headers.get("X-Internal-Secret") or ""
+    if not hmac.compare_digest(provided, secret):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -156,7 +163,7 @@ async def prepare_pi_turn(
         ),
     }
 
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt_now()}]
     messages.extend(trimmed_history)
     append_user_turn_to_messages(messages, trimmed_history or [], message)
 
@@ -164,6 +171,7 @@ async def prepare_pi_turn(
         "messages": messages,
         "context_event": context_event,
         "tools": AGENT_TOOLS,
+        "tool_aliases": tool_name_aliases(),
         "history": trimmed_history,
         "status_messages": status_messages,
     }

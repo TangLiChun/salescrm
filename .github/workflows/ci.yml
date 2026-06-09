@@ -46,3 +46,29 @@ jobs:
         run: ruff format --check .
       - name: Test
         run: pytest -q
+
+  pi-agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/pi-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/pi-agent/package-lock.json
+      - name: Install deps
+        run: npm ci
+      - name: Build + typecheck + test
+        run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build salescrm image
+        run: docker build -t salescrm:ci .
+      - name: Build pi-agent image
+        run: docker build -t salescrm-pi-agent:ci services/pi-agent

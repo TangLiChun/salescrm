@@ -116,9 +116,7 @@ def _migrate_pi_chat_threads(conn) -> None:
             "ALTER TABLE pi_chat_threads ADD COLUMN context_summary_through INTEGER NOT NULL DEFAULT 0"
         )
     if "parent_thread_id" not in columns:
-        conn.execute(
-            "ALTER TABLE pi_chat_threads ADD COLUMN parent_thread_id TEXT"
-        )
+        conn.execute("ALTER TABLE pi_chat_threads ADD COLUMN parent_thread_id TEXT")
 
 
 def _migrate_user_lead_preferences(conn) -> None:

@@ -36,9 +36,15 @@ KNOWN_TOOL_NAMES = {
     "collect_linkedin_profiles",
     "collect_x_profiles",
     "collect_facebook_profiles",
+    "get_workbench",
+    "list_email_templates",
+    "preview_email",
+    "queue_emails",
+    "list_lead_reviews",
+    "import_lead_reviews",
 }
 
-_TOOL_NAME_ALIASES = {
+TOOL_NAME_ALIASES = {
     "search_contacts": "list_contacts",
     "list_contact": "list_contacts",
     "find_contacts": "list_contacts",
@@ -48,6 +54,11 @@ _TOOL_NAME_ALIASES = {
 }
 
 
+def tool_name_aliases() -> dict[str, str]:
+    """Return provider/model tool-name compatibility aliases."""
+    return dict(TOOL_NAME_ALIASES)
+
+
 def _normalize_tool_name(name: str) -> str:
     cleaned = (name or "").strip().lower()
     for prefix in ("functions.", "function.", "tool.", "tools."):
@@ -55,7 +66,7 @@ def _normalize_tool_name(name: str) -> str:
             cleaned = cleaned[len(prefix) :]
     if "." in cleaned and cleaned not in KNOWN_TOOL_NAMES:
         tail = cleaned.rsplit(".", 1)[-1]
-        if tail in KNOWN_TOOL_NAMES or tail in _TOOL_NAME_ALIASES:
+        if tail in KNOWN_TOOL_NAMES or tail in TOOL_NAME_ALIASES:
             cleaned = tail
     return cleaned
 
@@ -64,8 +75,8 @@ def _infer_tool_name(name: str, args: dict[str, Any]) -> str:
     cleaned = _normalize_tool_name(name)
     if cleaned in KNOWN_TOOL_NAMES:
         return cleaned
-    if cleaned in _TOOL_NAME_ALIASES:
-        return _TOOL_NAME_ALIASES[cleaned]
+    if cleaned in TOOL_NAME_ALIASES:
+        return TOOL_NAME_ALIASES[cleaned]
     if "contact_ids" in args or "ids" in args:
         return "delete_contacts"
     if "queries" in args or ("query" in args and "q" not in args and "max_results" in args):

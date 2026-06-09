@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from app.contact_enrichment import enrich_contact_stream
@@ -15,9 +16,14 @@ from app.database import (
     delete_contact,
     get_contact,
     get_contact_stats,
+    get_email_template,
+    get_workbench_summary,
     import_contacts,
+    import_lead_reviews,
     list_contact_notes,
     list_contacts,
+    list_email_templates,
+    list_lead_reviews,
     list_scheduled_jobs,
     mark_contact_sent,
     normalize_import_row,
@@ -25,6 +31,8 @@ from app.database import (
     update_contact_follow_up_status,
     update_scheduled_job,
 )
+from app.email_queue import queue_emails_for_contacts
+from app.email_render import render_email
 from app.import_filters import parse_patterns
 from app.lead_discovery import discover_leads_stream
 from app.lead_preferences import get_prefs, preference_hints_for_llm, reset_prefs
@@ -44,7 +52,6 @@ from app.pi_context import (
     is_context_overflow_error,
     should_compress_thread,
 )
-from app.pi_parallel_tools import can_parallelize_tool_batch
 from app.pi_decisions import (
     Fail,
     FallbackToolCalls,
@@ -53,6 +60,7 @@ from app.pi_decisions import (
     decide_turn,
 )
 from app.pi_llm_client import stream_chat
+from app.pi_parallel_tools import can_parallelize_tool_batch
 from app.pi_reply_heuristics import (
     _MAX_LLM_NUDGES,
     _assistant_intro_before_tools,
@@ -585,6 +593,96 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_workbench",
+            "description": "获取今日工作台摘要：待审线索数、今日新增、待发信新联系人、超期未跟进列表。回答「今天做什么/该跟进谁」时首选",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_email_templates",
+            "description": "列出已保存的邮件模板（id、名称、主题），发邮件前先用它确认模板",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_email",
+            "description": "用指定模板对单个联系人渲染邮件（主题+正文），给用户预览后再决定是否排队发送",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template_id": {"type": "integer", "description": "邮件模板 ID"},
+                    "contact_id": {"type": "integer", "description": "联系人 ID"},
+                },
+                "required": ["template_id", "contact_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "queue_emails",
+            "description": "把邮件加入发送队列（按模板渲染、自动跳过重复/已发信）。属于对外发信操作，会先弹出用户确认",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contact_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "要发信的联系人 ID 列表",
+                    },
+                    "template_id": {"type": "integer", "description": "邮件模板 ID"},
+                    "skip_sent": {
+                        "type": "boolean",
+                        "description": "跳过已标记发信的联系人，默认 true",
+                    },
+                },
+                "required": ["contact_ids", "template_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_lead_reviews",
+            "description": "查看待人工审核的线索（低分或需复核的发现结果）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "approved", "rejected", "all"],
+                        "description": "默认 pending",
+                    },
+                    "limit": {"type": "integer", "description": "最多返回条数，默认 50"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "import_lead_reviews",
+            "description": "把指定的待审线索标记通过并导入 CRM（需用户先看过 list_lead_reviews 结果并同意）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "review_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "要通过并导入的审核条目 ID",
+                    }
+                },
+                "required": ["review_ids"],
+            },
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮销售/BD 操作网络运营商联系人库。
@@ -606,13 +704,24 @@ SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮销售/BD 操作网络运
 - web_search 只用于快速查证单个资料，不用于线索挖掘主流程；如果同批或此前已调用 discover_leads，不要再调用 web_search。
 - 用户问数据渠道/搜索引擎配置 → 先 get_search_config 再回答；找线索时不要顺手查配置。
 - 用户问「为什么搜得更严 / 避开某类域名」→ get_lead_preferences 解释；找线索时不要顺手查偏好；要清空学习结果需用户明确同意后 reset_lead_preferences。
+- 「今天做什么 / 该跟进谁 / 待办」→ get_workbench；用户说「标记已联系/已回复/不再跟进」→ update_contact 带 follow_up_status。
+- 发邮件流程：list_email_templates 选模板 → preview_email 给用户看一封示例 → 用户同意后 queue_emails（系统会再弹确认，发送由后台按节流执行）。不要跳过预览直接排队，除非用户已明确指定模板并要求直接发。
+- 「有哪些待审线索 / 帮我过一遍审核」→ list_lead_reviews 列出并给出建议；用户同意后 import_lead_reviews 导入指定条目。
 
 入库与数据规则：
 - import_leads 每行必须含 email，尽量带 org 和 name；asn 必须是纯数字（如 395092，不要带 AS 前缀）。
 - 线索含 linkedin/x/facebook/profile_url 时，导入会自动写入联系人社交链接字段。
 - 导入前用 list_contacts 查重；要屏蔽域名用 update_import_filters。
 
-破坏性操作确认：调用 delete_contacts / dedupe_contacts / reset_lead_preferences 后若返回 confirm_required，表示系统在等用户确认。不要重试、不要自行再次调用该工具，用一句中文说明将发生什么（含数量），并提示用户点界面上的「确认执行」按钮。"""
+破坏性操作确认：调用 delete_contacts / dedupe_contacts / reset_lead_preferences / queue_emails 后若返回 confirm_required，表示系统在等用户确认。不要重试、不要自行再次调用该工具，用一句中文说明将发生什么（含数量），并提示用户点界面上的「确认执行」按钮。"""
+
+
+def system_prompt_now() -> str:
+    """System prompt plus the current date — the model cannot know "today"
+    otherwise, and follow-up/workbench questions depend on it."""
+    now = datetime.now(UTC)
+    weekday = "一二三四五六日"[now.weekday()]
+    return f"{SYSTEM_PROMPT}\n\n当前日期：{now.date().isoformat()}（周{weekday}，UTC）。"
 
 
 async def _stream_lead_events(
@@ -817,6 +926,21 @@ def tool_result_summary(name: str, result: Any) -> str:
         return _import_result_summary(result)
     if name == "get_stats":
         return f"联系人 {result.get('total', 0)} · 已发 {result.get('sent', 0)}"
+    if name == "get_workbench":
+        return (
+            f"待审 {result.get('pending_reviews', 0)} · 今日新增 {result.get('imported_today', 0)}"
+            f" · 待发信 {result.get('unsent_new', 0)}"
+        )
+    if name == "list_email_templates":
+        return f"{result.get('total', 0)} 个邮件模板"
+    if name == "preview_email":
+        return f"预览「{result.get('template', '')}」→ {result.get('to', '')}".strip()
+    if name == "queue_emails":
+        return f"已排队 {result.get('queued', 0)} 封邮件"
+    if name == "list_lead_reviews":
+        return f"{result.get('status', 'pending')} 审核线索 {result.get('total', 0)} 条"
+    if name == "import_lead_reviews":
+        return f"审核通过并导入 {result.get('imported', result.get('approved', 0))} 条"
     try:
         return json.dumps(result, ensure_ascii=False)[:8000]
     except (TypeError, ValueError):
@@ -1115,7 +1239,13 @@ def _import_filters_payload() -> dict[str, Any]:
     }
 
 
-PI_DESTRUCTIVE_TOOLS = {"delete_contacts", "dedupe_contacts", "reset_lead_preferences"}
+PI_DESTRUCTIVE_TOOLS = {
+    "delete_contacts",
+    "dedupe_contacts",
+    "reset_lead_preferences",
+    # 对外发信：不可撤回的外部副作用，与删除同级，必须用户确认。
+    "queue_emails",
+}
 
 
 def _destructive_confirm_summary(name: str, args: dict[str, Any], user_id: int) -> str:
@@ -1126,6 +1256,11 @@ def _destructive_confirm_summary(name: str, args: dict[str, Any], user_id: int) 
         return "将按邮箱合并并删除重复联系人，此操作不可逆。"
     if name == "reset_lead_preferences":
         return "将清空已学习的线索偏好并恢复默认，此操作不可逆。"
+    if name == "queue_emails":
+        ids = [item for item in (args.get("contact_ids") or []) if item]
+        template = get_email_template(user_id, int(args.get("template_id") or 0))
+        template_name = (template or {}).get("name") or f"#{args.get('template_id')}"
+        return f"将用模板「{template_name}」给 {len(ids)} 个联系人排队发送邮件（发出后不可撤回）。"
     return "此操作不可逆，确认后才会执行。"
 
 
@@ -1202,6 +1337,61 @@ async def _run_tool(
 
     if name == "get_stats":
         return get_contact_stats(user_id)
+
+    if name == "get_workbench":
+        return get_workbench_summary(user_id)
+
+    if name == "list_email_templates":
+        templates = list_email_templates(user_id)
+        return {
+            "templates": [{k: t.get(k) for k in ("id", "name", "subject")} for t in templates],
+            "total": len(templates),
+        }
+
+    if name == "preview_email":
+        template_id = int(args.get("template_id") or 0)
+        contact_id = int(args.get("contact_id") or 0)
+        template = get_email_template(user_id, template_id)
+        if not template:
+            return {"error": "模板不存在"}
+        contact = get_contact(user_id, contact_id)
+        if not contact:
+            return {"error": "联系人不存在"}
+        subject, text, _html = render_email(template, contact)
+        return {
+            "template": template.get("name") or "",
+            "to": contact.get("email") or "",
+            "subject": subject,
+            "body_text": text,
+        }
+
+    if name == "queue_emails":
+        contact_ids = [int(item) for item in (args.get("contact_ids") or []) if int(item) > 0]
+        template_id = int(args.get("template_id") or 0)
+        if not contact_ids or template_id <= 0:
+            return {"error": "contact_ids 或 template_id 无效"}
+        return queue_emails_for_contacts(
+            user_id,
+            contact_ids,
+            template_id,
+            skip_sent=bool(args.get("skip_sent", True)),
+        )
+
+    if name == "list_lead_reviews":
+        status = str(args.get("status") or "pending").strip().lower()
+        if status not in {"pending", "approved", "rejected", "all"}:
+            return {"error": "status 必须是 pending/approved/rejected/all"}
+        limit = max(1, min(int(args.get("limit") or 50), 200))
+        reviews = list_lead_reviews(user_id, status=status, limit=limit)
+        return {"reviews": reviews, "total": len(reviews), "status": status}
+
+    if name == "import_lead_reviews":
+        review_ids = [int(item) for item in (args.get("review_ids") or []) if int(item) > 0]
+        if not review_ids:
+            return {"error": "review_ids 为空"}
+        result = import_lead_reviews(user_id, review_ids)
+        result["total_contacts"] = count_contacts(user_id)
+        return result
 
     if name == "update_contact":
         contact_id = int(args.get("contact_id") or 0)
@@ -1671,7 +1861,7 @@ async def agent_chat_stream(
             model=get_setting("llm_model", ""),
         ),
     }
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt_now()}]
     messages.extend(history)
     append_user_turn_to_messages(messages, history or [], message)
 
@@ -1752,7 +1942,7 @@ async def agent_chat_stream(
                                 summary_through=summary_through,
                             )
                             messages.clear()
-                            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+                            messages.append({"role": "system", "content": system_prompt_now()})
                             messages.extend(trimmed)
                             append_user_turn_to_messages(messages, trimmed, message)
                             stats_history = (thread or {}).get("history") if thread else trimmed
@@ -1915,9 +2105,8 @@ async def agent_chat_stream(
                 continue
             allowed_calls.append((tool_call, name, args))
 
-        parallel_batch = (
-            len(allowed_calls) > 1
-            and can_parallelize_tool_batch([name for _, name, _ in allowed_calls])
+        parallel_batch = len(allowed_calls) > 1 and can_parallelize_tool_batch(
+            [name for _, name, _ in allowed_calls]
         )
 
         def _start_tool_worker(
@@ -1972,7 +2161,7 @@ async def agent_chat_stream(
 
             pending = [True] * len(tracked)
             while any(pending):
-                for i, (tool_call, name, args, task, event_queue, result_holder) in enumerate(
+                for i, (_tool_call, name, _args, _task, event_queue, _result_holder) in enumerate(
                     tracked
                 ):
                     if not pending[i]:
@@ -1996,7 +2185,7 @@ async def agent_chat_stream(
                             yield {"type": "tool_event", "name": name, "event": payload}
                 if any(pending):
                     await asyncio.sleep(0.05)
-            for tool_call, name, args, task, event_queue, result_holder in tracked:
+            for tool_call, name, _args, task, _event_queue, result_holder in tracked:
                 await task
                 executed_tool_count += 1
                 executed_tool_names.append(name)

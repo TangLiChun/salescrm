@@ -3,19 +3,46 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
 
+from app.internal_secret import internal_secret_problem, usable_internal_secret
+
+logger = logging.getLogger(__name__)
+_warned_secret_problem = False
+
 
 def pi_agent_service_url() -> str:
-    return os.environ.get("PI_AGENT_SERVICE_URL", "").strip().rstrip("/")
+    """Sidecar URL, or "" when the shared secret is unusable.
+
+    Without a strong PI_INTERNAL_SECRET the internal API is disabled, so
+    routing chats to the sidecar could only fail — fall back to the built-in
+    Python loop instead and warn once.
+    """
+    url = os.environ.get("PI_AGENT_SERVICE_URL", "").strip().rstrip("/")
+    if not url:
+        return ""
+    problem = internal_secret_problem()
+    if problem:
+        global _warned_secret_problem
+        if not _warned_secret_problem:
+            _warned_secret_problem = True
+            logger.warning(
+                "PI_AGENT_SERVICE_URL 已配置但被忽略（%s）。"
+                "请设置强随机 PI_INTERNAL_SECRET（如 openssl rand -hex 24）后重启；"
+                "当前回退到内置 Python Pi loop。",
+                problem,
+            )
+        return ""
+    return url
 
 
 def pi_internal_secret() -> str:
-    return os.environ.get("PI_INTERNAL_SECRET", "").strip()
+    return usable_internal_secret() or ""
 
 
 def sanitize_agent_history(history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:

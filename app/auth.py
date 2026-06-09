@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
@@ -33,9 +34,16 @@ def get_current_user(request: Request) -> dict:
     return {"id": user["id"], "username": user["username"]}
 
 
+# Generated once per process: used only when the settings table has not been
+# seeded yet. A random ephemeral secret (sessions reset on restart) is strictly
+# safer than a publicly-known constant, which would make session cookies
+# forgeable.
+_EPHEMERAL_SESSION_SECRET = secrets.token_hex(32)
+
+
 def session_secret() -> str:
     value = get_setting("session_secret")
-    return value or "salescrm-dev-secret-change-me"
+    return value or _EPHEMERAL_SESSION_SECRET
 
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]

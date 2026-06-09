@@ -84,9 +84,7 @@ def _search_config_slim(result: dict[str, Any]) -> dict[str, Any]:
     shodan_cfg = result.get("shodan") or {}
     unlocker = result.get("web_unlocker") or {}
     raw_channels = result.get("data_channels") or result.get("channels") or {}
-    data_channels = {
-        key: value for key, value in raw_channels.items() if isinstance(value, bool)
-    }
+    data_channels = {key: value for key, value in raw_channels.items() if isinstance(value, bool)}
     return {
         "active_web_backend": result.get("active_web_backend"),
         "web_backend_priority": result.get("web_backend_priority") or [],
@@ -203,6 +201,31 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
             )
         )
 
+    if name == "list_lead_reviews":
+        reviews = result.get("reviews") or []
+        preview = []
+        for item in reviews[:40]:
+            if not isinstance(item, dict):
+                continue
+            lead = item.get("lead_json") or {}
+            preview.append(
+                {
+                    "id": item.get("id"),
+                    "status": item.get("status"),
+                    "score": item.get("score"),
+                    "reason": (str(item.get("reason") or ""))[:120],
+                    "org": lead.get("org"),
+                    "email": lead.get("email"),
+                }
+            )
+        payload = {
+            "total": result.get("total", len(reviews)),
+            "status": result.get("status"),
+            "reviews_preview": preview,
+            "reviews_omitted": max(0, len(reviews) - len(preview)),
+        }
+        return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
+
     if name == "list_contact_notes":
         notes = result.get("notes") or []
         preview = []
@@ -275,9 +298,7 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
         return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
 
     if name in ("get_import_filters", "update_import_filters"):
-        return _truncate_json_text(
-            json.dumps(_import_filters_compact(result), ensure_ascii=False)
-        )
+        return _truncate_json_text(json.dumps(_import_filters_compact(result), ensure_ascii=False))
 
     if name == "list_schedules":
         schedules = result.get("schedules") or []
