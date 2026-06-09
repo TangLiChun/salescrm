@@ -473,12 +473,16 @@ fetch_agent_token() {
 write_reasonix_env_file() {
   local token="$1"
   REASONIX_ENV_FILE="${APP_DIR}/.reasonix-env"
-  umask 077
-  cat > "${REASONIX_ENV_FILE}" <<EOF
+  # Subshell so `umask 077` does not leak to the rest of the script (otherwise
+  # files created later, e.g. reasonix.toml, would inherit the restrictive mask).
+  (
+    umask 077
+    cat > "${REASONIX_ENV_FILE}" <<EOF
 # Sales CRM Reasonix Agent — 由 deploy.sh 自动生成，请勿提交到 git
 export SALESCRM_URL="http://127.0.0.1:${APP_PORT}"
 export SALESCRM_TOKEN="${token}"
 EOF
+  )
   chmod 600 "${REASONIX_ENV_FILE}"
   $SUDO chown "$(id -un)":"$(id -gn)" "${REASONIX_ENV_FILE}" 2>/dev/null || true
 }
