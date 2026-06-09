@@ -1,6 +1,6 @@
 # Sales CRM
 
-面向网络运营商（ASN / Peering / 主机）线索获取与外联的轻量 CRM：ASN RDAP 查询、AI 线索发现、联系人管理、邮件模板与限速发信，内置 **Pi 助手**（应用内 AI 对话 agent），并支持外部编码 agent（[DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix)）通过 Agent API 驱动线索导入。
+面向网络运营商（ASN / Peering / 主机）线索获取与外联的轻量 CRM：ASN RDAP 查询、AI 线索发现、联系人管理、邮件模板与限速发信，内置 **Reasonix**（应用内 AI 对话助手），并可选通过 **外部 Agent API**（Bearer Token）供脚本调用。
 
 - 后端：FastAPI（Python 3.12）+ PostgreSQL
 - 前端：原生 TypeScript（`tsc` 编译为静态资源，无运行时框架）
@@ -16,14 +16,12 @@
 |---|---|---|---|
 | `postgres` | `pgvector/pgvector:pg16` | 5432（内部） | 数据库 |
 | `salescrm` | FastAPI · Python 3.12 · uvicorn | **8000**（对外） | Web 应用 + REST API + `/api/agent/*` |
-| `pi-agent` | Node 20 · Hono | 8001（内部） | 应用内「Pi 助手」的编码 agent 后端，经 `PI_INTERNAL_SECRET` 内部鉴权 |
+| `pi-agent` | Node 20 · Hono | 8001（内部） | 应用内 Reasonix 助手的编码 agent 后端，经 `PI_INTERNAL_SECRET` 内部鉴权 |
 
 其它：
 
 - **前端**：`frontend/src/**.ts` 由 `tsc` 编译进 `app/static/js`（产物已提交并被 CI 校验）。
-- **外部 agent 集成**：`integrations/reasonix/` —— 一个零依赖的 `salescrm` CLI + Reasonix skill，让 DeepSeek-Reasonix 通过 `/api/agent/*`（Bearer Token）导入/发现线索。详见 [`integrations/reasonix/README.md`](integrations/reasonix/README.md)。
-
-> 「Pi」在本项目有两层含义，互不相关：①应用内的 **Pi 助手**（网页对话，由 `pi-agent` sidecar 支撑）；②**外部 Agent API**（设置 → 自动化），供 Reasonix 等外部 agent 调用。
+- **外部 Agent API**：`GET/POST /api/agent/*`，在 **设置 → 自动化** 生成 Bearer Token，供自有脚本或集成调用（健康检查、联系人、线索导入/发现等）。
 
 ---
 
@@ -81,22 +79,9 @@ docker compose down               # 停止（数据保留在 salescrm_pgdata 卷
    docker compose ps     # STATUS 列应为 healthy
    ```
 
-4. （可选）接入 Reasonix —— deploy.sh 的自动步骤是 Linux 专用的，macOS 手动三步：
-
-   ```bash
-   # ① 在 Web UI：设置 → 自动化 → 外部 Agent API → 重新生成 → 复制 Token
-   export SALESCRM_URL=http://localhost:8000
-   export SALESCRM_TOKEN=<粘贴 Token>            # 建议写进 ~/.zshrc
-   # ② 把 CLI 放上 PATH（任选其一）
-   ln -sf "$PWD/integrations/reasonix/bin/salescrm" /usr/local/bin/salescrm
-   # ③ 安装 Reasonix 并注册 skill（见 integrations/reasonix/README.md）
-   npm i -g reasonix
-   salescrm health        # {"ok": true, ...} 即打通
-   ```
-
 ### 方式 B —— 原生本地开发（仅 app + 数据库，更轻）
 
-适合改代码/跑测试；注意此方式默认**不含**「Pi 助手」sidecar（见末尾说明）。
+适合改代码/跑测试；注意此方式默认**不含** Reasonix 助手 sidecar（见末尾说明）。
 
 1. 安装并启动 PostgreSQL，创建与默认配置匹配的角色与库：
 
@@ -132,7 +117,7 @@ docker compose down               # 停止（数据保留在 salescrm_pgdata 卷
 
    访问 <http://localhost:8000/>（admin / admin123）。
 
-> **Pi 助手**需要 `pi-agent` sidecar（Node 20）。最省事是用方式 A 的 Docker 跑起 sidecar；或单独运行：`cd services/pi-agent && npm install && npm run build && CRM_INTERNAL_URL=http://localhost:8000 PI_INTERNAL_SECRET=change-me npm start`（同时给应用设 `PI_AGENT_SERVICE_URL=http://localhost:8001` 与相同的 `PI_INTERNAL_SECRET`）。其余功能（ASN 查询、线索、联系人、邮件）在方式 B 下均可用。
+> **Reasonix 助手**需要 `pi-agent` sidecar（Node 20）。最省事是用方式 A 的 Docker 跑起 sidecar；或单独运行：`cd services/pi-agent && npm install && npm run build && CRM_INTERNAL_URL=http://localhost:8000 PI_INTERNAL_SECRET=change-me npm start`（同时给应用设 `PI_AGENT_SERVICE_URL=http://localhost:8001` 与相同的 `PI_INTERNAL_SECRET`）。其余功能（ASN 查询、线索、联系人、邮件）在方式 B 下均可用。
 
 ---
 
@@ -212,18 +197,13 @@ export DATABASE_URL=postgresql://用户:密码@localhost:5432/库名
 
 表示数据库表尚未建好。应用首次启动会自动执行 `init_db()`；请确认数据库可连接，并检查容器日志无报错。若手动跑原生方式，确保 `DATABASE_URL` 指向正确且可访问的数据库后重新启动应用。
 
-### Pi 助手不可用
+### Reasonix 助手不可用
 
-Pi 助手依赖 `pi-agent` sidecar（Node 20，端口 8001）。Docker Compose 方式会自动启动该服务；**原生方式默认不含 sidecar**，需单独运行（参见上方「方式 B」末尾说明）。其余功能（ASN 查询、联系人、邮件）不受影响。
+Reasonix 助手依赖 `pi-agent` sidecar（Node 20，端口 8001）。Docker Compose 方式会自动启动该服务；**原生方式默认不含 sidecar**，需单独运行（参见上方「方式 B」末尾说明）。其余功能（ASN 查询、联系人、邮件）不受影响。
 
-### Reasonix `salescrm health` 报 token 未设置 / 401
+### 外部 Agent API 返回 401
 
-```bash
-export SALESCRM_TOKEN=<Token>      # 确保已在当前 shell 导出
-salescrm health
-```
-
-Token 来自 Web UI：**设置 → 自动化 → 外部 Agent API → 重新生成**。重新生成后旧 Token **立即失效**，需重新导出。建议写入 `~/.zshrc`（或 `~/.bashrc`）避免每次手动导出。
+Token 来自 Web UI：**设置 → 自动化 → 外部 Agent API → 重新生成**。请求头需带 `Authorization: Bearer <Token>`。重新生成后旧 Token **立即失效**。
 
 ### 改了前端 TS 但页面没变
 
@@ -270,7 +250,7 @@ cd /opt/salescrm && sudo ./scripts/deploy.sh
 
 更新：`cd /opt/salescrm && sudo ./scripts/deploy.sh`（改代码可加 `DEPLOY_FAST=1`）。
 
-`deploy.sh` 会构建并 `docker compose up`、做健康检查与 API 冒烟，并（除非 `SKIP_REASONIX=1`）自动安装 Reasonix、写 `.reasonix-env`、软链 `salescrm` CLI、注册 skill。常用开关见脚本头部注释（`APP_PORT` / `DEPLOY_FAST` / `SKIP_REASONIX` / `FORCE_REBUILD` 等）。
+`deploy.sh` 会构建并 `docker compose up`、做健康检查与 API 冒烟。常用开关见脚本头部注释（`APP_PORT` / `DEPLOY_FAST` / `FORCE_REBUILD` 等）。
 
 部署后巡检：`./scripts/check.sh`。
 
@@ -279,10 +259,9 @@ cd /opt/salescrm && sudo ./scripts/deploy.sh
 ## 目录结构
 
 ```
-app/                     FastAPI 应用（路由、数据库、Pi 助手、agent API、settings…）
+app/                     FastAPI 应用（路由、数据库、Reasonix 助手、agent API、settings…）
 frontend/src/            前端 TypeScript 源码（编译进 app/static/js）
-services/pi-agent/       Pi 助手编码 agent sidecar（Node/Hono）
-integrations/reasonix/   外部 agent 集成：salescrm CLI + Reasonix skill + 配置示例
+services/pi-agent/       Reasonix 助手编码 agent sidecar（Node/Hono）
 scripts/                 deploy.sh（VPS 一键）、check.sh（巡检）、test.sh（本地测试）…
 docs/superpowers/        设计 spec 与实现计划
 tests/                   pytest 测试

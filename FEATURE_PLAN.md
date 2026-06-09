@@ -38,7 +38,7 @@
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | 19 | 更多搜索渠道 | pending | 在 app/sources 下新增渠道（如 RIPE/APNIC RDAP、行业目录） |
-| 20 | 外部 agent 集成 | done | 外部 Agent API + integrations/reasonix（DeepSeek-Reasonix skill + salescrm CLI）|
+| 20 | 外部 Agent API | done | `/api/agent/*` + 设置页 Token（无捆绑 CLI） |
 
 ## Loop 指令
 
