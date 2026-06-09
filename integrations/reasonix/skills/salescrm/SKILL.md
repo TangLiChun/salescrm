@@ -32,11 +32,41 @@ login.
 | `salescrm import-leads <file.json\|-> [--source TAG]` | Import scraped leads. Input is a JSON array of contact rows, or `{"rows": [...]}`. Use `-` to read from stdin. |
 | `salescrm discover "<query>" [--min-score N] [--auto-import]` | Run AI lead discovery for a natural-language query. |
 
+## Lead row shape
+
+Only `email` is required. All other fields are optional.
+
+| Field | Accepted aliases | Notes |
+|-------|-----------------|-------|
+| `email` | — | Required; dedupe key |
+| `org` | `organization`, `company`, `network_name` | Organization name |
+| `name` | `contact_name`, `contact`, `fn` | Contact full name |
+| `asn` | — | Integer or AS-string (`64500` or `"AS64500"`) |
+| `roles` | — | Free text or comma-separated (e.g. `"NOC, Peering"`) |
+| `linkedin` | `linkedin_url`, `linkedin_profile` | LinkedIn profile URL |
+| `x` | `x_url`, `twitter`, `twitter_url` | X (Twitter) profile URL |
+| `facebook` | `facebook_url` | Facebook profile URL |
+
+`--source` defaults to `reasonix-agent`; override with `--source <tag>` to track the scrape origin.
+
+Example:
+
+```bash
+cat > leads.json <<'JSON'
+[
+  {"email": "noc@example.net", "org": "Example Networks", "name": "Sam Lee", "asn": 64500, "roles": "NOC, Peering", "linkedin": "https://www.linkedin.com/in/samlee", "x": "https://x.com/samlee"}
+]
+JSON
+salescrm import-leads leads.json --source my-scrape
+```
+
+`import-leads` returns `{"imported": N, "skipped": N, "duplicates": N, "filtered": N, "total": N}` (`total` is the contact count after import). Report the counts to the user.
+
 ## Typical workflow
 
 1. `salescrm health` — confirm connectivity.
-2. Scrape / produce lead rows as JSON (each row: `email`, `org`, `name`, `asn`, `roles`...).
+2. Scrape / produce lead rows as JSON using the fields above.
 3. `echo "$ROWS_JSON" | salescrm import-leads -` (or pass a file path).
-4. Report the returned counts (imported / skipped / total) to the user.
+4. Report the returned counts (imported / skipped / duplicates / filtered / total) to the user.
 
 Errors print to stderr with the HTTP status + server detail and a non-zero exit code.
