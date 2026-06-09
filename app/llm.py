@@ -105,9 +105,49 @@ def _settings() -> tuple[str, str, str]:
     return api_key, base_url, model
 
 
+def _is_larger_main_model(model: str) -> bool:
+    name = (model or "").strip().lower()
+    if not name:
+        return False
+    if "mini" in name or "flash" in name:
+        return False
+    return any(
+        token in name for token in ("gpt-4", "claude", "glm-4", "qwen", "moonshot", "deepseek")
+    )
+
+
+def _summary_model_settings() -> tuple[str, str, str]:
+    api_key, base_url, main_model = _settings()
+    override = get_setting("llm_compression_model", "").strip()
+    if override:
+        return api_key, base_url, override
+    main_lower = main_model.lower()
+    if "deepseek" in main_lower and "pro" in main_lower:
+        return api_key, base_url, DEFAULT_DEEPSEEK_MODEL
+    if _is_larger_main_model(main_model):
+        return api_key, base_url, DEFAULT_MODEL
+    return api_key, base_url, main_model
+
+
 def chat_completion(messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
     message = chat_completion_with_tools(
         messages, tools=None, temperature=temperature, json_mode=True
+    )
+    content = message.get("content")
+    if not content:
+        raise LLMError("LLM 返回空内容")
+    return content
+
+
+def chat_completion_summary(messages: list[dict[str, str]], *, temperature: float = 0.1) -> str:
+    _, _, model = _summary_model_settings()
+    message = chat_completion_with_tools(
+        messages,
+        tools=None,
+        temperature=temperature,
+        json_mode=False,
+        model_override=model,
+        thinking_override="disabled",
     )
     content = message.get("content")
     if not content:
@@ -122,8 +162,12 @@ def chat_completion_with_tools(
     temperature: float = 0.2,
     json_mode: bool = False,
     tool_choice: str | dict[str, Any] | None = None,
+    model_override: str | None = None,
+    thinking_override: str | None = None,
 ) -> dict[str, Any]:
     api_key, base_url, model = _settings()
+    if model_override:
+        model = model_override
     payload: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
@@ -137,7 +181,10 @@ def chat_completion_with_tools(
         payload["response_format"] = {"type": "json_object"}
 
     if is_deepseek_provider(model=model, base_url=base_url):
-        thinking = resolve_deepseek_thinking(tools=tools)
+        if thinking_override is not None:
+            thinking = thinking_override
+        else:
+            thinking = resolve_deepseek_thinking(tools=tools)
         if thinking:
             payload["thinking"] = {"type": thinking}
             if thinking == "enabled" and tools:

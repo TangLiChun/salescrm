@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.llm import LLMError, chat_completion
+from app.import_filters import parse_patterns
+from app.llm import LLMError, chat_completion_summary
 
 # Stored in DB per thread (full UI history cap)
 MAX_STORED_MESSAGES = 800
@@ -20,12 +21,94 @@ MAX_MIDDLE_COMPACT_LINES = 240
 SUMMARIZE_TRIGGER_GAP = 48
 SUMMARIZE_BATCH_SIZE = 40
 SUMMARY_MAX_CHARS = 6000
+CONTEXT_USAGE_COMPRESS_PERCENT = 80
 
 # Tool JSON fed back into the agent loop (per tool call)
 MAX_TOOL_JSON_CHARS = 32000
 
 # Stored tool summary in thread history (UI + future compression)
 MAX_STORED_TOOL_SUMMARY_CHARS = 8000
+
+_MAX_PATTERN_SAMPLE = 12
+_MAX_QUERY_PREVIEW = 120
+_MAX_SCHEDULE_PREVIEW = 30
+
+
+def _truncate_preview_text(text: Any, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "…"
+
+
+def _import_filters_compact(result: dict[str, Any]) -> dict[str, Any]:
+    blocklist_patterns = result.get("blocklist_patterns")
+    if blocklist_patterns is None:
+        blocklist_patterns = parse_patterns(str(result.get("blocklist") or ""))
+    allowlist_patterns = result.get("allowlist_patterns")
+    if allowlist_patterns is None:
+        allowlist_patterns = parse_patterns(str(result.get("allowlist") or ""))
+
+    payload: dict[str, Any] = {
+        "blocklist_count": len(blocklist_patterns),
+        "allowlist_count": len(allowlist_patterns),
+        "blocklist_sample": blocklist_patterns[:_MAX_PATTERN_SAMPLE],
+        "allowlist_sample": allowlist_patterns[:_MAX_PATTERN_SAMPLE],
+    }
+    omitted_block = max(0, len(blocklist_patterns) - _MAX_PATTERN_SAMPLE)
+    omitted_allow = max(0, len(allowlist_patterns) - _MAX_PATTERN_SAMPLE)
+    if omitted_block:
+        payload["blocklist_omitted"] = omitted_block
+    if omitted_allow:
+        payload["allowlist_omitted"] = omitted_allow
+    if "ok" in result:
+        payload["ok"] = result["ok"]
+    if result.get("message"):
+        payload["message"] = result["message"]
+    return payload
+
+
+def _schedule_item_preview(job: dict[str, Any]) -> dict[str, Any]:
+    preview: dict[str, Any] = {}
+    for key in ("id", "name", "enabled"):
+        if job.get(key) is not None:
+            preview[key] = job.get(key)
+    if job.get("query") is not None:
+        preview["query"] = _truncate_preview_text(job.get("query"), _MAX_QUERY_PREVIEW)
+    return preview
+
+
+def _search_config_slim(result: dict[str, Any]) -> dict[str, Any]:
+    zhipu = result.get("zhipu_web_search") or {}
+    bright = result.get("brightdata_serp") or {}
+    shodan_cfg = result.get("shodan") or {}
+    unlocker = result.get("web_unlocker") or {}
+    raw_channels = result.get("data_channels") or result.get("channels") or {}
+    data_channels = {
+        key: value for key, value in raw_channels.items() if isinstance(value, bool)
+    }
+    return {
+        "active_web_backend": result.get("active_web_backend"),
+        "web_backend_priority": result.get("web_backend_priority") or [],
+        "keys_configured": result.get("keys_configured") or {},
+        "zhipu_web_search": {
+            "configured": zhipu.get("configured"),
+            "engine": zhipu.get("engine"),
+        },
+        "brightdata_serp": {
+            "configured": bright.get("configured"),
+            "zone": bright.get("zone"),
+            "data_format": bright.get("data_format"),
+        },
+        "data_channels": data_channels,
+        "social_configured": result.get("social_configured") or [],
+        "shodan_configured": bool(
+            shodan_cfg.get("configured") if isinstance(shodan_cfg, dict) else shodan_cfg
+        ),
+        "web_unlocker_configured": bool(
+            unlocker.get("configured") if isinstance(unlocker, dict) else unlocker
+        ),
+    }
 
 
 def compress_tool_result_for_llm(name: str, result: Any) -> str:
@@ -191,6 +274,36 @@ def compress_tool_result_for_llm(name: str, result: Any) -> str:
         }
         return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
 
+    if name in ("get_import_filters", "update_import_filters"):
+        return _truncate_json_text(
+            json.dumps(_import_filters_compact(result), ensure_ascii=False)
+        )
+
+    if name == "list_schedules":
+        schedules = result.get("schedules") or []
+        preview = [
+            _schedule_item_preview(item)
+            for item in schedules[:_MAX_SCHEDULE_PREVIEW]
+            if isinstance(item, dict)
+        ]
+        payload = {
+            "count": result.get("count", len(schedules)),
+            "schedules_preview": preview,
+            "schedules_omitted": max(0, len(schedules) - len(preview)),
+        }
+        return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
+
+    if name in ("create_schedule", "update_schedule"):
+        schedule = result.get("schedule") or {}
+        payload = {
+            "ok": result.get("ok"),
+            "schedule": _schedule_item_preview(schedule) if isinstance(schedule, dict) else {},
+        }
+        return _truncate_json_text(json.dumps(payload, ensure_ascii=False))
+
+    if name == "get_search_config":
+        return _truncate_json_text(json.dumps(_search_config_slim(result), ensure_ascii=False))
+
     slim = {k: v for k, v in result.items() if k not in ("leads", "rows", "contacts", "profiles")}
     if "leads_preview" in result:
         slim["leads_preview"] = result.get("leads_preview")
@@ -320,6 +433,18 @@ def needs_summary_update(history_len: int, summary_through: int) -> bool:
     return uncovered > MAX_RECENT_FULL_MESSAGES + SUMMARIZE_TRIGGER_GAP
 
 
+def should_compress_thread(
+    history_len: int, summary_through: int, *, usage_percent: int = 0
+) -> bool:
+    if needs_summary_update(history_len, summary_through):
+        return True
+    if usage_percent >= CONTEXT_USAGE_COMPRESS_PERCENT:
+        uncovered = history_len - max(0, summary_through)
+        if uncovered > SUMMARIZE_BATCH_SIZE:
+            return True
+    return False
+
+
 def summarize_history_batch(existing_summary: str, batch: list[dict[str, Any]]) -> str:
     lines = [line for item in batch if (line := compact_history_line(item, verbose=True))]
     if not lines:
@@ -334,7 +459,7 @@ def summarize_history_batch(existing_summary: str, batch: list[dict[str, Any]]) 
         f"待压缩片段：\n" + "\n".join(lines)
     )
     try:
-        updated = chat_completion(
+        updated = chat_completion_summary(
             [
                 {"role": "system", "content": "你只输出压缩后的摘要正文，不要 markdown 代码块。"},
                 {"role": "user", "content": prompt},

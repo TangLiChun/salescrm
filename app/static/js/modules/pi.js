@@ -764,6 +764,25 @@ export async function enrichContactViaBackground(contact) {
         showApiError(error, t("msg.enrichFailed"));
     }
 }
+function countImportFilterPatterns(patterns, text) {
+    if (Array.isArray(patterns))
+        return patterns.length;
+    let count = 0;
+    for (const line of String(text || "").split("\n")) {
+        const trimmed = line.trim().toLowerCase();
+        if (trimmed && !trimmed.startsWith("#"))
+            count++;
+    }
+    return count;
+}
+function formatImportFiltersSummary(result) {
+    const blockCount = countImportFilterPatterns(result.blocklist_patterns, result.blocklist);
+    const allowCount = countImportFilterPatterns(result.allowlist_patterns, result.allowlist);
+    const parts = [`黑名单 ${blockCount} 条`, `白名单 ${allowCount} 条`];
+    if (result.message)
+        parts.push(result.message);
+    return parts.join(" · ");
+}
 export function formatPiToolSummary(name, result) {
     if (!result || typeof result !== "object")
         return "";
@@ -862,6 +881,27 @@ export function formatPiToolSummary(name, result) {
     }
     if (name === "shodan_search") {
         return `Shodan · ${result.match_count ?? 0} 条 · ${result.networks?.length ?? 0} 个 ASN`;
+    }
+    if (name === "get_import_filters" || name === "update_import_filters") {
+        return formatImportFiltersSummary(result);
+    }
+    if (name === "list_schedules") {
+        const schedules = result.schedules || [];
+        const count = result.count ?? schedules.length;
+        const names = schedules
+            .slice(0, 3)
+            .map((s) => s?.name || (s?.id != null ? `#${s.id}` : ""))
+            .filter(Boolean);
+        const parts = [`${count} 个定时任务`];
+        if (names.length)
+            parts.push(names.join("、"));
+        return parts.join(" · ");
+    }
+    if (name === "create_schedule" || name === "update_schedule") {
+        const schedule = result.schedule || {};
+        const label = [schedule.name, schedule.id != null ? `#${schedule.id}` : ""].filter(Boolean).join(" ");
+        const action = name === "create_schedule" ? "已创建" : "已更新";
+        return label ? `${action} ${label}` : result.ok ? action : "";
     }
     return "";
 }

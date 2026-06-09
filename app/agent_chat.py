@@ -38,7 +38,7 @@ from app.pi_chat_store import (
     get_pi_thread,
     history_for_llm,
 )
-from app.pi_context import compress_tool_result_for_llm, context_stats, needs_summary_update
+from app.pi_context import compress_tool_result_for_llm, context_stats, should_compress_thread
 from app.pi_decisions import (
     Fail,
     FallbackToolCalls,
@@ -74,6 +74,32 @@ MAX_WEB_SEARCH_QUERIES = 4
 TOOL_HEARTBEAT_SECONDS = 12
 MAX_LLM_CALLS_PER_TURN = 30
 MAX_EXECUTED_TOOL_CALLS_PER_TURN = 8
+
+_FORCE_SUMMARY_CONFIG_TOOLS = frozenset(
+    {
+        "get_import_filters",
+        "update_import_filters",
+        "get_search_config",
+        "list_schedules",
+        "create_schedule",
+        "update_schedule",
+    }
+)
+
+
+def _should_force_summary_after_tool(
+    name: str,
+    *,
+    user_message: str,
+    executed_count: int,
+) -> bool:
+    if name == "discover_leads":
+        return True
+    if name == "lookup_asns" and _is_asn_role_lookup_turn(user_message):
+        return True
+    if name in _FORCE_SUMMARY_CONFIG_TOOLS:
+        return True
+    return executed_count >= MAX_EXECUTED_TOOL_CALLS_PER_TURN
 
 
 def _social_profile_tool(
@@ -1598,7 +1624,19 @@ async def agent_chat_stream(
             history = loaded.get("history") or []
             had_summary = bool((loaded.get("context_summary") or "").strip())
             summary_through = int(loaded.get("context_summary_through") or 0)
-            if needs_summary_update(len(history), summary_through):
+            context_summary = str(loaded.get("context_summary") or "")
+            usage_percent = int(
+                context_stats(
+                    history,
+                    context_summary=context_summary,
+                    summary_through=summary_through,
+                    system_chars=len(SYSTEM_PROMPT),
+                    tools_chars=len(json.dumps(AGENT_TOOLS, ensure_ascii=False)),
+                    model=get_setting("llm_model", ""),
+                ).get("usage_percent")
+                or 0
+            )
+            if should_compress_thread(len(history), summary_through, usage_percent=usage_percent):
                 yield {"type": "status", "message": "整理对话上下文…"}
             thread = await asyncio.to_thread(
                 compress_thread_context_until_current,
@@ -1846,10 +1884,10 @@ async def agent_chat_stream(
                     "content": tool_content,
                 }
             )
-            if (
-                name == "discover_leads"
-                or (name == "lookup_asns" and _is_asn_role_lookup_turn(message))
-                or executed_tool_count >= MAX_EXECUTED_TOOL_CALLS_PER_TURN
+            if _should_force_summary_after_tool(
+                name,
+                user_message=message,
+                executed_count=executed_tool_count,
             ):
                 should_force_summary = True
 

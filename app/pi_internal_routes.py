@@ -16,12 +16,11 @@ from pydantic import BaseModel, Field
 
 from app.agent_chat import (
     AGENT_TOOLS,
-    MAX_EXECUTED_TOOL_CALLS_PER_TURN,
     SYSTEM_PROMPT,
     ToolEmitter,
     _blocked_tool_result,
-    _is_asn_role_lookup_turn,
     _run_tool,
+    _should_force_summary_after_tool,
     _tool_block_reason,
     append_user_turn_to_messages,
 )
@@ -31,7 +30,7 @@ from app.pi_chat_store import (
     compress_thread_context_until_current,
     get_pi_thread,
 )
-from app.pi_context import compress_tool_result_for_llm, context_stats, needs_summary_update
+from app.pi_context import compress_tool_result_for_llm, context_stats, should_compress_thread
 
 router = APIRouter(prefix="/api/internal/pi", tags=["pi-internal"])
 
@@ -105,7 +104,19 @@ async def prepare_pi_turn(
             history = loaded.get("history") or []
             had_summary = bool((loaded.get("context_summary") or "").strip())
             summary_through = int(loaded.get("context_summary_through") or 0)
-            if needs_summary_update(len(history), summary_through):
+            context_summary = str(loaded.get("context_summary") or "")
+            usage_percent = int(
+                context_stats(
+                    history,
+                    context_summary=context_summary,
+                    summary_through=summary_through,
+                    system_chars=len(SYSTEM_PROMPT),
+                    tools_chars=len(json.dumps(AGENT_TOOLS, ensure_ascii=False)),
+                    model=get_setting("llm_model", ""),
+                ).get("usage_percent")
+                or 0
+            )
+            if should_compress_thread(len(history), summary_through, usage_percent=usage_percent):
                 status_messages.append("整理对话上下文…")
             thread = await asyncio.to_thread(
                 compress_thread_context_until_current,
@@ -224,10 +235,10 @@ def internal_tool_block(body: ToolBlockRequest, request: Request) -> dict:
 @router.post("/force-summary")
 def internal_force_summary(body: ForceSummaryRequest, request: Request) -> dict:
     _verify_internal(request)
-    force = (
-        body.name == "discover_leads"
-        or (body.name == "lookup_asns" and _is_asn_role_lookup_turn(body.user_message))
-        or body.executed_count >= MAX_EXECUTED_TOOL_CALLS_PER_TURN
+    force = _should_force_summary_after_tool(
+        body.name,
+        user_message=body.user_message,
+        executed_count=body.executed_count,
     )
     return {"force": force}
 

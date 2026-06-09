@@ -13,7 +13,7 @@ from app.pi_context import (
     SUMMARIZE_BATCH_SIZE,
     build_llm_messages,
     context_stats,
-    needs_summary_update,
+    should_compress_thread,
     summarize_history_batch,
 )
 from app.settings_store import get_setting
@@ -179,7 +179,9 @@ def append_pi_thread_history_entries(
     upsert_pi_thread(user_id, thread_id, history=base_history + entries)
 
 
-def maybe_compress_thread_context(user_id: int, thread_id: str) -> dict[str, Any] | None:
+def maybe_compress_thread_context(
+    user_id: int, thread_id: str, *, usage_percent: int = 0
+) -> dict[str, Any] | None:
     thread = get_pi_thread(user_id, thread_id)
     if not thread:
         return None
@@ -187,7 +189,7 @@ def maybe_compress_thread_context(user_id: int, thread_id: str) -> dict[str, Any
     history = thread["history"]
     summary = str(thread.get("context_summary") or "")
     through = int(thread.get("context_summary_through") or 0)
-    if not needs_summary_update(len(history), through):
+    if not should_compress_thread(len(history), through, usage_percent=usage_percent):
         return thread
 
     batch_end = min(
@@ -222,11 +224,23 @@ def compress_thread_context_until_current(
     for _ in range(max_rounds):
         history_len = len(thread["history"])
         through = int(thread.get("context_summary_through") or 0)
-        if not needs_summary_update(history_len, through):
+        summary = str(thread.get("context_summary") or "")
+        usage_percent = int(
+            context_stats(
+                thread["history"],
+                context_summary=summary,
+                summary_through=through,
+                model=get_setting("llm_model", ""),
+            ).get("usage_percent")
+            or 0
+        )
+        if not should_compress_thread(history_len, through, usage_percent=usage_percent):
             return thread
 
         before = through
-        thread = maybe_compress_thread_context(user_id, thread_id) or thread
+        thread = (
+            maybe_compress_thread_context(user_id, thread_id, usage_percent=usage_percent) or thread
+        )
         after = int(thread.get("context_summary_through") or 0)
         if after <= before:
             return thread
