@@ -445,6 +445,86 @@ def should_compress_thread(
     return False
 
 
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context length",
+    "maximum context",
+    "context_length",
+    "too many tokens",
+    "token limit",
+    "max_tokens",
+    "reduce the length",
+    "prompt is too long",
+    "request too large",
+    "上下文过长",
+    "上下文长度",
+    "超出最大",
+    "超过最大",
+    "token 超限",
+)
+
+
+def is_context_overflow_error(message: str | None) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def is_valid_compression_cut(history: list[dict[str, Any]], end: int) -> bool:
+    """True when history[:end] ends on a turn boundary (not mid tool chain)."""
+    if end <= 0 or end > len(history):
+        return False
+    role = str(history[end - 1].get("role") or "")
+    if role == "user":
+        return True
+    if role == "assistant":
+        return end >= len(history) or str(history[end].get("role") or "") != "tool"
+    return False
+
+
+def next_compression_batch_end(
+    history: list[dict[str, Any]],
+    through: int,
+    batch_size: int,
+    max_end: int,
+) -> int:
+    """Pick batch end respecting turn boundaries; never split assistant/tool chains."""
+    if through >= max_end or through >= len(history):
+        return through
+    target = min(through + max(1, batch_size), max_end, len(history))
+    end = target
+    while end > through and not is_valid_compression_cut(history, end):
+        end -= 1
+    if end <= through:
+        end = min(through + 1, max_end, len(history))
+        while end <= max_end and end <= len(history) and not is_valid_compression_cut(history, end):
+            end += 1
+    return min(end, max_end, len(history))
+
+
+def summarize_branch_suffix(batch: list[dict[str, Any]]) -> str:
+    """Summarize discarded suffix when forking (Pi branch-summary lite)."""
+    lines = [line for item in batch if (line := compact_history_line(item, verbose=True))]
+    if not lines:
+        return ""
+    prompt = (
+        "你是 Sales CRM Pi 助手的分支摘要器。以下是对话在分叉点之后、主线程上继续的内容。\n"
+        "输出简短中文条目：已尝试操作、关键结论、失败原因、待办。不要寒暄，不超过 400 字。\n\n"
+        + "\n".join(lines)
+    )
+    try:
+        return chat_completion_summary(
+            [
+                {"role": "system", "content": "你只输出摘要正文，不要 markdown 代码块。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+        ).strip()[:SUMMARY_MAX_CHARS]
+    except LLMError:
+        merged = "\n".join(lines)
+        return merged[:SUMMARY_MAX_CHARS]
+
+
 def summarize_history_batch(existing_summary: str, batch: list[dict[str, Any]]) -> str:
     lines = [line for item in batch if (line := compact_history_line(item, verbose=True))]
     if not lines:

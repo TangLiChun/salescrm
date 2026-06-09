@@ -30,10 +30,12 @@ def test_fork_pi_thread_copies_prefix_history(monkeypatch) -> None:
             "history": kwargs["history"],
             "context_summary": kwargs.get("context_summary", ""),
             "context_summary_through": kwargs.get("context_summary_through", 0),
+            "parent_thread_id": kwargs.get("parent_thread_id"),
         }
 
     monkeypatch.setattr("app.pi_chat_store.get_pi_thread", fake_get_pi_thread)
     monkeypatch.setattr("app.pi_chat_store.create_pi_thread", fake_create_pi_thread)
+    monkeypatch.setattr("app.pi_chat_store.summarize_branch_suffix", lambda batch: "分支摘要")
 
     child = fork_pi_thread(7, "t_parent", 2)
     assert child is not None
@@ -41,3 +43,5 @@ def test_fork_pi_thread_copies_prefix_history(monkeypatch) -> None:
     assert child["title"] == "分支 · 主对话"
     assert captured["history"] == parent["history"][:2]
     assert captured["context_summary_through"] == 2
+    assert captured["parent_thread_id"] == "t_parent"
+    assert "原线程分叉点后继续" in captured["context_summary"]

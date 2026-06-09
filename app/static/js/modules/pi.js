@@ -216,9 +216,10 @@ export function renderPiThreadList() {
         const li = document.createElement("li");
         li.className = "pi-thread-item";
         const count = Array.isArray(thread.history) ? thread.history.length : 0;
+        const branch = isPiBranchThread(thread);
         li.innerHTML = `
-      <button type="button" class="pi-thread-btn ${thread.id === state.activePiThreadId ? "active" : ""} ${state.piChatBusy && thread.id === state.activePiThreadId ? "running" : ""}" data-thread-id="${thread.id}">
-        <span class="pi-thread-title">${escapeHtml(thread.title || defaultPiThreadTitle())}</span>
+      <button type="button" class="pi-thread-btn ${thread.id === state.activePiThreadId ? "active" : ""} ${state.piChatBusy && thread.id === state.activePiThreadId ? "running" : ""} ${branch ? "pi-thread-branch" : ""}" data-thread-id="${thread.id}">
+        <span class="pi-thread-title">${branch ? "↳ " : ""}${escapeHtml(thread.title || defaultPiThreadTitle())}</span>
         <span class="pi-thread-meta">${state.piChatBusy && thread.id === state.activePiThreadId ? escapeHtml(t("pi.threadRunning")) : t("pi.threadMeta", { count })}</span>
       </button>
       <button type="button" class="pi-thread-delete" data-delete-thread="${thread.id}" aria-label="${t("pi.deleteThread")}">×</button>
@@ -290,11 +291,20 @@ export function recoverLegacyPiHistory(userId) {
     savePiThreadsStore();
     return true;
 }
+export function isPiBranchThread(thread) {
+    if (!thread)
+        return false;
+    if (thread.parent_thread_id)
+        return true;
+    const title = String(thread.title || "");
+    return title.startsWith("分支 ·") || title.startsWith("分支·");
+}
 export function mapServerPiThreadSummary(row) {
     return {
         id: row.id,
         title: row.title || "",
         history: [],
+        parent_thread_id: row.parent_thread_id || null,
         has_context_summary: Boolean(row.has_context_summary || (row.context_summary || "").trim()),
         createdAt: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
         updatedAt: row.updated_at ? Date.parse(row.updated_at) || Date.now() : Date.now(),
@@ -305,6 +315,7 @@ export function mapServerPiThreadFull(row) {
         id: row.id,
         title: row.title || "",
         history: normalizeHistoryItems(row.history),
+        parent_thread_id: row.parent_thread_id || null,
         has_context_summary: Boolean(row.has_context_summary || (row.context_summary || "").trim()),
         createdAt: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
         updatedAt: row.updated_at ? Date.parse(row.updated_at) || Date.now() : Date.now(),

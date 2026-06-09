@@ -13,7 +13,9 @@ from app.pi_context import (
     SUMMARIZE_BATCH_SIZE,
     build_llm_messages,
     context_stats,
+    next_compression_batch_end,
     should_compress_thread,
+    summarize_branch_suffix,
     summarize_history_batch,
 )
 from app.settings_store import get_setting
@@ -82,6 +84,7 @@ def _thread_row_to_dict(row: dict) -> dict[str, Any]:
         "history": history,
         "context_summary": row.get("context_summary") or "",
         "context_summary_through": through,
+        "parent_thread_id": row.get("parent_thread_id"),
         "created_at": _iso(row["created_at"]),
         "updated_at": _iso(row["updated_at"]),
     }
@@ -99,7 +102,7 @@ def list_pi_threads(user_id: int) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT id, title, history_json, context_summary, context_summary_through,
-                   created_at, updated_at
+                   parent_thread_id, created_at, updated_at
             FROM pi_chat_threads
             WHERE user_id = %s
             ORDER BY updated_at DESC
@@ -117,6 +120,7 @@ def list_pi_threads(user_id: int) -> list[dict[str, Any]]:
                 "message_count": len(item["history"]),
                 "context_summary_through": item["context_summary_through"],
                 "has_context_summary": bool((item.get("context_summary") or "").strip()),
+                "parent_thread_id": item.get("parent_thread_id"),
                 "created_at": item["created_at"],
                 "updated_at": item["updated_at"],
             }
@@ -129,7 +133,7 @@ def get_pi_thread(user_id: int, thread_id: str) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT id, title, history_json, context_summary, context_summary_through,
-                   created_at, updated_at
+                   parent_thread_id, created_at, updated_at
             FROM pi_chat_threads
             WHERE user_id = %s AND id = %s
             """,
@@ -192,9 +196,12 @@ def maybe_compress_thread_context(
     if not should_compress_thread(len(history), through, usage_percent=usage_percent):
         return thread
 
-    batch_end = min(
-        through + SUMMARIZE_BATCH_SIZE,
-        len(history) - MAX_LLM_HISTORY_MESSAGES,
+    max_end = len(history) - MAX_LLM_HISTORY_MESSAGES
+    batch_end = next_compression_batch_end(
+        history,
+        through,
+        SUMMARIZE_BATCH_SIZE,
+        max_end,
     )
     if batch_end <= through:
         return thread
@@ -255,6 +262,7 @@ def create_pi_thread(
     history: list[dict[str, Any]] | None = None,
     context_summary: str = "",
     context_summary_through: int = 0,
+    parent_thread_id: str | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
     thread_id = new_thread_id()
@@ -266,11 +274,21 @@ def create_pi_thread(
             """
             INSERT INTO pi_chat_threads (
                 id, user_id, title, history_json, context_summary, context_summary_through,
-                created_at, updated_at
+                parent_thread_id, created_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (thread_id, user_id, title.strip(), Json(payload), summary, through, now, now),
+            (
+                thread_id,
+                user_id,
+                title.strip(),
+                Json(payload),
+                summary,
+                through,
+                (parent_thread_id or None),
+                now,
+                now,
+            ),
         )
     return {
         "id": thread_id,
@@ -278,6 +296,7 @@ def create_pi_thread(
         "history": payload,
         "context_summary": summary,
         "context_summary_through": through,
+        "parent_thread_id": parent_thread_id,
         "created_at": now,
         "updated_at": now,
     }
@@ -297,6 +316,14 @@ def fork_pi_thread(user_id: int, thread_id: str, through_index: int) -> dict[str
         summary_through = end
     else:
         summary_through = min(parent_through, len(branch_history))
+    suffix = history[end:]
+    if suffix:
+        branch_note = summarize_branch_suffix(suffix).strip()
+        if branch_note:
+            prefix = (summary + "\n\n").strip() if summary else ""
+            summary = f"{prefix}[原线程分叉点后继续]\n{branch_note}".strip()[:6000]
+            summary_through = len(branch_history)
+
     base_title = (parent.get("title") or "").strip() or "对话"
     title = f"分支 · {base_title[:40]}"
     return create_pi_thread(
@@ -305,6 +332,7 @@ def fork_pi_thread(user_id: int, thread_id: str, through_index: int) -> dict[str
         history=branch_history,
         context_summary=summary if summary_through > 0 else "",
         context_summary_through=summary_through,
+        parent_thread_id=thread_id,
     )
 
 

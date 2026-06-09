@@ -3246,6 +3246,11 @@ td.mono, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   padding: 0.2rem 0.55rem;
 }
 
+.pi-thread-btn.pi-thread-branch .pi-thread-title {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 .pi-chat-bubble.streaming::after {
   content: "▍";
   display: inline-block;

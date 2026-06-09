@@ -38,7 +38,13 @@ from app.pi_chat_store import (
     get_pi_thread,
     history_for_llm,
 )
-from app.pi_context import compress_tool_result_for_llm, context_stats, should_compress_thread
+from app.pi_context import (
+    compress_tool_result_for_llm,
+    context_stats,
+    is_context_overflow_error,
+    should_compress_thread,
+)
+from app.pi_parallel_tools import can_parallelize_tool_batch
 from app.pi_decisions import (
     Fail,
     FallbackToolCalls,
@@ -1710,37 +1716,93 @@ async def agent_chat_stream(
             )
 
             llm_call_count += 1
-            async for event in llm_client(messages, AGENT_TOOLS, tool_choice=tool_choice):
-                event_type = event.get("type")
-                if event_type == "error":
-                    yield {"type": "error", "message": event.get("message") or "LLM 请求失败"}
-                    yield {"type": "done"}
-                    return
-                if event_type == "reasoning_start":
-                    reasoning_open = True
-                    yield {"type": "reasoning_start"}
-                elif event_type == "reasoning_delta":
-                    yield event
-                elif event_type == "content_delta":
-                    piece = str(event.get("text") or "")
-                    if piece:
-                        content_buffer += piece
-                        visible = _meaningful_assistant_content(content_buffer)
-                        if visible and len(visible) > len(last_streamed_visible):
-                            delta = visible[len(last_streamed_visible) :]
-                            last_streamed_visible = visible
-                            if delta:
-                                if not streamed_reply:
-                                    if reasoning_open:
-                                        reasoning_open = False
-                                        yield {"type": "reasoning_done"}
-                                    streamed_reply = True
-                                    yield {"type": "assistant_start"}
-                                yield {"type": "assistant_delta", "text": delta}
-                elif event_type == "status":
-                    yield {"type": "status", "message": event.get("message") or "Pi 助手处理中…"}
-                elif event_type == "message":
-                    assistant = event.get("message")
+            overflow_retried = False
+            llm_stream_done = False
+            while not llm_stream_done:
+                recover_overflow = False
+                async for event in llm_client(messages, AGENT_TOOLS, tool_choice=tool_choice):
+                    event_type = event.get("type")
+                    if event_type == "error":
+                        err_msg = str(event.get("message") or "LLM 请求失败")
+                        if (
+                            is_context_overflow_error(err_msg)
+                            and thread_id
+                            and not overflow_retried
+                        ):
+                            overflow_retried = True
+                            recover_overflow = True
+                            yield {
+                                "type": "status",
+                                "message": "上下文过长，正在压缩后重试…",
+                            }
+                            thread = await asyncio.to_thread(
+                                compress_thread_context_until_current,
+                                user_id,
+                                thread_id,
+                                max_rounds=48,
+                            )
+                            thread = thread or get_pi_thread(user_id, thread_id)
+                            context_summary = str((thread or {}).get("context_summary") or "")
+                            summary_through = int(
+                                (thread or {}).get("context_summary_through") or 0
+                            )
+                            trimmed = _trim_history(
+                                (thread or {}).get("history") or [],
+                                context_summary=context_summary,
+                                summary_through=summary_through,
+                            )
+                            messages.clear()
+                            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+                            messages.extend(trimmed)
+                            append_user_turn_to_messages(messages, trimmed, message)
+                            stats_history = (thread or {}).get("history") if thread else trimmed
+                            yield {
+                                "type": "context",
+                                "stats": context_stats(
+                                    stats_history,
+                                    context_summary=context_summary,
+                                    summary_through=summary_through,
+                                    system_chars=len(SYSTEM_PROMPT),
+                                    tools_chars=len(json.dumps(AGENT_TOOLS, ensure_ascii=False)),
+                                    model=get_setting("llm_model", ""),
+                                ),
+                            }
+                            break
+                        yield {"type": "error", "message": err_msg}
+                        yield {"type": "done"}
+                        return
+                    elif event_type == "reasoning_start":
+                        reasoning_open = True
+                        yield {"type": "reasoning_start"}
+                    elif event_type == "reasoning_delta":
+                        yield event
+                    elif event_type == "content_delta":
+                        piece = str(event.get("text") or "")
+                        if piece:
+                            content_buffer += piece
+                            visible = _meaningful_assistant_content(content_buffer)
+                            if visible and len(visible) > len(last_streamed_visible):
+                                delta = visible[len(last_streamed_visible) :]
+                                last_streamed_visible = visible
+                                if delta:
+                                    if not streamed_reply:
+                                        if reasoning_open:
+                                            reasoning_open = False
+                                            yield {"type": "reasoning_done"}
+                                        streamed_reply = True
+                                        yield {"type": "assistant_start"}
+                                    yield {"type": "assistant_delta", "text": delta}
+                    elif event_type == "status":
+                        yield {
+                            "type": "status",
+                            "message": event.get("message") or "Pi 助手处理中…",
+                        }
+                    elif event_type == "message":
+                        assistant = event.get("message")
+
+                if recover_overflow:
+                    continue
+                llm_stream_done = True
 
             decision = decide_turn(
                 assistant,
@@ -1818,6 +1880,7 @@ async def agent_chat_stream(
 
         current_batch_names = {name for _, name, _ in prepared_calls}
         should_force_summary = False
+        allowed_calls: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
 
         for tool_call, name, args in prepared_calls:
             block_reason = _tool_block_reason(
@@ -1850,24 +1913,33 @@ async def agent_chat_stream(
                 if not allow_asn_lookup_correction:
                     should_force_summary = True
                 continue
+            allowed_calls.append((tool_call, name, args))
 
-            yield {"type": "tool_start", "name": name, "args": args}
-            executed_tool_count += 1
-            executed_tool_names.append(name)
+        parallel_batch = (
+            len(allowed_calls) > 1
+            and can_parallelize_tool_batch([name for _, name, _ in allowed_calls])
+        )
 
+        def _start_tool_worker(
+            name: str, args: dict[str, Any]
+        ) -> tuple[asyncio.Task[None], asyncio.Queue[tuple[str, Any] | None], dict[str, Any]]:
             event_queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
-            emitter = ToolEmitter(event_queue)
             result_holder: dict[str, Any] = {}
 
             async def worker() -> None:
                 try:
+                    emitter = ToolEmitter(event_queue)
                     result_holder["value"] = await tool_runner(user_id, name, args, emitter)
                 except Exception as exc:  # noqa: BLE001 — keep SSE stream alive
                     result_holder["value"] = {"error": str(exc)}
                 finally:
                     await event_queue.put(None)
 
-            task = asyncio.create_task(worker())
+            return asyncio.create_task(worker()), event_queue, result_holder
+
+        async def _stream_tool_events(
+            name: str, event_queue: asyncio.Queue[tuple[str, Any] | None]
+        ) -> AsyncIterator[dict[str, Any]]:
             while True:
                 try:
                     item = await asyncio.wait_for(event_queue.get(), timeout=TOOL_HEARTBEAT_SECONDS)
@@ -1881,24 +1953,92 @@ async def agent_chat_stream(
                     yield {"type": "tool_progress", "name": name, "message": payload}
                 elif kind == "event":
                     yield {"type": "tool_event", "name": name, "event": payload}
-            await task
 
-            result = result_holder.get("value", {"error": "工具执行失败"})
-            yield {"type": "tool_result", "name": name, "result": result}
-            tool_content = compress_tool_result_for_llm(name, result)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": tool_content,
-                }
-            )
-            if _should_force_summary_after_tool(
-                name,
-                user_message=message,
-                executed_count=executed_tool_count,
-            ):
-                should_force_summary = True
+        if parallel_batch:
+            tracked: list[
+                tuple[
+                    dict[str, Any],
+                    str,
+                    dict[str, Any],
+                    asyncio.Task[None],
+                    asyncio.Queue[tuple[str, Any] | None],
+                    dict[str, Any],
+                ]
+            ] = []
+            for tool_call, name, args in allowed_calls:
+                yield {"type": "tool_start", "name": name, "args": args}
+                task, event_queue, result_holder = _start_tool_worker(name, args)
+                tracked.append((tool_call, name, args, task, event_queue, result_holder))
+
+            pending = [True] * len(tracked)
+            while any(pending):
+                for i, (tool_call, name, args, task, event_queue, result_holder) in enumerate(
+                    tracked
+                ):
+                    if not pending[i]:
+                        continue
+                    while True:
+                        try:
+                            item = event_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        if item is None:
+                            pending[i] = False
+                            break
+                        kind, payload = item
+                        if kind == "progress":
+                            yield {
+                                "type": "tool_progress",
+                                "name": name,
+                                "message": payload,
+                            }
+                        elif kind == "event":
+                            yield {"type": "tool_event", "name": name, "event": payload}
+                if any(pending):
+                    await asyncio.sleep(0.05)
+            for tool_call, name, args, task, event_queue, result_holder in tracked:
+                await task
+                executed_tool_count += 1
+                executed_tool_names.append(name)
+                result = result_holder.get("value", {"error": "工具执行失败"})
+                yield {"type": "tool_result", "name": name, "result": result}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": compress_tool_result_for_llm(name, result),
+                    }
+                )
+                if _should_force_summary_after_tool(
+                    name,
+                    user_message=message,
+                    executed_count=executed_tool_count,
+                ):
+                    should_force_summary = True
+        else:
+            for tool_call, name, args in allowed_calls:
+                yield {"type": "tool_start", "name": name, "args": args}
+                executed_tool_count += 1
+                executed_tool_names.append(name)
+                task, event_queue, result_holder = _start_tool_worker(name, args)
+                async for event in _stream_tool_events(name, event_queue):
+                    yield event
+                await task
+                result = result_holder.get("value", {"error": "工具执行失败"})
+                yield {"type": "tool_result", "name": name, "result": result}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": compress_tool_result_for_llm(name, result),
+                    }
+                )
+                if _should_force_summary_after_tool(
+                    name,
+                    user_message=message,
+                    executed_count=executed_tool_count,
+                ):
+                    should_force_summary = True
 
         if should_force_summary:
             reason = (

@@ -83,6 +83,33 @@ export class PythonClient {
     };
   }
 
+  async recoverOverflow(input: {
+    user_id: number;
+    message: string;
+    thread_id: string;
+  }): Promise<{
+    messages: Record<string, unknown>[];
+    context_event: AgentEvent;
+    history: Record<string, unknown>[];
+    status_messages: string[];
+  }> {
+    const resp = await fetch(`${this.baseUrl}/api/internal/pi/recover-overflow`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(input),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Recover overflow failed (${resp.status}): ${text.slice(0, 200)}`);
+    }
+    return (await resp.json()) as {
+      messages: Record<string, unknown>[];
+      context_event: AgentEvent;
+      history: Record<string, unknown>[];
+      status_messages: string[];
+    };
+  }
+
   async shouldForceSummary(input: {
     name: string;
     user_message: string;

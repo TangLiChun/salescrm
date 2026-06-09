@@ -63,12 +63,17 @@ PI_INTERNAL_SECRET=$(openssl rand -hex 24) docker compose up -d --build
 - `POST /api/internal/pi/persist`
 - `POST /api/internal/pi/tool-block`
 - `POST /api/internal/pi/force-summary`
+- `POST /api/internal/pi/recover-overflow`
 
 均需请求头 `X-Internal-Secret`。
 
 ## 后台 Pi 任务
 
-`background_jobs` 中的 `pi_agent` 仍使用 Python `agent_chat_stream`；前台聊天在配置 `PI_AGENT_SERVICE_URL` 时走 TS 服务。
+`background_jobs` 中的 `pi_agent` 在配置 `PI_AGENT_SERVICE_URL` 时同样走 `stream_pi_agent_events`（TS sidecar）；未配置时回退 Python `agent_chat_stream`。
+
+## 上下文溢出恢复
+
+TS sidecar 在 LLM 返回上下文过长错误时，会调用 `POST /api/internal/pi/recover-overflow`（压缩线程 + 重新 prepare）并自动重试一次。Python 回退路径在 `agent_chat_stream` 内有同等逻辑。
 
 ## 回退
 

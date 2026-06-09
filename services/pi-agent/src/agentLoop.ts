@@ -5,6 +5,7 @@ import {
   assistantIntroBeforeTools,
   meaningfulAssistantContent,
 } from "./replyHeuristics.js";
+import { isContextOverflowError } from "./llmErrors.js";
 import { canParallelizeToolBatch } from "./parallelTools.js";
 import {
   MAX_LLM_CALLS_PER_TURN,
@@ -134,40 +135,69 @@ export async function* agentChatStream(input: {
       const toolChoice = llmNudgeCount > 0 && tools.length ? "required" : null;
       llmCallCount += 1;
 
-      for await (const event of streamChat(messages, tools, llmConfig, toolChoice)) {
-        if (event.type === "error") {
-          yield { type: "error", message: event.message || "LLM 请求失败" };
-          yield { type: "done" };
-          return;
-        }
-        if (event.type === "reasoning_start") {
-          reasoningOpen = true;
-          yield { type: "reasoning_start" };
-        } else if (event.type === "reasoning_delta") {
-          yield { type: "reasoning_delta", text: event.text };
-        } else if (event.type === "content_delta") {
-          if (reasoningOpen) {
-            reasoningOpen = false;
-            yield { type: "reasoning_done" };
-          }
-          contentBuffer += event.text;
-          const visible = meaningfulAssistantContent(contentBuffer);
-          if (visible && visible.length > lastStreamedVisible.length) {
-            const delta = visible.slice(lastStreamedVisible.length);
-            lastStreamedVisible = visible;
-            if (delta) {
-              if (!streamedReply) {
-                streamedReply = true;
-                yield { type: "assistant_start" };
+      let overflowRetried = false;
+      let llmStreamDone = false;
+      while (!llmStreamDone) {
+        let recoverOverflow = false;
+        for await (const event of streamChat(messages, tools, llmConfig, toolChoice)) {
+          if (event.type === "error") {
+            const errMsg = event.message || "LLM 请求失败";
+            if (
+              !overflowRetried &&
+              threadId &&
+              isContextOverflowError(errMsg)
+            ) {
+              overflowRetried = true;
+              recoverOverflow = true;
+              yield { type: "status", message: "上下文过长，正在压缩后重试…" };
+              const recovered = await python.recoverOverflow({
+                user_id: userId,
+                message,
+                thread_id: threadId,
+              });
+              messages.length = 0;
+              messages.push(...recovered.messages);
+              for (const statusMessage of recovered.status_messages || []) {
+                yield { type: "status", message: statusMessage };
               }
-              yield { type: "assistant_delta", text: delta };
+              yield recovered.context_event;
+              break;
             }
+            yield { type: "error", message: errMsg };
+            yield { type: "done" };
+            return;
           }
-        } else if (event.type === "status") {
-          yield { type: "status", message: event.message || "Pi 助手处理中…" };
-        } else if (event.type === "message") {
-          assistant = event.message;
+          if (event.type === "reasoning_start") {
+            reasoningOpen = true;
+            yield { type: "reasoning_start" };
+          } else if (event.type === "reasoning_delta") {
+            yield { type: "reasoning_delta", text: event.text };
+          } else if (event.type === "content_delta") {
+            if (reasoningOpen) {
+              reasoningOpen = false;
+              yield { type: "reasoning_done" };
+            }
+            contentBuffer += event.text;
+            const visible = meaningfulAssistantContent(contentBuffer);
+            if (visible && visible.length > lastStreamedVisible.length) {
+              const delta = visible.slice(lastStreamedVisible.length);
+              lastStreamedVisible = visible;
+              if (delta) {
+                if (!streamedReply) {
+                  streamedReply = true;
+                  yield { type: "assistant_start" };
+                }
+                yield { type: "assistant_delta", text: delta };
+              }
+            }
+          } else if (event.type === "status") {
+            yield { type: "status", message: event.message || "Pi 助手处理中…" };
+          } else if (event.type === "message") {
+            assistant = event.message;
+          }
         }
+        if (recoverOverflow) continue;
+        llmStreamDone = true;
       }
       if (reasoningOpen) {
         yield { type: "reasoning_done" };
@@ -336,25 +366,46 @@ export async function* agentChatStream(input: {
         yield { type: "tool_start", name, args };
       }
       const progressQueues = allowedCalls.map(() => [] as AgentEvent[]);
-      const outcomes = await Promise.all(
-        allowedCalls.map(async ([toolCall, name, args], index) => {
-          const outcome = await runOneTool(toolCall, name, args, (event) => {
-            progressQueues[index].push(event);
-          });
-          return { toolCall, name, ...outcome };
-        }),
-      );
-      for (let i = 0; i < outcomes.length; i += 1) {
-        for (const event of progressQueues[i]) {
-          if (event.type === "tool_progress") {
-            yield { type: "tool_progress", name: event.name, message: event.message };
-          } else if (event.type === "tool_event") {
-            yield { type: "tool_event", name: event.name, event: event.event };
-          } else if (event.type === "status") {
-            yield { type: "status", message: event.message };
+      const outcomeSlots: Array<
+        | null
+        | {
+            toolCall: PreparedCall[0];
+            name: string;
+            toolResult: Record<string, unknown>;
+            llmContent: string;
+          }
+      > = allowedCalls.map(() => null);
+      const outcomePromises = allowedCalls.map(async ([toolCall, name, args], index) => {
+        const outcome = await runOneTool(toolCall, name, args, (event) => {
+          progressQueues[index].push(event);
+        });
+        outcomeSlots[index] = { toolCall, name, ...outcome };
+      });
+      while (outcomeSlots.some((slot) => slot === null)) {
+        for (let i = 0; i < progressQueues.length; i += 1) {
+          while (progressQueues[i].length) {
+            const event = progressQueues[i].shift()!;
+            if (event.type === "tool_progress") {
+              yield { type: "tool_progress", name: event.name, message: event.message };
+            } else if (event.type === "tool_event") {
+              yield { type: "tool_event", name: event.name, event: event.event };
+            } else if (event.type === "status") {
+              yield { type: "status", message: event.message };
+            }
           }
         }
-        const { toolCall, name, toolResult, llmContent } = outcomes[i];
+        await Promise.race([
+          ...outcomePromises.map((promise, index) =>
+            outcomeSlots[index]
+              ? Promise.resolve()
+              : promise.then(() => undefined),
+          ),
+          new Promise((resolve) => setTimeout(resolve, 100)),
+        ]);
+      }
+      for (let i = 0; i < outcomeSlots.length; i += 1) {
+        const slot = outcomeSlots[i]!;
+        const { toolCall, name, toolResult, llmContent } = slot;
         executedToolCount += 1;
         executedToolNames.push(name);
         yield { type: "tool_result", name, result: toolResult };

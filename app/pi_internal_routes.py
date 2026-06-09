@@ -88,6 +88,12 @@ class ForceSummaryRequest(BaseModel):
     executed_count: int = 0
 
 
+class RecoverOverflowRequest(BaseModel):
+    user_id: int
+    message: str
+    thread_id: str
+
+
 async def prepare_pi_turn(
     user_id: int,
     message: str,
@@ -189,6 +195,31 @@ async def internal_prepare(body: PrepareRequest, request: Request) -> dict:
         history=body.history,
     )
     return prepared
+
+
+@router.post("/recover-overflow")
+async def internal_recover_overflow(body: RecoverOverflowRequest, request: Request) -> dict:
+    _verify_internal(request)
+    if not body.thread_id.strip():
+        raise HTTPException(status_code=400, detail="thread_id required")
+    await asyncio.to_thread(
+        compress_thread_context_until_current,
+        body.user_id,
+        body.thread_id,
+        max_rounds=48,
+    )
+    prepared = await prepare_pi_turn(
+        body.user_id,
+        body.message,
+        thread_id=body.thread_id,
+        history=None,
+    )
+    return {
+        "messages": prepared["messages"],
+        "context_event": prepared["context_event"],
+        "history": prepared["history"],
+        "status_messages": ["上下文过长，已压缩后重试…", *prepared.get("status_messages", [])],
+    }
 
 
 @router.post("/persist")
