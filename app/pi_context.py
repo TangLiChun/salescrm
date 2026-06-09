@@ -327,7 +327,7 @@ def summarize_history_batch(existing_summary: str, batch: list[dict[str, Any]]) 
 
     prior = (existing_summary or "").strip()
     prompt = (
-        "你是 Sales CRM Pi 助手的对话压缩器。将「待压缩片段」合并进「已有摘要」，输出更新后的摘要。\n"
+        "你是 Sales CRM Reasonix 助手的对话压缩器。将「待压缩片段」合并进「已有摘要」，输出更新后的摘要。\n"
         "必须保留：用户目标、已查 ASN/组织、线索数量、导入结果、关键决策、待办、失败原因。\n"
         "用中文条目化，不要寒暄，不超过 800 字。\n\n"
         f"已有摘要：\n{prior or '（无）'}\n\n"

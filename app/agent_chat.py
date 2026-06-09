@@ -555,7 +555,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-SYSTEM_PROMPT = """你是 Sales CRM 的 Pi 助手，帮销售/BD 操作网络运营商联系人库。
+SYSTEM_PROMPT = """你是 Sales CRM 的 Reasonix 助手，帮销售/BD 操作网络运营商联系人库。
 
 核心行为（最重要，优先遵守）：
 1. 需要查 CRM 或联网时立刻调用工具。禁止只回「让我查一下 / 我先搜一下」等开场白就停——结论与动作先行，说明放到工具结果之后。
@@ -919,7 +919,7 @@ def _blocked_tool_result(name: str, reason: str) -> dict[str, Any]:
         "blocked": True,
         "tool": name,
         "reason": reason,
-        "message": "该工具调用已被 Pi 商用护栏拦截，请根据已有结果直接总结。",
+        "message": "该工具调用已被 Reasonix 商用护栏拦截，请根据已有结果直接总结。",
     }
 
 
@@ -1587,7 +1587,7 @@ async def agent_chat_stream(
         yield {"type": "error", "message": "任务已停止"}
         yield {"type": "done"}
         return
-    yield {"type": "status", "message": "Pi 助手思考中…"}
+    yield {"type": "status", "message": "Reasonix 思考中…"}
     llm_client = llm_client or _iter_llm_stream
     tool_runner = tool_runner or _run_tool
 
@@ -1691,7 +1691,7 @@ async def agent_chat_stream(
                                     yield {"type": "assistant_start"}
                                 yield {"type": "assistant_delta", "text": delta}
                 elif event_type == "status":
-                    yield {"type": "status", "message": event.get("message") or "Pi 助手处理中…"}
+                    yield {"type": "status", "message": event.get("message") or "Reasonix 处理中…"}
                 elif event_type == "message":
                     assistant = event.get("message")
 

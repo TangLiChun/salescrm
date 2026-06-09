@@ -60,7 +60,7 @@ app.post("/stream", async (c) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await stream.writeSSE({
-        data: JSON.stringify({ type: "error", message: `Pi 助手执行失败：${message.slice(0, 500)}` }),
+        data: JSON.stringify({ type: "error", message: `Reasonix 执行失败：${message.slice(0, 500)}` }),
       });
       await stream.writeSSE({ data: JSON.stringify({ type: "done" }) });
     }
