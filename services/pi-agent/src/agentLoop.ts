@@ -7,6 +7,7 @@ import {
 } from "./replyHeuristics.js";
 import { isContextOverflowError } from "./llmErrors.js";
 import { canParallelizeToolBatch } from "./parallelTools.js";
+import { createToolRegistry } from "./toolCalls.js";
 import {
   MAX_LLM_CALLS_PER_TURN,
   MAX_LLM_NUDGES,
@@ -15,14 +16,17 @@ import {
 } from "./types.js";
 import type { AgentEvent, AssistantMessage, LlmConfig, PreparedCall } from "./types.js";
 
-async function* streamTextReply(
+export type StreamChatFn = typeof streamChat;
+
+async function streamTextReply(
   messages: Record<string, unknown>[],
   tools: Record<string, unknown>[] | null,
   config: LlmConfig,
-): AsyncGenerator<never, [string, boolean]> {
+  llmStream: StreamChatFn,
+): Promise<[string, boolean]> {
   let assistant: AssistantMessage | null = null;
   let contentBuffer = "";
-  for await (const event of streamChat(messages, tools, config, null)) {
+  for await (const event of llmStream(messages, tools, config, null)) {
     if (event.type === "error") return ["", false];
     if (event.type === "content_delta") contentBuffer += event.text;
     if (event.type === "message") assistant = event.message;
@@ -35,19 +39,12 @@ async function* finalizeWithSummary(
   messages: Record<string, unknown>[],
   config: LlmConfig,
   instruction: string,
+  llmStream: StreamChatFn,
+  emptyFallback: string,
 ): AsyncGenerator<AgentEvent> {
   messages.push({ role: "user", content: instruction });
-  const replyGen = streamTextReply(messages, null, config);
-  let finalText = "";
-  let ok = false;
-  while (true) {
-    const step = await replyGen.next();
-    if (step.done) {
-      [finalText, ok] = step.value;
-      break;
-    }
-  }
-  if (!ok) finalText = "工具结果已整理完毕，请查看上方结果并按需继续缩小范围。";
+  let [finalText, ok] = await streamTextReply(messages, null, config, llmStream);
+  if (!ok) finalText = emptyFallback;
   yield { type: "assistant_start" };
   yield { type: "assistant_delta", text: finalText };
   yield { type: "assistant_done", text: finalText };
@@ -62,9 +59,15 @@ export async function* agentChatStream(input: {
   cancelCheck?: () => boolean;
   python: PythonClient;
   llmConfig: LlmConfig;
+  /** Test seam: defaults to the real LLM stream. */
+  streamChatImpl?: StreamChatFn;
+  /** Test seam: heartbeat interval while a tool runs. */
+  toolHeartbeatMs?: number;
 }): AsyncGenerator<AgentEvent> {
   const { userId, message, threadId, python, llmConfig } = input;
   const cancelCheck = input.cancelCheck ?? (() => false);
+  const llmStream = input.streamChatImpl ?? streamChat;
+  const toolHeartbeatMs = input.toolHeartbeatMs ?? TOOL_HEARTBEAT_MS;
 
   if (cancelCheck()) {
     yield { type: "error", message: "任务已停止" };
@@ -89,6 +92,7 @@ export async function* agentChatStream(input: {
   const messages = prepared.messages;
   const history = prepared.history || [];
   const tools = prepared.tools;
+  const toolRegistry = createToolRegistry(tools, prepared.tool_aliases || {});
 
   let llmCallCount = 0;
   const executedToolNames: string[] = [];
@@ -139,7 +143,7 @@ export async function* agentChatStream(input: {
       let llmStreamDone = false;
       while (!llmStreamDone) {
         let recoverOverflow = false;
-        for await (const event of streamChat(messages, tools, llmConfig, toolChoice)) {
+        for await (const event of llmStream(messages, tools, llmConfig, toolChoice)) {
           if (event.type === "error") {
             const errMsg = event.message || "LLM 请求失败";
             if (
@@ -208,6 +212,7 @@ export async function* agentChatStream(input: {
         history,
         nudgeCount: llmNudgeCount,
         maxNudges: MAX_LLM_NUDGES,
+        toolRegistry,
       });
 
       if (decision.kind === "retry") {
@@ -288,38 +293,51 @@ export async function* agentChatStream(input: {
       args: Record<string, unknown>,
       onProgress: (event: AgentEvent) => void,
     ): Promise<{ toolResult: Record<string, unknown>; llmContent: string }> => {
-      const toolGen = python.runTool({ user_id: userId, name, args });
       let toolResult: Record<string, unknown> = { error: "工具执行失败" };
       let llmContent = "";
-      let lastHeartbeat = Date.now();
-      while (true) {
-        const raceMs = Math.max(100, TOOL_HEARTBEAT_MS - (Date.now() - lastHeartbeat));
-        const nextPromise = toolGen.next();
-        const timeoutPromise = new Promise<{ timedOut: true }>((resolve) =>
-          setTimeout(() => resolve({ timedOut: true }), raceMs),
-        );
-        const winner = await Promise.race([
-          nextPromise.then((value) => ({ timedOut: false as const, value })),
-          timeoutPromise,
-        ]);
-        if ("timedOut" in winner && winner.timedOut) {
-          onProgress({ type: "status", message: `仍在执行 ${name}…` });
+      try {
+        const toolGen = python.runTool({ user_id: userId, name, args });
+        let lastHeartbeat = Date.now();
+        // Keep at most one in-flight next() across heartbeat timeouts; calling
+        // next() again while the previous promise is pending would queue a
+        // second pull whose resolved event is silently dropped.
+        let nextPromise: ReturnType<typeof toolGen.next> | null = null;
+        while (true) {
+          if (!nextPromise) nextPromise = toolGen.next();
+          const raceMs = Math.max(100, toolHeartbeatMs - (Date.now() - lastHeartbeat));
+          let heartbeatTimer: NodeJS.Timeout | undefined;
+          const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
+            heartbeatTimer = setTimeout(() => resolve({ timedOut: true }), raceMs);
+          });
+          const winner = await Promise.race([
+            nextPromise.then((value) => ({ timedOut: false as const, value })),
+            timeoutPromise,
+          ]);
+          clearTimeout(heartbeatTimer);
+          if ("timedOut" in winner && winner.timedOut) {
+            onProgress({ type: "status", message: `仍在执行 ${name}…` });
+            lastHeartbeat = Date.now();
+            continue;
+          }
+          nextPromise = null;
+          const step = (winner as { timedOut: false; value: Awaited<ReturnType<typeof toolGen.next>> }).value;
+          if (step.done) {
+            toolResult = step.value.result;
+            llmContent = step.value.llmContent;
+            break;
+          }
+          const event = step.value;
+          if (event.type === "tool_progress") {
+            onProgress({ type: "tool_progress", name, message: event.message });
+          } else if (event.type === "tool_event") {
+            onProgress({ type: "tool_event", name, event: event.event });
+          }
           lastHeartbeat = Date.now();
-          continue;
         }
-        const step = (winner as { timedOut: false; value: IteratorResult<AgentEvent> }).value;
-        if (step.done) {
-          toolResult = step.value.result;
-          llmContent = step.value.llmContent;
-          break;
-        }
-        const event = step.value;
-        if (event.type === "tool_progress") {
-          onProgress({ type: "tool_progress", name, message: event.message });
-        } else if (event.type === "tool_event") {
-          onProgress({ type: "tool_event", name, event: event.event });
-        }
-        lastHeartbeat = Date.now();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        toolResult = { error: `工具 ${name} 执行失败：${detail.slice(0, 300)}` };
+        llmContent = "";
       }
       return { toolResult, llmContent };
     };
@@ -375,16 +393,27 @@ export async function* agentChatStream(input: {
             llmContent: string;
           }
       > = allowedCalls.map(() => null);
-      const outcomePromises = allowedCalls.map(async ([toolCall, name, args], index) => {
-        const outcome = await runOneTool(toolCall, name, args, (event) => {
+      // Event-driven drain: progress and completions wake the loop instead of
+      // polling. Polling with Promise.race over already-settled promises spins
+      // the microtask queue once the first tool finishes (allocating timers
+      // until OOM), so every push/completion resolves the current wake signal.
+      let wake: () => void = () => {};
+      const notify = () => wake();
+      // runOneTool never rejects (failures become error results), so these
+      // fire-and-forget promises are safe; completion is tracked via slots.
+      for (const [index, [toolCall, name, args]] of allowedCalls.entries()) {
+        void runOneTool(toolCall, name, args, (event) => {
           progressQueues[index].push(event);
+          notify();
+        }).then((outcome) => {
+          outcomeSlots[index] = { toolCall, name, ...outcome };
+          notify();
         });
-        outcomeSlots[index] = { toolCall, name, ...outcome };
-      });
-      while (outcomeSlots.some((slot) => slot === null)) {
-        for (let i = 0; i < progressQueues.length; i += 1) {
-          while (progressQueues[i].length) {
-            const event = progressQueues[i].shift()!;
+      }
+      const drainQueues = function* (): Generator<AgentEvent> {
+        for (const queue of progressQueues) {
+          while (queue.length) {
+            const event = queue.shift()!;
             if (event.type === "tool_progress") {
               yield { type: "tool_progress", name: event.name, message: event.message };
             } else if (event.type === "tool_event") {
@@ -394,15 +423,18 @@ export async function* agentChatStream(input: {
             }
           }
         }
-        await Promise.race([
-          ...outcomePromises.map((promise, index) =>
-            outcomeSlots[index]
-              ? Promise.resolve()
-              : promise.then(() => undefined),
-          ),
-          new Promise((resolve) => setTimeout(resolve, 100)),
-        ]);
+      };
+      while (outcomeSlots.some((slot) => slot === null)) {
+        // Re-arm before draining so notifications fired while we yield are
+        // not lost between the drain and the await.
+        const wakeSignal = new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        yield* drainQueues();
+        if (outcomeSlots.some((slot) => slot === null)) await wakeSignal;
       }
+      // Flush progress emitted between the last drain and the final completion.
+      yield* drainQueues();
       for (let i = 0; i < outcomeSlots.length; i += 1) {
         const slot = outcomeSlots[i]!;
         const { toolCall, name, toolResult, llmContent } = slot;
@@ -426,14 +458,27 @@ export async function* agentChatStream(input: {
       }
     } else {
       for (const [toolCall, name, args] of allowedCalls) {
+        if (cancelCheck()) {
+          yield { type: "error", message: "任务已停止" };
+          yield { type: "done" };
+          return;
+        }
         yield { type: "tool_start", name, args };
         executedToolCount += 1;
         executedToolNames.push(name);
         const pending: AgentEvent[] = [];
-        const outcomePromise = runOneTool(toolCall, name, args, (event) => {
+        let wake: () => void = () => {};
+        let outcome: { toolResult: Record<string, unknown>; llmContent: string } | null = null;
+        // runOneTool never rejects (it converts failures into error results),
+        // so a plain .then is safe here.
+        void runOneTool(toolCall, name, args, (event) => {
           pending.push(event);
+          wake();
+        }).then((value) => {
+          outcome = value;
+          wake();
         });
-        while (true) {
+        const drainPending = function* (): Generator<AgentEvent> {
           while (pending.length) {
             const event = pending.shift()!;
             if (event.type === "tool_progress") {
@@ -444,63 +489,56 @@ export async function* agentChatStream(input: {
               yield { type: "status", message: event.message };
             }
           }
-          const raced = await Promise.race([
-            outcomePromise.then((value) => ({ kind: "done" as const, value })),
-            new Promise<{ kind: "wait" }>((resolve) => setTimeout(() => resolve({ kind: "wait" }), 100)),
-          ]);
-          if (raced.kind === "done") {
-            const { toolResult, llmContent } = raced.value;
-            yield { type: "tool_result", name, result: toolResult };
-            messages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              content: llmContent || JSON.stringify(toolResult),
-            });
-            if (
-              await python.shouldForceSummary({
-                name,
-                user_message: message,
-                executed_count: executedToolCount,
-              })
-            ) {
-              shouldForceSummary = true;
-            }
-            break;
-          }
+        };
+        while (outcome === null) {
+          const wakeSignal = new Promise<void>((resolve) => {
+            wake = resolve;
+          });
+          yield* drainPending();
+          if (outcome === null) await wakeSignal;
+        }
+        // Flush progress emitted between the last drain and completion.
+        yield* drainPending();
+        const { toolResult, llmContent } = outcome;
+        yield { type: "tool_result", name, result: toolResult };
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: llmContent || JSON.stringify(toolResult),
+        });
+        if (
+          await python.shouldForceSummary({
+            name,
+            user_message: message,
+            executed_count: executedToolCount,
+          })
+        ) {
+          shouldForceSummary = true;
         }
       }
     }
 
     if (shouldForceSummary) {
-      const reason =
+      yield* finalizeWithSummary(
+        messages,
+        llmConfig,
         "（系统）关键工具已完成，或本轮工具预算/商用护栏已触发。" +
-        "请立即根据已有工具结果给出简洁总结和下一步建议，不要再调用任何工具。";
-      yield* finalizeWithSummary(messages, llmConfig, reason);
+          "请立即根据已有工具结果给出简洁总结和下一步建议，不要再调用任何工具。",
+        llmStream,
+        "工具结果已整理完毕，请查看上方结果并按需继续缩小范围。",
+      );
       return;
     }
 
     if (roundIndex === MAX_TOOL_ROUNDS - 1) {
-      messages.push({
-        role: "user",
-        content:
-          "（系统）本轮工具调用已达上限。请根据已有工具结果直接给出总结与下一步建议，" +
+      yield* finalizeWithSummary(
+        messages,
+        llmConfig,
+        "（系统）本轮工具调用已达上限。请根据已有工具结果直接给出总结与下一步建议，" +
           "不要再调用任何工具。",
-      });
-      const replyGen = streamTextReply(messages, null, llmConfig);
-      let finalText = "";
-      let ok = false;
-      while (true) {
-        const step = await replyGen.next();
-        if (step.done) {
-          [finalText, ok] = step.value;
-          break;
-        }
-      }
-      if (!ok) finalText = "已达到最大工具调用轮次，请简化问题后重试。";
-      yield { type: "assistant_start" };
-      yield { type: "assistant_delta", text: finalText };
-      yield { type: "assistant_done", text: finalText };
-      yield { type: "done" };
+        llmStream,
+        "已达到最大工具调用轮次，请简化问题后重试。",
+      );
       return;
     }
   }

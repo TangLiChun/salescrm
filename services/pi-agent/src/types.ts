@@ -11,7 +11,27 @@ export type LlmConfig = {
   thinking?: string | null;
 };
 
-export type AgentEvent = Record<string, unknown>;
+export type AgentEvent =
+  | { type: "status"; message: string }
+  | { type: "context"; stats: Record<string, unknown> }
+  | { type: "reasoning_start" }
+  | { type: "reasoning_delta"; text: string }
+  | { type: "reasoning_done" }
+  | { type: "assistant_start" }
+  | { type: "assistant_delta"; text: string }
+  | { type: "assistant_done"; text: string }
+  | { type: "tool_start"; name: string; args: Record<string, unknown> }
+  | { type: "tool_progress"; name?: string; message: string }
+  | { type: "tool_event"; name?: string; event: unknown }
+  | { type: "tool_result"; name: string; result: Record<string, unknown> }
+  | {
+      type: "tool_blocked";
+      name: string;
+      args: Record<string, unknown>;
+      reason?: string;
+    }
+  | { type: "error"; message: string }
+  | { type: "done" };
 
 export type PreparedCall = [Record<string, unknown>, string, Record<string, unknown>];
 

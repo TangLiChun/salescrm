@@ -5,6 +5,8 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_RETRIES = 3;
 const BACKOFF_BASE = 0.5;
 const BACKOFF_CAP = 20;
+// Idle timeout: aborts when no bytes arrive for this long, rather than capping
+// total stream duration — long actively-streaming replies are not cut off.
 const AGENT_REQUEST_TIMEOUT_MS = 180_000;
 
 function chatCompletionsUrl(baseUrl: string): string {
@@ -97,7 +99,11 @@ export async function* streamChat(
     };
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
+    let timeout = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
+    const resetIdleTimeout = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
+    };
 
     try {
       const resp = await fetch(url, {
@@ -133,13 +139,21 @@ export async function* streamChat(
 
       const decoder = new TextDecoder();
       let buffer = "";
+      const pendingLines: string[] = [];
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) {
+        if (done) {
+          const tail = buffer + decoder.decode();
+          if (tail.trim()) pendingLines.push(tail);
+          buffer = "";
+        } else {
+          resetIdleTimeout();
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          pendingLines.push(...lines);
+        }
+        for (const line of pendingLines) {
           const chunk = parseSseLine(line);
           if (!chunk) continue;
           const events = consumeStreamChunk(chunk, streamState);
@@ -156,6 +170,8 @@ export async function* streamChat(
             }
           }
         }
+        pendingLines.length = 0;
+        if (done) break;
       }
 
       yield {

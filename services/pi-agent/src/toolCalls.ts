@@ -1,78 +1,101 @@
 import { randomUUID } from "node:crypto";
 
-export const KNOWN_TOOL_NAMES = new Set([
-  "list_contacts",
-  "import_leads",
-  "get_contact",
-  "get_stats",
-  "update_contact",
-  "mark_contact_sent",
-  "delete_contacts",
-  "add_contact_note",
-  "list_contact_notes",
-  "get_lead_preferences",
-  "reset_lead_preferences",
-  "dedupe_contacts",
-  "get_import_filters",
-  "update_import_filters",
-  "list_schedules",
-  "create_schedule",
-  "update_schedule",
-  "get_search_config",
-  "shodan_search",
-  "web_search",
-  "fetch_web_pages",
-  "search_hosting_forums",
-  "lookup_asns",
-  "discover_leads",
-  "enrich_contact",
-  "collect_linkedin_profiles",
-  "collect_x_profiles",
-  "collect_facebook_profiles",
-]);
-
-const TOOL_NAME_ALIASES: Record<string, string> = {
-  search_contacts: "list_contacts",
-  list_contact: "list_contacts",
-  find_contacts: "list_contacts",
-  delete_contact: "delete_contacts",
-  remove_contacts: "delete_contacts",
-  bulk_delete_contacts: "delete_contacts",
+export type ToolRegistry = {
+  knownToolNames: ReadonlySet<string>;
+  aliases: Readonly<Record<string, string>>;
+  allowUnknownToolNames: boolean;
 };
 
-export function normalizeToolName(name: string): string {
+const EMPTY_TOOL_REGISTRY: ToolRegistry = {
+  knownToolNames: new Set<string>(),
+  aliases: {},
+  allowUnknownToolNames: true,
+};
+
+export function createToolRegistry(
+  tools: Record<string, unknown>[] | null | undefined,
+  aliases: Record<string, string> | null | undefined = {},
+): ToolRegistry {
+  const names = new Set<string>();
+  for (const tool of tools || []) {
+    const fn = tool.function;
+    if (!fn || typeof fn !== "object") continue;
+    const name = String((fn as Record<string, unknown>).name || "").trim().toLowerCase();
+    if (name) names.add(name);
+  }
+  const cleanedAliases: Record<string, string> = {};
+  for (const [from, to] of Object.entries(aliases || {})) {
+    const source = from.trim().toLowerCase();
+    const target = to.trim().toLowerCase();
+    if (!source || !target) continue;
+    cleanedAliases[source] = target;
+  }
+  return {
+    knownToolNames: names,
+    aliases: cleanedAliases,
+    allowUnknownToolNames: false,
+  };
+}
+
+function registryOrDefault(registry?: ToolRegistry): ToolRegistry {
+  return registry || EMPTY_TOOL_REGISTRY;
+}
+
+function isKnownToolName(name: string, registry?: ToolRegistry): boolean {
+  const active = registryOrDefault(registry);
+  return active.allowUnknownToolNames || active.knownToolNames.has(name);
+}
+
+function aliasTarget(name: string, registry?: ToolRegistry): string | null {
+  const aliases = registryOrDefault(registry).aliases;
+  const target = aliases[name];
+  if (!target) return null;
+  return isKnownToolName(target, registry) ? target : null;
+}
+
+export function normalizeToolName(name: string, registry?: ToolRegistry): string {
   let cleaned = (name || "").trim().toLowerCase();
   for (const prefix of ["functions.", "function.", "tool.", "tools."]) {
     if (cleaned.startsWith(prefix)) cleaned = cleaned.slice(prefix.length);
   }
-  if (cleaned.includes(".") && !KNOWN_TOOL_NAMES.has(cleaned)) {
+  if (cleaned.includes(".") && !isKnownToolName(cleaned, registry)) {
     const tail = cleaned.split(".").pop() || cleaned;
-    if (KNOWN_TOOL_NAMES.has(tail) || tail in TOOL_NAME_ALIASES) cleaned = tail;
+    if (isKnownToolName(tail, registry) || aliasTarget(tail, registry)) cleaned = tail;
   }
   return cleaned;
 }
 
-export function inferToolName(name: string, args: Record<string, unknown>): string {
-  const cleaned = normalizeToolName(name);
-  if (KNOWN_TOOL_NAMES.has(cleaned)) return cleaned;
-  if (cleaned in TOOL_NAME_ALIASES) return TOOL_NAME_ALIASES[cleaned]!;
-  if ("contact_ids" in args || "ids" in args) return "delete_contacts";
+function inferKnownToolName(candidate: string, registry?: ToolRegistry): string {
+  return isKnownToolName(candidate, registry) ? candidate : "unknown";
+}
+
+export function inferToolName(
+  name: string,
+  args: Record<string, unknown>,
+  registry?: ToolRegistry,
+): string {
+  const cleaned = normalizeToolName(name, registry);
+  const alias = aliasTarget(cleaned, registry);
+  if (alias) return alias;
+  if (isKnownToolName(cleaned, registry) && cleaned) return cleaned;
+  if ("contact_ids" in args || "ids" in args) return inferKnownToolName("delete_contacts", registry);
   if ("queries" in args || ("query" in args && !("q" in args) && "max_results" in args)) {
-    return "web_search";
+    return inferKnownToolName("web_search", registry);
   }
-  if ("text" in args || "asns" in args) return "lookup_asns";
+  if ("text" in args || "asns" in args) return inferKnownToolName("lookup_asns", registry);
   if ("contact_id" in args && ("auto_import" in args || "min_score" in args)) {
-    return "enrich_contact";
+    return inferKnownToolName("enrich_contact", registry);
   }
-  if ("contact_id" in args && "note" in args) return "add_contact_note";
-  if ("contact_id" in args && "sent" in args) return "mark_contact_sent";
-  if ("contact_id" in args && !args.q) return "get_contact";
-  if ("rows" in args) return "import_leads";
-  if ("keywords" in args || "keyword" in args) return "list_contacts";
+  if ("contact_id" in args && "note" in args) return inferKnownToolName("add_contact_note", registry);
+  if ("contact_id" in args && "sent" in args) return inferKnownToolName("mark_contact_sent", registry);
+  if ("contact_id" in args && !args.q) return inferKnownToolName("get_contact", registry);
+  if ("rows" in args) return inferKnownToolName("import_leads", registry);
+  if ("keywords" in args || "keyword" in args) return inferKnownToolName("list_contacts", registry);
   if ("q" in args || ("limit" in args && !("query" in args) && !("queries" in args))) {
-    return "list_contacts";
+    return inferKnownToolName("list_contacts", registry);
   }
-  return cleaned || "unknown";
+  if (!cleaned) return "unknown";
+  return inferKnownToolName(cleaned, registry);
 }
 
 function coerceListContactsArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -142,7 +165,10 @@ export function extractJsonArgs(text: string): Record<string, unknown> {
   return {};
 }
 
-export function extractToolCallsFromContent(text: string): Record<string, unknown>[] {
+export function extractToolCallsFromContent(
+  text: string,
+  registry?: ToolRegistry,
+): Record<string, unknown>[] {
   const trimmed = (text || "").trim();
   if (!trimmed) return [];
 
@@ -165,7 +191,7 @@ export function extractToolCallsFromContent(text: string): Record<string, unknow
 
   const args = extractJsonArgs(trimmed);
   if (Object.keys(args).length) {
-    const name = inferToolName("", args);
+    const name = inferToolName("", args, registry);
     if (name !== "unknown") return [normalizeRawToolEntry({ name, arguments: args })];
   }
 
@@ -176,7 +202,10 @@ export function extractToolCallsFromContent(text: string): Record<string, unknow
   return [];
 }
 
-function parseToolCall(toolCall: Record<string, unknown>): [string, Record<string, unknown>] | null {
+function parseToolCall(
+  toolCall: Record<string, unknown>,
+  registry?: ToolRegistry,
+): [string, Record<string, unknown>] | null {
   let fn = toolCall.function;
   if (typeof fn === "string") {
     try {
@@ -227,7 +256,7 @@ function parseToolCall(toolCall: Record<string, unknown>): [string, Record<strin
     }
   }
 
-  name = inferToolName(name, args);
+  name = inferToolName(name, args, registry);
   if (name === "list_contacts") coerceListContactsArgs(args);
   if (name === "unknown") return null;
   return [name, args];
@@ -244,11 +273,12 @@ function ensureToolCallId(toolCall: Record<string, unknown>): string {
 
 export function prepareToolCalls(
   toolCalls: unknown[],
+  registry?: ToolRegistry,
 ): Array<[Record<string, unknown>, string, Record<string, unknown>]> {
   const prepared: Array<[Record<string, unknown>, string, Record<string, unknown>]> = [];
   for (const raw of toolCalls) {
     if (!raw || typeof raw !== "object") continue;
-    const parsed = parseToolCall(raw as Record<string, unknown>);
+    const parsed = parseToolCall(raw as Record<string, unknown>, registry);
     if (!parsed) continue;
     const [name, args] = parsed;
     const toolCall = { ...(raw as Record<string, unknown>) };

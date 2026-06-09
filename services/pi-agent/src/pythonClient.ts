@@ -33,6 +33,7 @@ export class PythonClient {
     messages: Record<string, unknown>[];
     context_event: AgentEvent;
     tools: Record<string, unknown>[];
+    tool_aliases: Record<string, string>;
     history: Record<string, unknown>[];
     status_messages: string[];
   }> {
@@ -49,6 +50,7 @@ export class PythonClient {
       messages: Record<string, unknown>[];
       context_event: AgentEvent;
       tools: Record<string, unknown>[];
+      tool_aliases: Record<string, string>;
       history: Record<string, unknown>[];
       status_messages: string[];
     };
@@ -148,20 +150,37 @@ export class PythonClient {
     let finalResult: Record<string, unknown> = { error: "工具执行失败" };
     let llmContent = "";
 
+    const parseEventLine = (line: string): Record<string, unknown> | null => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) return null;
+      const payload = trimmed.slice(5).trim();
+      if (!payload) return null;
+      try {
+        const event = JSON.parse(payload) as unknown;
+        return event && typeof event === "object" ? (event as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const pendingLines: string[] = [];
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload) continue;
-        const event = JSON.parse(payload) as Record<string, unknown>;
+      if (done) {
+        const tail = buffer + decoder.decode();
+        if (tail.trim()) pendingLines.push(tail);
+        buffer = "";
+      } else {
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        pendingLines.push(...lines);
+      }
+      for (const line of pendingLines) {
+        const event = parseEventLine(line);
+        if (!event) continue;
         if (event.type === "tool_progress") {
-          yield { type: "tool_progress", message: event.message };
+          yield { type: "tool_progress", message: String(event.message || "") };
         } else if (event.type === "tool_event") {
           yield { type: "tool_event", event: event.event };
         } else if (event.type === "done") {
@@ -169,6 +188,8 @@ export class PythonClient {
           llmContent = String(event.llm_content || "");
         }
       }
+      pendingLines.length = 0;
+      if (done) break;
     }
 
     return { result: finalResult, llmContent };

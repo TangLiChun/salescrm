@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && npm run test:types && node --test \"test/*.test.mjs\"",
+    "test:types": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck test/agentEvents.typecheck.ts",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test:unit": "node --test \"test/*.test.mjs\""
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",

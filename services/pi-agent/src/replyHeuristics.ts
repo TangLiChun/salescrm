@@ -3,6 +3,7 @@ import {
   extractJsonArgs,
   inferToolName,
   prepareToolCalls,
+  type ToolRegistry,
 } from "./toolCalls.js";
 
 // Markers that unambiguously begin a machine tool-call payload leaking into the
@@ -184,7 +185,10 @@ function makeDiscoverFallbackCall(query: string): Record<string, unknown> {
   };
 }
 
-export function parseInlineToolCalls(content: string): [string, Record<string, unknown>[]] {
+export function parseInlineToolCalls(
+  content: string,
+  registry?: ToolRegistry,
+): [string, Record<string, unknown>[]] {
   const text = (content || "").trim();
   if (!text || !contentLooksLikeToolCall(text)) return [text, []];
 
@@ -193,7 +197,7 @@ export function parseInlineToolCalls(content: string): [string, Record<string, u
   const nameMatch = text.match(/\[(?:工具|tool)[:\s]*([a-zA-Z0-9_]+)\]/i);
   if (nameMatch) name = nameMatch[1]!;
   const args = extractJsonArgs(text);
-  name = inferToolName(name, args);
+  name = inferToolName(name, args, registry);
   if (name === "unknown" && !Object.keys(args).length) return [text, []];
 
   return [
@@ -211,6 +215,7 @@ export function parseInlineToolCalls(content: string): [string, Record<string, u
 export function fallbackPreparedCalls(
   userMessage: string,
   history: Record<string, unknown>[] | null = null,
+  registry?: ToolRegistry,
 ): Array<[Record<string, unknown>, string, Record<string, unknown>]> {
   const text = (userMessage || "").trim();
   const lower = text.toLowerCase();
@@ -218,17 +223,20 @@ export function fallbackPreparedCalls(
 
   if (userRequestsContinuation(text)) {
     const query = inferContinuationQuery(history || [], text);
-    if (query) return prepareToolCalls([makeDiscoverFallbackCall(query)]);
-    return prepareToolCalls([
-      {
-        id: `fallback-${randomUUID().slice(0, 8)}`,
-        type: "function",
-        function: {
-          name: "list_contacts",
-          arguments: JSON.stringify({ q: "", limit: 100 }),
+    if (query) return prepareToolCalls([makeDiscoverFallbackCall(query)], registry);
+    return prepareToolCalls(
+      [
+        {
+          id: `fallback-${randomUUID().slice(0, 8)}`,
+          type: "function",
+          function: {
+            name: "list_contacts",
+            arguments: JSON.stringify({ q: "", limit: 100 }),
+          },
         },
-      },
-    ]);
+      ],
+      registry,
+    );
   }
 
   let queries: string[] = [];
@@ -266,5 +274,6 @@ export function fallbackPreparedCalls(
         arguments: JSON.stringify({ q: query, limit: 100 }),
       },
     })),
+    registry,
   );
 }

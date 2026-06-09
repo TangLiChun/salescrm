@@ -6,8 +6,30 @@ import { PythonClient } from "./pythonClient.js";
 
 const app = new Hono();
 
+// Mirrors app/internal_secret.py: placeholder or short secrets are treated as
+// "not configured" so the service refuses all requests instead of accepting a
+// guessable header value.
+const WEAK_INTERNAL_SECRETS = new Set([
+  "change-me-in-production",
+  "change-me",
+  "changeme",
+  "dev-secret",
+  "secret",
+  "password",
+  "internal-secret",
+  "pi-internal-secret",
+  "salescrm",
+  "123456",
+  "test",
+]);
+const MIN_INTERNAL_SECRET_LENGTH = 16;
+
 function internalSecret(): string {
-  return (process.env.PI_INTERNAL_SECRET || "").trim();
+  const value = (process.env.PI_INTERNAL_SECRET || "").trim();
+  if (!value) return "";
+  if (WEAK_INTERNAL_SECRETS.has(value.toLowerCase())) return "";
+  if (value.length < MIN_INTERNAL_SECRET_LENGTH) return "";
+  return value;
 }
 
 function crmBaseUrl(): string {
@@ -26,13 +48,29 @@ app.post("/stream", async (c) => {
     return c.json({ detail: "Forbidden" }, 403);
   }
 
-  const body = await c.req.json<{
+  let body: {
     user_id: number;
     message: string;
     thread_id?: string | null;
     history?: Record<string, unknown>[] | null;
     cancel_token?: string;
-  }>();
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ detail: "Invalid JSON body" }, 400);
+  }
+  if (!Number.isFinite(Number(body.user_id)) || typeof body.message !== "string" || !body.message.trim()) {
+    return c.json({ detail: "user_id and message are required" }, 400);
+  }
+
+  // When the Python proxy drops the connection (user pressed stop or the
+  // browser went away), stop calling the LLM and tools instead of finishing
+  // the turn into the void.
+  let clientGone = false;
+  c.req.raw.signal?.addEventListener("abort", () => {
+    clientGone = true;
+  });
 
   const python = new PythonClient(crmBaseUrl(), internalSecret());
   let llmConfig;
@@ -52,7 +90,7 @@ app.post("/stream", async (c) => {
         history: body.history,
         python,
         llmConfig,
-        cancelCheck: () => false,
+        cancelCheck: () => clientGone,
       })) {
         await stream.writeSSE({ data: JSON.stringify(event) });
         if (event.type === "done") break;

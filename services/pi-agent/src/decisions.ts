@@ -9,7 +9,7 @@ import {
   parseInlineToolCalls,
   userRequestsContinuation,
 } from "./replyHeuristics.js";
-import { extractToolCallsFromContent, prepareToolCalls } from "./toolCalls.js";
+import { extractToolCallsFromContent, prepareToolCalls, type ToolRegistry } from "./toolCalls.js";
 
 // "length" is intentionally excluded: a length-capped reply usually carries
 // useful (if partial) content or valid tool_calls, so we surface it instead of
@@ -39,9 +39,10 @@ export function decideTurn(
     history: Record<string, unknown>[];
     nudgeCount: number;
     maxNudges: number;
+    toolRegistry?: ToolRegistry;
   },
 ): Decision {
-  const { userMessage, history, nudgeCount, maxNudges } = opts;
+  const { userMessage, history, nudgeCount, maxNudges, toolRegistry } = opts;
 
   if (assistantResponseEmpty(assistant, contentBuffer)) {
     if (nudgeCount < maxNudges) {
@@ -70,7 +71,7 @@ export function decideTurn(
     if (nudgeCount < maxNudges) {
       return { kind: "retry", nudge: EMPTY_RESPONSE_NUDGE, reason: "missing_tool_calls" };
     }
-    const fallbackCalls = fallbackPreparedCalls(userMessage, history);
+    const fallbackCalls = fallbackPreparedCalls(userMessage, history, toolRegistry);
     if (fallbackCalls.length) {
       return {
         kind: "fallback_tool_calls",
@@ -82,7 +83,7 @@ export function decideTurn(
   }
 
   if (!rawToolCalls.length && rawContent) {
-    const [intro, inlineCalls] = parseInlineToolCalls(rawContent);
+    const [intro, inlineCalls] = parseInlineToolCalls(rawContent, toolRegistry);
     if (inlineCalls.length) {
       rawToolCalls = inlineCalls;
       content = meaningfulAssistantContent(intro);
@@ -102,7 +103,7 @@ export function decideTurn(
       };
     }
 
-    const fallbackCalls = fallbackPreparedCalls(userMessage, history);
+    const fallbackCalls = fallbackPreparedCalls(userMessage, history, toolRegistry);
     if (fallbackCalls.length && shouldAct) {
       return {
         kind: "fallback_tool_calls",
@@ -126,14 +127,14 @@ export function decideTurn(
     return { kind: "fail" };
   }
 
-  let prepared = prepareToolCalls(rawToolCalls);
+  let prepared = prepareToolCalls(rawToolCalls, toolRegistry);
   if (!prepared.length && rawContent) {
-    const extracted = extractToolCallsFromContent(rawContent);
-    if (extracted.length) prepared = prepareToolCalls(extracted);
+    const extracted = extractToolCallsFromContent(rawContent, toolRegistry);
+    if (extracted.length) prepared = prepareToolCalls(extracted, toolRegistry);
     if (!prepared.length) {
-      const [intro2, inline2] = parseInlineToolCalls(rawContent);
+      const [intro2, inline2] = parseInlineToolCalls(rawContent, toolRegistry);
       if (inline2.length) {
-        prepared = prepareToolCalls(inline2);
+        prepared = prepareToolCalls(inline2, toolRegistry);
         content = meaningfulAssistantContent(intro2);
       }
     }
@@ -147,7 +148,7 @@ export function decideTurn(
     return { kind: "retry", nudge: EMPTY_RESPONSE_NUDGE, reason: "invalid_tool_calls" };
   }
 
-  const fallbackCalls = fallbackPreparedCalls(userMessage, history);
+  const fallbackCalls = fallbackPreparedCalls(userMessage, history, toolRegistry);
   if (fallbackCalls.length) {
     return {
       kind: "fallback_tool_calls",
