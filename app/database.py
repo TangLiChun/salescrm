@@ -1856,13 +1856,16 @@ def email_queued_addresses(user_id, *, conn=None) -> set[str]:
         return run(c)
 
 
-def count_sent_emails_today(user_id, *, conn=None) -> int:
+def count_sent_emails_today(user_id=None, *, conn=None) -> int:
+    # user_id=None → count across all users (global rate limit for the single sender loop)
+    where = "WHERE status = 'sent' AND sent_at::date = NOW()::date"
+    params: tuple = ()
+    if user_id is not None:
+        where = "WHERE user_id=%s AND status = 'sent' AND sent_at::date = NOW()::date"
+        params = (user_id,)
+
     def run(c):
-        row = c.execute(
-            "SELECT COUNT(*) AS n FROM email_outbox "
-            "WHERE user_id=%s AND status = 'sent' AND sent_at::date = NOW()::date",
-            (user_id,),
-        ).fetchone()
+        row = c.execute(f"SELECT COUNT(*) AS n FROM email_outbox {where}", params).fetchone()
         return int(row["n"]) if row else 0
 
     if conn is not None:
@@ -1871,13 +1874,37 @@ def count_sent_emails_today(user_id, *, conn=None) -> int:
         return run(c)
 
 
-def last_sent_email_at(user_id, *, conn=None):
+def last_sent_email_at(user_id=None, *, conn=None):
+    # user_id=None → most recent send across all users (global interval gate)
+    where = "WHERE status='sent'"
+    params: tuple = ()
+    if user_id is not None:
+        where = "WHERE user_id=%s AND status='sent'"
+        params = (user_id,)
+
     def run(c):
-        row = c.execute(
-            "SELECT MAX(sent_at) AS t FROM email_outbox WHERE user_id=%s AND status='sent'",
-            (user_id,),
-        ).fetchone()
+        row = c.execute(f"SELECT MAX(sent_at) AS t FROM email_outbox {where}", params).fetchone()
         return row["t"] if row else None
+
+    if conn is not None:
+        return run(conn)
+    with get_conn() as c:
+        return run(c)
+
+
+def requeue_stale_sending_emails(*, conn=None) -> int:
+    """Reset orphaned 'sending' rows back to 'queued'.
+
+    The sender is a single in-process loop, so on startup any row left in
+    'sending' is an orphan from a crash/restart mid-send. Requeue them so they
+    are retried instead of being stuck forever.
+    """
+
+    def run(c):
+        cur = c.execute(
+            "UPDATE email_outbox SET status='queued', updated_at=NOW() WHERE status='sending'"
+        )
+        return cur.rowcount or 0
 
     if conn is not None:
         return run(conn)

@@ -15,6 +15,7 @@ from app.database import (
     mark_contact_sent,
     mark_email_failed,
     mark_email_sent,
+    requeue_stale_sending_emails,
 )
 from app.settings_store import get_settings, update_settings
 
@@ -155,6 +156,12 @@ async def _sender_loop() -> None:
 async def start_email_sender() -> None:
     global _sender_task
     if _sender_task is None or _sender_task.done():
+        try:
+            requeued = requeue_stale_sending_emails()
+            if requeued:
+                logger.info("Requeued %d stale 'sending' email(s) on startup", requeued)
+        except Exception:  # noqa: BLE001 - recovery is best-effort; never block startup
+            logger.exception("Failed to requeue stale 'sending' emails on startup")
         _sender_task = asyncio.create_task(_sender_loop())
 
 

@@ -109,3 +109,21 @@ def test_sender_tick_respects_gates(monkeypatch):
 
     asyncio.run(es.sender_tick())
     assert "sent" in actions and ("done", 1) in actions and ("contact", 5) in actions
+
+
+def test_start_email_sender_requeues_stale_sending(monkeypatch):
+    from app import email_sender as es
+
+    called = []
+    monkeypatch.setattr(es, "requeue_stale_sending_emails", lambda: called.append(True))
+    # keep the loop's first tick from touching the DB
+    monkeypatch.setattr(es, "get_settings", lambda: {"email_sender_enabled": "0"})
+
+    async def run():
+        await es.start_email_sender()
+        await es.stop_email_sender()
+
+    import asyncio
+
+    asyncio.run(run())
+    assert called == [True]
