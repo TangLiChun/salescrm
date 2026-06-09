@@ -1062,12 +1062,12 @@ async def agent_chat_stream_route(
         if has_active_pi_agent_job(user_id, thread_id):
             raise HTTPException(
                 status_code=409,
-                detail="该对话已有后台 Reasonix 任务运行中，请等待完成后再发送",
+                detail="该对话已有后台 Pi 任务运行中，请等待完成后再发送",
             )
         if not try_acquire_pi_thread(user_id, thread_id):
             raise HTTPException(
                 status_code=409,
-                detail="该对话已有 Reasonix 任务运行中，请等待完成后再发送",
+                detail="该对话已有 Pi 任务运行中，请等待完成后再发送",
             )
 
     async def persist_stream_entries(
@@ -1140,8 +1140,8 @@ async def agent_chat_stream_route(
         except Exception as exc:  # noqa: BLE001 - keep the browser SSE stream explainable
             errored = True
             logger.exception("Pi agent stream failed")
-            message = str(exc).strip() or "Reasonix 执行失败，请稍后重试"
-            event = {"type": "error", "message": f"Reasonix 执行失败：{message[:500]}"}
+            message = str(exc).strip() or "Pi 助手执行失败，请稍后重试"
+            event = {"type": "error", "message": f"Pi 助手执行失败：{message[:500]}"}
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
         finally:
@@ -1356,7 +1356,7 @@ async def create_pi_agent_job(body: PiAgentJobRequest, user: CurrentUser) -> dic
         )
     except PiAgentThreadBusyError:
         raise HTTPException(
-            status_code=409, detail="该对话已有 Reasonix 任务运行中，请等待完成后再发送"
+            status_code=409, detail="该对话已有 Pi 任务运行中，请等待完成后再发送"
         ) from None
     return {"job": job}
 

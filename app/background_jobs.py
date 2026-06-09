@@ -497,7 +497,7 @@ async def _run_pi_agent_job(job_id: int) -> None:
         )
         return
 
-    _update_job(job_id, status="running", message="Reasonix 任务运行中")
+    _update_job(job_id, status="running", message="Pi 任务运行中")
     _ensure_user_message_on_thread(user_id, thread_id, message)
 
     new_entries: list[dict[str, Any]] = []
@@ -514,7 +514,7 @@ async def _run_pi_agent_job(job_id: int) -> None:
         ):
             event_type = event.get("type")
             if event_type == "error":
-                error_msg = str(event.get("message") or "Reasonix 任务失败")
+                error_msg = str(event.get("message") or "Pi 任务失败")
                 if error_msg == "任务已停止":
                     error_msg = None
                 break
@@ -580,7 +580,7 @@ async def _run_pi_agent_job(job_id: int) -> None:
         _update_job(
             job_id,
             status="done",
-            message=(last_assistant[:200] if last_assistant else "Reasonix 任务完成"),
+            message=(last_assistant[:200] if last_assistant else "Pi 任务完成"),
             progress={"type": "done"},
             result={
                 "thread_id": thread_id,

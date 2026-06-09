@@ -70,7 +70,7 @@ export async function* agentChatStream(input: {
     return;
   }
 
-  yield { type: "status", message: "Reasonix 思考中…" };
+  yield { type: "status", message: "Pi 助手思考中…" };
 
   const prepared = await python.prepare({
     user_id: userId,
@@ -153,7 +153,7 @@ export async function* agentChatStream(input: {
             }
           }
         } else if (event.type === "status") {
-          yield { type: "status", message: event.message || "Reasonix 处理中…" };
+          yield { type: "status", message: event.message || "Pi 助手处理中…" };
         } else if (event.type === "message") {
           assistant = event.message;
         }

@@ -1,6 +1,6 @@
 # Sales CRM
 
-面向网络运营商（ASN / Peering / 主机）线索获取与外联的轻量 CRM：ASN RDAP 查询、AI 线索发现、联系人管理、邮件模板与限速发信，内置 **Reasonix**（应用内 AI 对话助手），并可选通过 **外部 Agent API**（Bearer Token）供脚本调用。
+面向网络运营商（ASN / Peering / 主机）线索获取与外联的轻量 CRM：ASN RDAP 查询、AI 线索发现、联系人管理、邮件模板与限速发信，内置 **Pi 助手**（应用内 AI 对话 agent），并可选通过 **外部 Agent API**（Bearer Token）供脚本调用。
 
 - 后端：FastAPI（Python 3.12）+ PostgreSQL
 - 前端：原生 TypeScript（`tsc` 编译为静态资源，无运行时框架）
@@ -16,7 +16,7 @@
 |---|---|---|---|
 | `postgres` | `pgvector/pgvector:pg16` | 5432（内部） | 数据库 |
 | `salescrm` | FastAPI · Python 3.12 · uvicorn | **8000**（对外） | Web 应用 + REST API + `/api/agent/*` |
-| `pi-agent` | Node 20 · Hono | 8001（内部） | 应用内 Reasonix 助手的编码 agent 后端，经 `PI_INTERNAL_SECRET` 内部鉴权 |
+| `pi-agent` | Node 20 · Hono | 8001（内部） | 应用内「Pi 助手」的编码 agent 后端，经 `PI_INTERNAL_SECRET` 内部鉴权 |
 
 其它：
 
@@ -81,7 +81,7 @@ docker compose down               # 停止（数据保留在 salescrm_pgdata 卷
 
 ### 方式 B —— 原生本地开发（仅 app + 数据库，更轻）
 
-适合改代码/跑测试；注意此方式默认**不含** Reasonix 助手 sidecar（见末尾说明）。
+适合改代码/跑测试；注意此方式默认**不含**「Pi 助手」sidecar（见末尾说明）。
 
 1. 安装并启动 PostgreSQL，创建与默认配置匹配的角色与库：
 
@@ -117,7 +117,7 @@ docker compose down               # 停止（数据保留在 salescrm_pgdata 卷
 
    访问 <http://localhost:8000/>（admin / admin123）。
 
-> **Reasonix 助手**需要 `pi-agent` sidecar（Node 20）。最省事是用方式 A 的 Docker 跑起 sidecar；或单独运行：`cd services/pi-agent && npm install && npm run build && CRM_INTERNAL_URL=http://localhost:8000 PI_INTERNAL_SECRET=change-me npm start`（同时给应用设 `PI_AGENT_SERVICE_URL=http://localhost:8001` 与相同的 `PI_INTERNAL_SECRET`）。其余功能（ASN 查询、线索、联系人、邮件）在方式 B 下均可用。
+> **Pi 助手**需要 `pi-agent` sidecar（Node 20）。最省事是用方式 A 的 Docker 跑起 sidecar；或单独运行：`cd services/pi-agent && npm install && npm run build && CRM_INTERNAL_URL=http://localhost:8000 PI_INTERNAL_SECRET=change-me npm start`（同时给应用设 `PI_AGENT_SERVICE_URL=http://localhost:8001` 与相同的 `PI_INTERNAL_SECRET`）。其余功能（ASN 查询、线索、联系人、邮件）在方式 B 下均可用。
 
 ---
 
@@ -197,9 +197,9 @@ export DATABASE_URL=postgresql://用户:密码@localhost:5432/库名
 
 表示数据库表尚未建好。应用首次启动会自动执行 `init_db()`；请确认数据库可连接，并检查容器日志无报错。若手动跑原生方式，确保 `DATABASE_URL` 指向正确且可访问的数据库后重新启动应用。
 
-### Reasonix 助手不可用
+### Pi 助手不可用
 
-Reasonix 助手依赖 `pi-agent` sidecar（Node 20，端口 8001）。Docker Compose 方式会自动启动该服务；**原生方式默认不含 sidecar**，需单独运行（参见上方「方式 B」末尾说明）。其余功能（ASN 查询、联系人、邮件）不受影响。
+Pi 助手依赖 `pi-agent` sidecar（Node 20，端口 8001）。Docker Compose 方式会自动启动该服务；**原生方式默认不含 sidecar**，需单独运行（参见上方「方式 B」末尾说明）。其余功能（ASN 查询、联系人、邮件）不受影响。
 
 ### 外部 Agent API 返回 401
 
@@ -259,9 +259,9 @@ cd /opt/salescrm && sudo ./scripts/deploy.sh
 ## 目录结构
 
 ```
-app/                     FastAPI 应用（路由、数据库、Reasonix 助手、agent API、settings…）
+app/                     FastAPI 应用（路由、数据库、Pi 助手、agent API、settings…）
 frontend/src/            前端 TypeScript 源码（编译进 app/static/js）
-services/pi-agent/       Reasonix 助手编码 agent sidecar（Node/Hono）
+services/pi-agent/       Pi 助手编码 agent sidecar（Node/Hono）
 scripts/                 deploy.sh（VPS 一键）、check.sh（巡检）、test.sh（本地测试）…
 docs/superpowers/        设计 spec 与实现计划
 tests/                   pytest 测试

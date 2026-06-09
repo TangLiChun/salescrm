@@ -54,7 +54,7 @@ async def test_pi_stream_route_turns_uncaught_agent_exception_into_sse_error(mon
         release_pi_thread(1, thread_id)
 
     assert '"type": "error"' in text
-    assert "Reasonix 执行失败" in text
+    assert "Pi 助手执行失败" in text
     assert '"type": "done"' in text
     assert not is_pi_thread_streaming(1, thread_id)
 
